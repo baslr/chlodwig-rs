@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-03-29T20:03:02.683Z",
+  "generatedAt": "2026-03-29T22:49:35.223Z",
   "totalComponents": 874,
   "totalByType": {
     "component": 757,
@@ -2233,7 +2233,9 @@
         "useEffect"
       ],
       "ceCount": 5,
-      "gBlock": "Eg9"
+      "gBlock": "Eg9",
+      "derivedName": "UcSandboxBlockedDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "vd9",
@@ -2447,7 +2449,9 @@
         "useContext"
       ],
       "ceCount": 4,
-      "gBlock": "V_8"
+      "gBlock": "V_8",
+      "derivedName": "WO9Provider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "JT9",
@@ -2602,7 +2606,9 @@
         "zustand-selector"
       ],
       "ceCount": 6,
-      "gBlock": "$Q_"
+      "gBlock": "$Q_",
+      "derivedName": "DialogContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "_P9",
@@ -2875,7 +2881,7 @@
       "ceCount": 2,
       "gBlock": "YI9",
       "derivedName": "AppControls",
-      "nameSource": "H13-keybinding"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "tK8",
@@ -3020,9 +3026,7 @@
         "zustand-selector"
       ],
       "ceCount": 12,
-      "gBlock": "xp_",
-      "derivedName": "TaskComponent",
-      "nameSource": "H11-gblock-readable"
+      "gBlock": "xp_"
     },
     {
       "name": "Jt1",
@@ -3144,7 +3148,9 @@
         "useEffect"
       ],
       "ceCount": 3,
-      "gBlock": "P78"
+      "gBlock": "P78",
+      "derivedName": "VoiceModeIsNowAvailableDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "QR9",
@@ -3319,7 +3325,9 @@
         "useContext"
       ],
       "ceCount": 3,
-      "gBlock": "KF9"
+      "gBlock": "KF9",
+      "derivedName": "OF9Provider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "a_",
@@ -3697,7 +3705,9 @@
         "useState"
       ],
       "ceCount": 6,
-      "gBlock": "NA9"
+      "gBlock": "NA9",
+      "derivedName": "EnterYourPreferredResponseAndDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "a6K",
@@ -4427,7 +4437,9 @@
         "useRef"
       ],
       "ceCount": 2,
-      "gBlock": "Nd9"
+      "gBlock": "Nd9",
+      "derivedName": "REPLHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "wvK",
@@ -4848,7 +4860,7 @@
       "ceCount": 3,
       "gBlock": "wd9",
       "derivedName": "NoInstallationStatusToDisplay",
-      "nameSource": "H17b-descriptive-string"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "Pd9",
@@ -4871,7 +4883,9 @@
         "useEffect"
       ],
       "ceCount": 3,
-      "gBlock": "Md9"
+      "gBlock": "Md9",
+      "derivedName": "XbRunReloadpluginsToApplyDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "Wy4",
@@ -5117,7 +5131,7 @@
       "ceCount": 2,
       "gBlock": "q9",
       "derivedName": "UseTerminalViewportWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "iO1",
@@ -5178,7 +5192,7 @@
       "ceCount": 8,
       "gBlock": "jzH",
       "derivedName": "AppControls",
-      "nameSource": "H13-keybinding"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "OV_",
@@ -5466,7 +5480,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "ArrowDownIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "am1",
@@ -5485,7 +5501,9 @@
       ],
       "hooks": [],
       "ceCount": 5,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "XbEnterToCollapseDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "E9",
@@ -5544,7 +5562,9 @@
       ],
       "hooks": [],
       "ceCount": 7,
-      "gBlock": "Vs7"
+      "gBlock": "Vs7",
+      "derivedName": "ThinkingDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "FB_",
@@ -5834,7 +5854,9 @@
       ],
       "hooks": [],
       "ceCount": 7,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "ListPointerIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "Bt7",
@@ -6093,7 +6115,9 @@
       ],
       "hooks": [],
       "ceCount": 6,
-      "gBlock": "O99"
+      "gBlock": "O99",
+      "derivedName": "UserAnsweredClaudesQuestionsDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "CQ1",
@@ -6133,7 +6157,9 @@
       ],
       "hooks": [],
       "ceCount": 7,
-      "gBlock": "O68"
+      "gBlock": "O68",
+      "derivedName": "EnterThePathToTheDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "Pb",
@@ -6355,7 +6381,7 @@
       "hooks": [],
       "ceCount": 40,
       "gBlock": "mVH",
-      "derivedName": "AppControls",
+      "derivedName": "ChatControls",
       "nameSource": "H11-gblock-readable"
     },
     {
@@ -6480,7 +6506,9 @@
       ],
       "hooks": [],
       "ceCount": 10,
-      "gBlock": "QY9"
+      "gBlock": "QY9",
+      "derivedName": "WeFoundSomePotentialIssuesDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "tU_",
@@ -6539,7 +6567,9 @@
       ],
       "hooks": [],
       "ceCount": 8,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "TypeToSearchDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "gqK",
@@ -6619,7 +6649,9 @@
       ],
       "hooks": [],
       "ceCount": 7,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "UuUdudDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "MX9",
@@ -6745,7 +6777,9 @@
       ],
       "hooks": [],
       "ceCount": 5,
-      "gBlock": "w98"
+      "gBlock": "w98",
+      "derivedName": "DialogContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "m09",
@@ -6829,7 +6863,7 @@
       "ceCount": 7,
       "gBlock": "kG9",
       "derivedName": "NoHooksConfiguredForDisplay",
-      "nameSource": "H17b-descriptive-string"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "VG9",
@@ -6850,7 +6884,7 @@
       "ceCount": 7,
       "gBlock": "hG9",
       "derivedName": "NoHooksConfiguredForDisplay",
-      "nameSource": "H17b-descriptive-string"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "CG9",
@@ -6892,7 +6926,7 @@
       "ceCount": 4,
       "gBlock": "y98",
       "derivedName": "CurrentModelCustomIdComponent",
-      "nameSource": "H17c-description"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "uR9",
@@ -6953,7 +6987,9 @@
       ],
       "hooks": [],
       "ceCount": 29,
-      "gBlock": "AL9"
+      "gBlock": "AL9",
+      "derivedName": "RequiredToBlockUnixDomainDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "YL9",
@@ -7119,7 +7155,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": "wS9"
+      "gBlock": "wS9",
+      "derivedName": "DialogContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "k18",
@@ -7897,7 +7935,9 @@
       ],
       "hooks": [],
       "ceCount": 13,
-      "gBlock": "QE_"
+      "gBlock": "QE_",
+      "derivedName": "ImageDataDetectedAndSentDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "pkH",
@@ -8160,7 +8200,9 @@
       ],
       "hooks": [],
       "ceCount": 13,
-      "gBlock": "Be7"
+      "gBlock": "Be7",
+      "derivedName": "ComponentContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "jt1",
@@ -8320,7 +8362,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": "fQ_"
+      "gBlock": "fQ_",
+      "derivedName": "WarningIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "CqK",
@@ -8417,7 +8461,9 @@
       ],
       "hooks": [],
       "ceCount": 12,
-      "gBlock": "vW9"
+      "gBlock": "vW9",
+      "derivedName": "ReadyXbShiftuToViewDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "n6_",
@@ -8519,7 +8565,9 @@
         "useEffect"
       ],
       "ceCount": 2,
-      "gBlock": "NR9"
+      "gBlock": "NR9",
+      "derivedName": "E98Provider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "ER9",
@@ -9023,7 +9071,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "PressCtrlcToExitAndDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "TyK",
@@ -9113,7 +9163,9 @@
         "useState"
       ],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "DiffPatchContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "nM1",
@@ -9154,7 +9206,9 @@
       ],
       "hooks": [],
       "ceCount": 11,
-      "gBlock": "mo6"
+      "gBlock": "mo6",
+      "derivedName": "IsPlanApprovalResponseWrapperWrapper",
+      "nameSource": "H16-function-call"
     },
     {
       "name": "Ft7",
@@ -9377,7 +9431,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "nB9"
+      "gBlock": "nB9",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "_d9",
@@ -9401,7 +9457,7 @@
       "ceCount": 0,
       "gBlock": "X38",
       "derivedName": "HasShownLspRecommendationThisSessionWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "E0_",
@@ -9449,7 +9505,9 @@
         "useEffect"
       ],
       "ceCount": 1,
-      "gBlock": "VUH"
+      "gBlock": "VUH",
+      "derivedName": "l0HProvider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "vq",
@@ -9546,7 +9604,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "NoChangesDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "Jc",
@@ -9665,7 +9725,9 @@
       ],
       "hooks": [],
       "ceCount": 2,
-      "gBlock": "db7"
+      "gBlock": "db7",
+      "derivedName": "UbThinkinguDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "y2",
@@ -9707,7 +9769,9 @@
       ],
       "hooks": [],
       "ceCount": 13,
-      "gBlock": "ut7"
+      "gBlock": "ut7",
+      "derivedName": "ComponentContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "$e7",
@@ -9728,7 +9792,7 @@
       "ceCount": 2,
       "gBlock": "_e7",
       "derivedName": "AppControls",
-      "nameSource": "H13-keybinding"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "pe7",
@@ -9746,7 +9810,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": "xe7"
+      "gBlock": "xe7",
+      "derivedName": "AutoContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "RB1",
@@ -9764,7 +9830,9 @@
       ],
       "hooks": [],
       "ceCount": 5,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "DisplayContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "io6",
@@ -10072,7 +10140,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "CheckMarkIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "OE9",
@@ -10188,7 +10258,9 @@
       ],
       "hooks": [],
       "ceCount": 2,
-      "gBlock": "R58"
+      "gBlock": "R58",
+      "derivedName": "PointerSmallIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "l58",
@@ -10288,7 +10360,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "DiffPatchHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "RZ7",
@@ -10307,7 +10381,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": "eV_"
+      "gBlock": "eV_",
+      "derivedName": "NoContentDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "OE_",
@@ -10359,7 +10435,7 @@
       "ceCount": 1,
       "gBlock": "EoH",
       "derivedName": "UseTerminalViewportWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "PS7",
@@ -10502,7 +10578,9 @@
       ],
       "hooks": [],
       "ceCount": 14,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "ToolUseContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "bg_",
@@ -10563,7 +10641,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "PointerSmallIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "t79",
@@ -10603,7 +10683,9 @@
       ],
       "hooks": [],
       "ceCount": 6,
-      "gBlock": "F99"
+      "gBlock": "F99",
+      "derivedName": "EnteredPlanModeDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "s99",
@@ -10648,7 +10730,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": "e_8"
+      "gBlock": "e_8",
+      "derivedName": "TextInputHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "XA",
@@ -10921,7 +11005,9 @@
       ],
       "hooks": [],
       "ceCount": 52,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "EnableAutoupdatesHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "cD",
@@ -10942,7 +11028,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": "Mg6"
+      "gBlock": "Mg6",
+      "derivedName": "useOverlayRegistration",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "Dt7",
@@ -10961,7 +11049,9 @@
       ],
       "hooks": [],
       "ceCount": 2,
-      "gBlock": "Eo6"
+      "gBlock": "Eo6",
+      "derivedName": "wt7Provider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "Le7",
@@ -11018,7 +11108,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "ContainerContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "hB1",
@@ -11057,7 +11149,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "useStoreSelector",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "UB_",
@@ -11078,7 +11172,9 @@
         "useSyncExternalStore"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "useStoreSelector",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "DN",
@@ -11099,7 +11195,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "useHeaderFocus",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "mU_",
@@ -11141,7 +11239,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "w88"
+      "gBlock": "w88",
+      "derivedName": "useNotification",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "BP9",
@@ -11257,7 +11357,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": "Cb9"
+      "gBlock": "Cb9",
+      "derivedName": "AutoUpdaterHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Ib9",
@@ -11278,7 +11380,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": "Cb9"
+      "gBlock": "Cb9",
+      "derivedName": "ModeCycleHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "tb9",
@@ -11343,7 +11447,9 @@
         "zustand-selector"
       ],
       "ceCount": 2,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "XbEnterToViewDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "Yg9",
@@ -11364,7 +11470,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "fg9"
+      "gBlock": "fg9",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Yo_",
@@ -11477,7 +11585,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": "id9"
+      "gBlock": "id9",
+      "derivedName": "useNotification",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "Nc9",
@@ -11499,7 +11609,7 @@
       ],
       "ceCount": 0,
       "gBlock": null,
-      "derivedName": "UseTerminalTitleWrapper",
+      "derivedName": "UseTerminalTitleWrapperWrapper",
       "nameSource": "H16-function-call"
     },
     {
@@ -11541,7 +11651,9 @@
         "useSyncExternalStore"
       ],
       "ceCount": 1,
-      "gBlock": "wN6"
+      "gBlock": "wN6",
+      "derivedName": "YN6Provider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "Qy4",
@@ -11604,7 +11716,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "ViewTabDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "aS7",
@@ -11766,7 +11880,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": "F99"
+      "gBlock": "F99",
+      "derivedName": "UserDeclinedToEnterPlanDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "c$9",
@@ -11909,7 +12025,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "WarningIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "FHK",
@@ -12208,7 +12326,9 @@
         "useEffect"
       ],
       "ceCount": 1,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "TjKProvider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "BJK",
@@ -12246,7 +12366,9 @@
       ],
       "hooks": [],
       "ceCount": 8,
-      "gBlock": "KK8"
+      "gBlock": "KK8",
+      "derivedName": "YesAndDontAskHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "gn_",
@@ -12315,7 +12437,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": "RI9"
+      "gBlock": "RI9",
+      "derivedName": "useAbortController",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "iB9",
@@ -12797,7 +12921,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": "XY9"
+      "gBlock": "XY9",
+      "derivedName": "CheckingGithubCliInstallationuDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "tP9",
@@ -13085,7 +13211,9 @@
       ],
       "hooks": [],
       "ceCount": 2,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "ElicitationContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "RK8",
@@ -13125,7 +13253,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": "xx9"
+      "gBlock": "xx9",
+      "derivedName": "ListPointerIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "Pm9",
@@ -13150,7 +13280,7 @@
       "ceCount": 0,
       "gBlock": "Sq_",
       "derivedName": "UpdateSessionTitleWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "Gm9",
@@ -13173,7 +13303,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": "Wm9"
+      "gBlock": "Wm9",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Lm9",
@@ -13198,7 +13330,7 @@
       "ceCount": 0,
       "gBlock": "Rm9",
       "derivedName": "SshSessionFailedBeforeDisplay",
-      "nameSource": "H17b-descriptive-string"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "KB9",
@@ -13221,7 +13353,9 @@
         "useSyncExternalStore"
       ],
       "ceCount": 0,
-      "gBlock": "$B9"
+      "gBlock": "$B9",
+      "derivedName": "useStoreSelector",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "NB9",
@@ -13246,7 +13380,7 @@
       "ceCount": 0,
       "gBlock": "iq_",
       "derivedName": "IsSandboxPermissionResponseWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "pB9",
@@ -13270,8 +13404,8 @@
       ],
       "ceCount": 0,
       "gBlock": "mB9",
-      "derivedName": "TaskComponent",
-      "nameSource": "H11-gblock-readable"
+      "derivedName": "useAbortController",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "or_",
@@ -13438,7 +13572,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": "ep6"
+      "gBlock": "ep6",
+      "derivedName": "NoResourcesFoundDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "aZ7",
@@ -13458,7 +13594,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": "L9"
+      "gBlock": "L9",
+      "derivedName": "StatusHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "LV7",
@@ -13539,7 +13677,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "GI7"
+      "gBlock": "GI7",
+      "derivedName": "useNotification",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "x_9",
@@ -13777,7 +13917,7 @@
       "hooks": [],
       "ceCount": 2,
       "gBlock": null,
-      "derivedName": "FormatWorkspaceFoldersWrapper",
+      "derivedName": "FormatWorkspaceFoldersWrapperWrapper",
       "nameSource": "H16-function-call"
     },
     {
@@ -13816,7 +13956,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "DialogContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "S7K",
@@ -13894,7 +14036,9 @@
         "useState"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "DestructiveCommandWarningHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Sb9",
@@ -13914,7 +14058,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "MK8"
+      "gBlock": "MK8",
+      "derivedName": "useNotification",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "CB9",
@@ -13934,7 +14080,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "VB9"
+      "gBlock": "VB9",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "oZK",
@@ -13997,7 +14145,7 @@
       "ceCount": 0,
       "gBlock": "lF9",
       "derivedName": "TeleportResumeCodeSessionWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "OyK",
@@ -14114,7 +14262,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": "riq"
+      "gBlock": "riq",
+      "derivedName": "aiqProvider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "qnq",
@@ -14132,7 +14282,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "_nqProvider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "gy_",
@@ -14150,7 +14302,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": "kx"
+      "gBlock": "kx",
+      "derivedName": "N07Provider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "TrH",
@@ -14189,8 +14343,8 @@
       "hooks": [],
       "ceCount": 1,
       "gBlock": null,
-      "derivedName": "UnknownLanguageDisplay",
-      "nameSource": "H17b-descriptive-string"
+      "derivedName": "UnknownLanguageDisplayWrapper",
+      "nameSource": "H16-function-call"
     },
     {
       "name": "EG7",
@@ -14208,7 +14362,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": "qV_"
+      "gBlock": "qV_",
+      "derivedName": "SG7Provider",
+      "nameSource": "H22-provider"
     },
     {
       "name": "yT1",
@@ -14439,7 +14595,7 @@
       "ceCount": 1,
       "gBlock": "_f9",
       "derivedName": "UseAppWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "W",
@@ -14521,7 +14677,9 @@
       ],
       "hooks": [],
       "ceCount": 4,
-      "gBlock": "o9H"
+      "gBlock": "o9H",
+      "derivedName": "UbUbUbDisplay",
+      "nameSource": "H25-relaxed-text"
     },
     {
       "name": "Kl_",
@@ -14919,7 +15077,9 @@
       ],
       "hooks": [],
       "ceCount": 3,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "WaitingForPermissionuHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "op1",
@@ -15060,7 +15220,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": "zT9"
+      "gBlock": "zT9",
+      "derivedName": "TextInputHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Wt1",
@@ -15121,7 +15283,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": "i88"
+      "gBlock": "i88",
+      "derivedName": "InstallPluginsHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "e",
@@ -15239,7 +15403,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "LI9"
+      "gBlock": "LI9",
+      "derivedName": "useDebounce",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "NI9",
@@ -15261,7 +15427,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": "vI9"
+      "gBlock": "vI9",
+      "derivedName": "ModeCycleHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "ir_",
@@ -15307,7 +15475,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "QB9"
+      "gBlock": "QB9",
+      "derivedName": "FeedbackSurveyEventHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "wc9",
@@ -15348,7 +15518,9 @@
       ],
       "hooks": [],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "LetsGetStartedHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "_E7",
@@ -15402,7 +15574,9 @@
       ],
       "hooks": [],
       "ceCount": 0,
-      "gBlock": "be7"
+      "gBlock": "be7",
+      "derivedName": "AutoHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Pt1",
@@ -15541,7 +15715,9 @@
       ],
       "hooks": [],
       "ceCount": 6,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "TaskFooterHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "d58",
@@ -15579,7 +15755,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": "plq"
+      "gBlock": "plq",
+      "derivedName": "ConsoleOAuthFlowHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "s_H",
@@ -15646,7 +15824,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "TextInputHookHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Biq",
@@ -15713,7 +15893,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": "zq"
+      "gBlock": "zq",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "rO1",
@@ -15797,7 +15979,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "jB6"
+      "gBlock": "jB6",
+      "derivedName": "UseAppHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "lZ7",
@@ -15820,7 +16004,7 @@
       "ceCount": 0,
       "gBlock": "xrH",
       "derivedName": "UseAppWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "ZV7",
@@ -15881,7 +16065,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": "zF"
+      "gBlock": "zF",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "vt7",
@@ -15900,7 +16086,7 @@
       "hooks": [],
       "ceCount": 2,
       "gBlock": null,
-      "derivedName": "IsShutdownRejectedWrapper",
+      "derivedName": "IsShutdownRejectedWrapperWrapper",
       "nameSource": "H16-function-call"
     },
     {
@@ -15920,7 +16106,7 @@
       "hooks": [],
       "ceCount": 2,
       "gBlock": null,
-      "derivedName": "IsPlanApprovalResponseWrapper",
+      "derivedName": "IsPlanApprovalResponseWrapperWrapper",
       "nameSource": "H16-function-call"
     },
     {
@@ -16117,7 +16303,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": "Jf9"
+      "gBlock": "Jf9",
+      "derivedName": "DiffHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "g_K",
@@ -16406,7 +16594,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": "F78"
+      "gBlock": "F78",
+      "derivedName": "ProgressDialogShared",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "iKK",
@@ -16445,7 +16635,7 @@
       "ceCount": 2,
       "gBlock": "Z98",
       "derivedName": "PrivacySettingsDialogDismissedDisplay",
-      "nameSource": "H17b-descriptive-string"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "_3K",
@@ -16584,7 +16774,7 @@
       "hooks": [],
       "ceCount": 2,
       "gBlock": null,
-      "derivedName": "ExecuteEffortWrapper",
+      "derivedName": "ExecuteEffortWrapperWrapper",
       "nameSource": "H16-function-call"
     },
     {
@@ -16627,7 +16817,7 @@
       "ceCount": 0,
       "gBlock": "NS9",
       "derivedName": "IsChainParticipantWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "OJK",
@@ -16646,7 +16836,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "BulletIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "TJK",
@@ -16665,7 +16857,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "BulletIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "dPK",
@@ -16722,7 +16916,9 @@
       ],
       "hooks": [],
       "ceCount": 1,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "CheckMarkIcon",
+      "nameSource": "H23-symbol"
     },
     {
       "name": "wx9",
@@ -16743,7 +16939,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "fx9"
+      "gBlock": "fx9",
+      "derivedName": "ExitHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "hx9",
@@ -16764,7 +16962,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "Nx9"
+      "gBlock": "Nx9",
+      "derivedName": "TaskFooterHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Om9",
@@ -16786,7 +16986,7 @@
       ],
       "ceCount": 0,
       "gBlock": "Km9",
-      "derivedName": "TeamComponent",
+      "derivedName": "GetCachedDetectionResultWrapper",
       "nameSource": "H11-gblock-readable"
     },
     {
@@ -16808,7 +17008,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "$p9"
+      "gBlock": "$p9",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "c58",
@@ -16853,8 +17055,8 @@
       ],
       "ceCount": 0,
       "gBlock": "jp9",
-      "derivedName": "TaskComponent",
-      "nameSource": "H11-gblock-readable"
+      "derivedName": "useAbortController",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "Bg9",
@@ -16877,7 +17079,7 @@
       "ceCount": 0,
       "gBlock": "pg9",
       "derivedName": "GetAutoModeUnavailableNotificationWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "ld9",
@@ -16898,7 +17100,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": "cd9"
+      "gBlock": "cd9",
+      "derivedName": "useNotification",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "phK",
@@ -16941,7 +17145,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "fS6"
+      "gBlock": "fS6",
+      "derivedName": "usePolling",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "MN7",
@@ -17068,7 +17274,9 @@
       ],
       "hooks": [],
       "ceCount": 5,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "generateUsageReportHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "updateHourHistogram",
@@ -17085,7 +17293,9 @@
       ],
       "hooks": [],
       "ceCount": 5,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "generateUsageReportHelperHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "ix9",
@@ -17129,7 +17339,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": "Z58"
+      "gBlock": "Z58",
+      "derivedName": "ModeCycleHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "yEH",
@@ -17150,7 +17362,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "Nm9"
+      "gBlock": "Nm9",
+      "derivedName": "useDebounce",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "g58",
@@ -17194,7 +17408,9 @@
         "useSyncExternalStore"
       ],
       "ceCount": 0,
-      "gBlock": "_B9"
+      "gBlock": "_B9",
+      "derivedName": "useStoreSelector",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "aRK",
@@ -17214,7 +17430,7 @@
       "ceCount": 3,
       "gBlock": "zg9",
       "derivedName": "ShowingMarketplaceInstallationSuccessDisplay",
-      "nameSource": "H17b-descriptive-string"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "fkK",
@@ -17254,7 +17470,9 @@
       ],
       "hooks": [],
       "ceCount": 6,
-      "gBlock": "cc9"
+      "gBlock": "cc9",
+      "derivedName": "DialogContainer",
+      "nameSource": "H21-composition"
     },
     {
       "name": "cF9",
@@ -17704,7 +17922,7 @@
       "ceCount": 1,
       "gBlock": "ML9",
       "derivedName": "AddToExcludedCommandsWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "AzK",
@@ -17778,7 +17996,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "usePolling",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "miq",
@@ -17818,7 +18038,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "TextInputHookHelperHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "diq",
@@ -17882,7 +18104,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "ri"
+      "gBlock": "ri",
+      "derivedName": "WO9ProviderHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "G$",
@@ -17902,7 +18126,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "cd"
+      "gBlock": "cd",
+      "derivedName": "ToolUseHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "P6",
@@ -17922,7 +18148,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "S9"
+      "gBlock": "S9",
+      "derivedName": "PressHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Kq",
@@ -17942,7 +18170,9 @@
         "useCallback"
       ],
       "ceCount": 0,
-      "gBlock": "S9"
+      "gBlock": "S9",
+      "derivedName": "IdeOnboardingHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "LI7",
@@ -17981,7 +18211,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "useStoreSelector",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "km",
@@ -18025,7 +18257,7 @@
       "ceCount": 0,
       "gBlock": "DeH",
       "derivedName": "OnGrowthBookRefreshWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "$s7",
@@ -18045,7 +18277,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": "zF"
+      "gBlock": "zF",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "fp1",
@@ -18085,7 +18319,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "WeH"
+      "gBlock": "WeH",
+      "derivedName": "RateLimitHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "qH",
@@ -18103,7 +18339,9 @@
       ],
       "hooks": [],
       "ceCount": 2,
-      "gBlock": null
+      "gBlock": null,
+      "derivedName": "IdleForHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Sg1",
@@ -18164,7 +18402,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "cO"
+      "gBlock": "cO",
+      "derivedName": "useNotification",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "Gf9",
@@ -18184,7 +18424,9 @@
         "useMemo"
       ],
       "ceCount": 0,
-      "gBlock": "Xf9"
+      "gBlock": "Xf9",
+      "derivedName": "DiffHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "fqK",
@@ -18278,7 +18520,9 @@
         "useContext"
       ],
       "ceCount": 0,
-      "gBlock": "R18"
+      "gBlock": "R18",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Ib",
@@ -18298,7 +18542,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "YEH"
+      "gBlock": "YEH",
+      "derivedName": "ToolConfirmHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Nb9",
@@ -18318,7 +18564,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "XEH"
+      "gBlock": "XEH",
+      "derivedName": "ModeCycleHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "mYH",
@@ -18338,7 +18586,9 @@
         "zustand-selector"
       ],
       "ceCount": 0,
-      "gBlock": "mb9"
+      "gBlock": "mb9",
+      "derivedName": "AuthenticationErrorXbTryHelper",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "_m9",
@@ -18358,7 +18608,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "ex9"
+      "gBlock": "ex9",
+      "derivedName": "ModeCycleHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Tp9",
@@ -18380,7 +18632,7 @@
       "ceCount": 0,
       "gBlock": "Op9",
       "derivedName": "GetApiKeyFromApiKeyHelperWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "kp9",
@@ -18401,8 +18653,8 @@
       ],
       "ceCount": 0,
       "gBlock": "Zp9",
-      "derivedName": "TaskComponent",
-      "nameSource": "H11-gblock-readable"
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "$RK",
@@ -18443,7 +18695,7 @@
       "ceCount": 0,
       "gBlock": "lr_",
       "derivedName": "OnGrowthBookRefreshWrapper",
-      "nameSource": "H16-function-call"
+      "nameSource": "H11-gblock-readable"
     },
     {
       "name": "WB9",
@@ -18463,7 +18715,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "XB9"
+      "gBlock": "XB9",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "tr_",
@@ -18483,7 +18737,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "cB9"
+      "gBlock": "cB9",
+      "derivedName": "FeedbackSurveyEventHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "gb",
@@ -18503,7 +18759,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "Hg9"
+      "gBlock": "Hg9",
+      "derivedName": "useNotification",
+      "nameSource": "H20-hook-sig"
     },
     {
       "name": "nRK",
@@ -18543,7 +18801,9 @@
         "useRef"
       ],
       "ceCount": 0,
-      "gBlock": "fo_"
+      "gBlock": "fo_",
+      "derivedName": "REPLHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "Do_",
@@ -18621,7 +18881,9 @@
         "useEffect"
       ],
       "ceCount": 0,
-      "gBlock": "w7_"
+      "gBlock": "w7_",
+      "derivedName": "CheckingConnectivityHook",
+      "nameSource": "H19-caller-context"
     },
     {
       "name": "DvK",
@@ -18720,7 +18982,7 @@
       "gBlock": null
     }
   ],
-  "labeledComponents": 512,
+  "labeledComponents": 643,
   "labelSources": {
     "H9-prop-hint": 55,
     "H1-dialog-title": 74,
@@ -18728,14 +18990,18 @@
     "H10-text-child": 158,
     "H2-dialog-type": 6,
     "H7-action-string": 17,
-    "H16-function-call": 27,
+    "H16-function-call": 15,
     "H4-settings": 2,
     "H7-error-string": 12,
-    "H13-keybinding": 4,
-    "H11-gblock-readable": 33,
+    "H25-relaxed-text": 25,
+    "H22-provider": 11,
+    "H21-composition": 13,
+    "H11-gblock-readable": 53,
     "H12-gblock-init": 24,
-    "H17b-descriptive-string": 7,
-    "H17c-description": 1,
+    "H19-caller-context": 53,
+    "H13-keybinding": 1,
+    "H23-symbol": 11,
+    "H20-hook-sig": 21,
     "H12b-gblock-domain": 2,
     "H3-notification": 1,
     "H7-wants-string": 2

@@ -28,6 +28,12 @@ const rcData = JSON.parse(fs.readFileSync(RC_FILE, "utf8"));
 const content = fs.readFileSync(SPLIT, "utf8");
 const lines = content.split("\n");
 
+// Load call-graph for H19 (caller-context naming)
+const CALL_GRAPH = path.join(ROOT, "src", "call-graph.json");
+const callGraph = fs.existsSync(CALL_GRAPH)
+  ? JSON.parse(fs.readFileSync(CALL_GRAPH, "utf8"))
+  : null;
+
 // --- Read component bodies ---
 function getComponentBody(comp) {
   if (comp.source === "inline") {
@@ -492,6 +498,324 @@ for (const comp of rcData.components) {
       if (hookName.length >= 6) {
         recordLabel(comp, hookName, "H18-store-hook");
         continue;
+      }
+    }
+  }
+
+  // =================================================================
+  // H22: Provider Pattern — .Provider in body → context provider
+  // =================================================================
+  {
+    const providerRe = /([a-zA-Z_$][a-zA-Z0-9_$]*)\.Provider/g;
+    const providers = [];
+    let pm;
+    while ((pm = providerRe.exec(body)) !== null) {
+      providers.push(pm[1]);
+    }
+    if (providers.length > 0) {
+      // Try to look up context name from name-map
+      let providerName = null;
+      for (const ctx of providers) {
+        const nm = nameMap[ctx];
+        if (nm && typeof nm === "string" && nm.length > 3 &&
+            !nm.startsWith("init(") && !nm.startsWith("deps(") && !nm.startsWith("block(") &&
+            !nm.startsWith("component(")) {
+          providerName = nm.replace(/Context$/, "").replace(/^[a-z]/, c => c.toUpperCase());
+          break;
+        }
+      }
+      if (!providerName) {
+        // Fallback: use first provider variable name
+        providerName = providers[0];
+      }
+      if (providerName.length >= 2 && providerName.length <= 40) {
+        recordLabel(comp, providerName + "Provider", "H22-provider");
+        continue;
+      }
+    }
+  }
+
+  // =================================================================
+  // H24: Suspense Wrapper — createElement(Suspense, ...) → lazy wrapper
+  // =================================================================
+  {
+    const suspenseMatch = body.match(/createElement\(\s*(?:Suspense|[a-zA-Z_$]*Suspense)\s*,/);
+    if (suspenseMatch) {
+      // Try to find the lazy child rendered inside
+      const lazyChildRe = /createElement\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*,/g;
+      const children = [];
+      let lm;
+      while ((lm = lazyChildRe.exec(body)) !== null) {
+        const name = lm[1];
+        if (name !== "Suspense" && name !== "L" && name !== "d3" && name !== "m" && name !== "hD") {
+          const readable = nameMap[name];
+          if (readable && typeof readable === "string" && readable.length > 4 &&
+              !readable.startsWith("init(") && !readable.startsWith("block(")) {
+            children.push(readable);
+          }
+        }
+      }
+      if (children.length > 0) {
+        const best = children.sort((a, b) => b.length - a.length)[0];
+        const pascal = best.replace(/^[a-z]/, c => c.toUpperCase());
+        recordLabel(comp, pascal + "Lazy", "H24-suspense");
+      } else {
+        recordLabel(comp, "SuspenseWrapper", "H24-suspense");
+      }
+      continue;
+    }
+  }
+
+  // =================================================================
+  // H23: UI Symbol/Icon — uses oH.tick/warning/pointer/etc
+  // =================================================================
+  {
+    const symbolRe = /oH\.([a-zA-Z_]+)/g;
+    const symbols = [];
+    let sym;
+    while ((sym = symbolRe.exec(body)) !== null) {
+      symbols.push(sym[1]);
+    }
+    if (symbols.length > 0 && comp.lines <= 30) {
+      const symbolMap = {
+        tick: "CheckMark", pointer: "ListPointer", warning: "Warning",
+        spinner: "Spinner", checkbox: "Checkbox", checkboxChecked: "CheckboxChecked",
+        checkboxUnchecked: "CheckboxUnchecked", radio: "Radio",
+        radioChecked: "RadioChecked", chevronRight: "ChevronRight",
+        chevronDown: "ChevronDown", chevronUp: "ChevronUp",
+        arrowRight: "ArrowRight", arrowDown: "ArrowDown",
+        dot: "Dot", dash: "Dash", star: "Star", heart: "Heart",
+        info: "Info", error: "Error", success: "Success",
+        cross: "Cross", plus: "Plus", minus: "Minus",
+      };
+      const best = symbols[0];
+      const label = symbolMap[best] || (best.charAt(0).toUpperCase() + best.slice(1));
+      recordLabel(comp, label + "Icon", "H23-symbol");
+      continue;
+    }
+  }
+
+  // =================================================================
+  // H20: Known Hook Signatures — pattern match hook bodies
+  // =================================================================
+  if (comp.type === "hook" || (comp.lines <= 25 && !body.includes("createElement"))) {
+    let hookMatched = false;
+    const hookPatterns = [
+      [/useSyncExternalStore/, "useStoreSelector"],
+      [/activeOverlays/, "useOverlayRegistration"],
+      [/addNotification|removeNotification/, "useNotification"],
+      [/headerFocused|focusHeader|blurHeader/, "useHeaderFocus"],
+      [/useLayoutEffect|useInsertionEffect/, null], // skip these generic hooks
+      [/clipboard|copyToClipboard|navigator\.clipboard/, "useClipboard"],
+      [/localStorage|sessionStorage/, "useStorage"],
+      [/addEventListener.*resize|innerWidth|innerHeight/, "useWindowSize"],
+      [/addEventListener.*keydown|addEventListener.*keyup/, "useKeyPress"],
+      [/matchMedia|prefers-color-scheme/, "useMediaQuery"],
+      [/IntersectionObserver/, "useIntersectionObserver"],
+      [/MutationObserver/, "useMutationObserver"],
+      [/AbortController/, "useAbortController"],
+      [/\.focus\(\)|\.blur\(\)|focusRef/, "useFocusManagement"],
+      [/scrollIntoView|scrollTop|scrollTo/, "useScroll"],
+      [/animation|animate|transition|requestAnimationFrame/, "useAnimation"],
+      [/debounce|setTimeout.*clearTimeout/, "useDebounce"],
+      [/throttle/, "useThrottle"],
+      [/polling|setInterval/, "usePolling"],
+    ];
+    for (const [re, name] of hookPatterns) {
+      if (re.test(body)) {
+        if (name) {
+          recordLabel(comp, name, "H20-hook-sig");
+          hookMatched = true;
+        }
+        break;
+      }
+    }
+    if (hookMatched) continue;
+  }
+
+  // =================================================================
+  // H25: Relaxed text matching — lowercase text in createElement
+  // =================================================================
+  {
+    // Match createElement(L/d3, ..., "any text ≥10 chars") — including lowercase
+    const relaxedTextRe = /createElement\(\s*(?:L|d3)\s*,\s*(?:\{[^}]*\}|null)\s*,\s*"([^"]{10,60})"/g;
+    const allTexts = [];
+    let rtm;
+    while ((rtm = relaxedTextRe.exec(body)) !== null) {
+      const text = rtm[1];
+      // Skip pure punctuation, numbers, format strings
+      if (/^[\W\d]+$/.test(text)) continue;
+      if (text.includes("${") || text.includes("\\n") || text.includes("%s")) continue;
+      // Must have at least 2 real words
+      const words = text.trim().split(/\s+/).filter(w => w.length >= 2);
+      if (words.length >= 2) {
+        allTexts.push(text);
+      }
+    }
+    if (allTexts.length > 0) {
+      const best = allTexts.sort((a, b) => b.length - a.length)[0];
+      const words = best.replace(/[^a-zA-Z ]/g, "").trim().split(/\s+/).slice(0, 5)
+        .filter(w => w.length >= 2)
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+      const name = words.join("");
+      if (name.length >= 6 && name.length <= 40) {
+        recordLabel(comp, name + "Display", "H25-relaxed-text");
+        continue;
+      }
+    }
+  }
+
+  // =================================================================
+  // H26: Conditional Guard — if (!x) return null at start
+  // =================================================================
+  {
+    const guardRe = /if\s*\(\s*!([a-zA-Z_$][a-zA-Z0-9_$]*(?:\(\))?)\s*\)\s*return\s+null/;
+    const guardMatch = body.match(guardRe);
+    if (guardMatch && comp.lines <= 40) {
+      const condition = guardMatch[1].replace(/\(\)$/, "");
+      // Look up in name-map or derive from name
+      let guardName = null;
+      const nm = nameMap[condition];
+      if (nm && typeof nm === "string" && nm.length > 4 &&
+          !nm.startsWith("init(") && !nm.startsWith("deps(") && !nm.startsWith("block(")) {
+        guardName = nm.replace(/^(is|has|get|should)/, "").replace(/^[a-z]/, c => c.toUpperCase());
+      }
+      if (!guardName) {
+        guardName = condition
+          .replace(/^(is|has|get|should)/, "")
+          .replace(/^[a-z]/, c => c.toUpperCase());
+      }
+      if (guardName.length >= 3 && guardName.length <= 30) {
+        recordLabel(comp, guardName + "Guard", "H26-guard");
+        continue;
+      }
+    }
+  }
+
+  // =================================================================
+  // H21: Child Composition — renders ≥2 labeled children
+  // =================================================================
+  {
+    const ceRe = /createElement\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*,/g;
+    const childComponents = new Map(); // hash → readableName
+    let cem;
+    while ((cem = ceRe.exec(body)) !== null) {
+      const child = cem[1];
+      // Skip basic elements (Box, Text, etc.)
+      if (["L", "d3", "m", "hD", "null", "undefined", "Suspense", "Fragment"].includes(child)) continue;
+      // Look up in react-components for labeled children
+      const childComp = rcData.components.find(c => c.name === child);
+      if (childComp && (childComp.derivedName || childComp.readableName)) {
+        const label = childComp.derivedName || childComp.readableName;
+        childComponents.set(child, label);
+      }
+    }
+    if (childComponents.size >= 2) {
+      // Find common domain from child names
+      const childNames = [...childComponents.values()];
+      // Check for common suffix
+      const suffixes = ["Dialog", "Component", "Display", "Controls", "Panel", "View", "Wrapper"];
+      let domain = null;
+      for (const suffix of suffixes) {
+        const matching = childNames.filter(n => n.endsWith(suffix));
+        if (matching.length >= 2) {
+          // Extract common prefix from matching children
+          const prefixes = matching.map(n => n.replace(new RegExp(suffix + "$"), ""));
+          // Find longest common prefix
+          let common = prefixes[0];
+          for (let i = 1; i < prefixes.length; i++) {
+            while (!prefixes[i].startsWith(common) && common.length > 0) {
+              common = common.slice(0, -1);
+            }
+          }
+          if (common.length >= 3) {
+            domain = common + "Container";
+            break;
+          }
+        }
+      }
+      if (!domain) {
+        // Use the most common word from child names
+        const wordCounts = {};
+        for (const name of childNames) {
+          // Split PascalCase into words
+          const words = name.replace(/([A-Z])/g, " $1").trim().split(/\s+/);
+          for (const w of words) {
+            if (w.length >= 3) wordCounts[w] = (wordCounts[w] || 0) + 1;
+          }
+        }
+        const bestWord = Object.entries(wordCounts).sort((a, b) => b[1] - a[1])[0];
+        if (bestWord && bestWord[1] >= 2) {
+          domain = bestWord[0] + "Container";
+        }
+      }
+      if (domain && domain.length >= 6 && domain.length <= 40) {
+        recordLabel(comp, domain, "H21-composition");
+        continue;
+      }
+    }
+  }
+
+  // =================================================================
+  // H19: Caller-Context — use call-graph calledBy for naming
+  // =================================================================
+  if (callGraph) {
+    const cgNode = callGraph.functions[comp.name];
+    if (cgNode && cgNode.cb && cgNode.cb.length > 0) {
+      // Look up caller names
+      const callerNames = [];
+      for (const callerHash of cgNode.cb) {
+        // Check if caller is a labeled component
+        const callerComp = rcData.components.find(c => c.name === callerHash);
+        if (callerComp && (callerComp.derivedName || callerComp.readableName)) {
+          callerNames.push(callerComp.derivedName || callerComp.readableName);
+          continue;
+        }
+        // Check call-graph for readable name
+        const callerCg = callGraph.functions[callerHash];
+        if (callerCg && callerCg.n && callerCg.n !== callerHash && callerCg.n.length > 3) {
+          callerNames.push(callerCg.n);
+          continue;
+        }
+        // Check name-map
+        const nm = nameMap[callerHash];
+        if (nm && typeof nm === "string" && nm.length > 4 &&
+            !nm.startsWith("init(") && !nm.startsWith("deps(") && !nm.startsWith("block(") &&
+            !nm.startsWith("component(")) {
+          callerNames.push(nm);
+        }
+      }
+      if (callerNames.length >= 1) {
+        // Find common domain
+        if (callerNames.length === 1) {
+          // Single caller → ParentHelper
+          const parent = callerNames[0]
+            .replace(/(Dialog|Component|Display|Wrapper|Controls|Container)$/, "");
+          if (parent.length >= 3 && parent.length <= 25) {
+            const suffix = comp.type === "hook" ? "Hook" : "Helper";
+            recordLabel(comp, parent + suffix, "H19-caller-context");
+            continue;
+          }
+        } else {
+          // Multiple callers — check for common prefix
+          let common = callerNames[0];
+          for (let i = 1; i < callerNames.length; i++) {
+            while (!callerNames[i].startsWith(common) && common.length > 0) {
+              common = common.slice(0, -1);
+            }
+          }
+          if (common.length >= 3) {
+            recordLabel(comp, common + "Shared", "H19-caller-context");
+            continue;
+          }
+          // Fallback: use first caller
+          const parent = callerNames[0]
+            .replace(/(Dialog|Component|Display|Wrapper|Controls|Container)$/, "");
+          if (parent.length >= 3) {
+            recordLabel(comp, parent + "Helper", "H19-caller-context");
+            continue;
+          }
+        }
       }
     }
   }

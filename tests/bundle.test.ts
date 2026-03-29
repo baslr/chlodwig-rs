@@ -329,8 +329,8 @@ describe("react-components.json", () => {
     expect(compLabels.length).toBeGreaterThanOrEqual(300);
   });
 
-  it("should have labeled at least 55% of React components", () => {
+  it("should have labeled at least 70% of React components", () => {
     const data = JSON.parse(fs.readFileSync(path.join(SRC, "react-components.json"), "utf8"));
-    expect(data.labeledComponents / data.totalComponents).toBeGreaterThanOrEqual(0.55);
+    expect(data.labeledComponents / data.totalComponents).toBeGreaterThanOrEqual(0.70);
   });
 });
