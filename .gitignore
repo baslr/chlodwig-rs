@@ -3,3 +3,5 @@ node_modules/
 *.log
 # bun
 bun.lock
+src/readable/cli_split.js
+src/readable/sections/

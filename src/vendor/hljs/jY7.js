@@ -1,57 +1,59 @@
-  var JY7 = d((B8O, MY7) => {
-    function E61(H) {
-      let _ = { className: "built_in", begin: "\\b(AV|CA|CF|CG|CI|CL|CM|CN|CT|MK|MP|MTK|MTL|NS|SCN|SK|UI|WK|XC)\\w+" },
-        q = /[a-zA-Z@][a-zA-Z0-9_]*/,
-        $ = {
-          $pattern: q,
-          keyword:
-            "int float while char export sizeof typedef const struct for union unsigned long volatile static bool mutable if do return goto void enum else break extern asm case short default double register explicit signed typename this switch continue wchar_t inline readonly assign readwrite self @synchronized id typeof nonatomic super unichar IBOutlet IBAction strong weak copy in out inout bycopy byref oneway __strong __weak __block __autoreleasing @private @protected @public @try @property @end @throw @catch @finally @autoreleasepool @synthesize @dynamic @selector @optional @required @encode @package @import @defs @compatibility_alias __bridge __bridge_transfer __bridge_retained __bridge_retain __covariant __contravariant __kindof _Nonnull _Nullable _Null_unspecified __FUNCTION__ __PRETTY_FUNCTION__ __attribute__ getter setter retain unsafe_unretained nonnull nullable null_unspecified null_resettable class instancetype NS_DESIGNATED_INITIALIZER NS_UNAVAILABLE NS_REQUIRES_SUPER NS_RETURNS_INNER_POINTER NS_INLINE NS_AVAILABLE NS_DEPRECATED NS_ENUM NS_OPTIONS NS_SWIFT_UNAVAILABLE NS_ASSUME_NONNULL_BEGIN NS_ASSUME_NONNULL_END NS_REFINED_FOR_SWIFT NS_SWIFT_NAME NS_SWIFT_NOTHROW NS_DURING NS_HANDLER NS_ENDHANDLER NS_VALUERETURN NS_VOIDRETURN",
-          literal: "false true FALSE TRUE nil YES NO NULL",
-          built_in: "BOOL dispatch_once_t dispatch_queue_t dispatch_sync dispatch_async dispatch_once",
+  var jY7 = d((p8O, DY7) => {
+    function S61(H) {
+      let _ = {
+          className: "variable",
+          begin:
+            /\$(ADMINTOOLS|APPDATA|CDBURN_AREA|CMDLINE|COMMONFILES32|COMMONFILES64|COMMONFILES|COOKIES|DESKTOP|DOCUMENTS|EXEDIR|EXEFILE|EXEPATH|FAVORITES|FONTS|HISTORY|HWNDPARENT|INSTDIR|INTERNET_CACHE|LANGUAGE|LOCALAPPDATA|MUSIC|NETHOOD|OUTDIR|PICTURES|PLUGINSDIR|PRINTHOOD|PROFILE|PROGRAMFILES32|PROGRAMFILES64|PROGRAMFILES|QUICKLAUNCH|RECENT|RESOURCES_LOCALIZED|RESOURCES|SENDTO|SMPROGRAMS|SMSTARTUP|STARTMENU|SYSDIR|TEMP|TEMPLATES|VIDEOS|WINDIR)/,
         },
-        K = { $pattern: q, keyword: "@interface @class @protocol @implementation" };
+        q = { className: "variable", begin: /\$+\{[\w.:-]+\}/ },
+        $ = { className: "variable", begin: /\$+\w+/, illegal: /\(\)\{\}/ },
+        K = { className: "variable", begin: /\$+\([\w^.:-]+\)/ },
+        O = {
+          className: "params",
+          begin:
+            "(ARCHIVE|FILE_ATTRIBUTE_ARCHIVE|FILE_ATTRIBUTE_NORMAL|FILE_ATTRIBUTE_OFFLINE|FILE_ATTRIBUTE_READONLY|FILE_ATTRIBUTE_SYSTEM|FILE_ATTRIBUTE_TEMPORARY|HKCR|HKCU|HKDD|HKEY_CLASSES_ROOT|HKEY_CURRENT_CONFIG|HKEY_CURRENT_USER|HKEY_DYN_DATA|HKEY_LOCAL_MACHINE|HKEY_PERFORMANCE_DATA|HKEY_USERS|HKLM|HKPD|HKU|IDABORT|IDCANCEL|IDIGNORE|IDNO|IDOK|IDRETRY|IDYES|MB_ABORTRETRYIGNORE|MB_DEFBUTTON1|MB_DEFBUTTON2|MB_DEFBUTTON3|MB_DEFBUTTON4|MB_ICONEXCLAMATION|MB_ICONINFORMATION|MB_ICONQUESTION|MB_ICONSTOP|MB_OK|MB_OKCANCEL|MB_RETRYCANCEL|MB_RIGHT|MB_RTLREADING|MB_SETFOREGROUND|MB_TOPMOST|MB_USERICON|MB_YESNO|NORMAL|OFFLINE|READONLY|SHCTX|SHELL_CONTEXT|SYSTEM|TEMPORARY)",
+        },
+        T = {
+          className: "keyword",
+          begin:
+            /!(addincludedir|addplugindir|appendfile|cd|define|delfile|echo|else|endif|error|execute|finalize|getdllversion|gettlbversion|if|ifdef|ifmacrodef|ifmacrondef|ifndef|include|insertmacro|macro|macroend|makensis|packhdr|searchparse|searchreplace|system|tempfile|undef|verbose|warning)/,
+        },
+        z = { className: "meta", begin: /\$(\\[nrt]|\$)/ },
+        A = { className: "class", begin: /\w+::\w+/ },
+        f = {
+          className: "string",
+          variants: [
+            { begin: '"', end: '"' },
+            { begin: "'", end: "'" },
+            { begin: "`", end: "`" },
+          ],
+          illegal: /\n/,
+          contains: [z, _, q, $, K],
+        };
       return {
-        name: "Objective-C",
-        aliases: ["mm", "objc", "obj-c", "obj-c++", "objective-c++"],
-        keywords: $,
-        illegal: "</",
+        name: "NSIS",
+        case_insensitive: !1,
+        keywords: {
+          keyword:
+            "Abort AddBrandingImage AddSize AllowRootDirInstall AllowSkipFiles AutoCloseWindow BGFont BGGradient BrandingText BringToFront Call CallInstDLL Caption ChangeUI CheckBitmap ClearErrors CompletedText ComponentText CopyFiles CRCCheck CreateDirectory CreateFont CreateShortCut Delete DeleteINISec DeleteINIStr DeleteRegKey DeleteRegValue DetailPrint DetailsButtonText DirText DirVar DirVerify EnableWindow EnumRegKey EnumRegValue Exch Exec ExecShell ExecShellWait ExecWait ExpandEnvStrings File FileBufSize FileClose FileErrorText FileOpen FileRead FileReadByte FileReadUTF16LE FileReadWord FileWriteUTF16LE FileSeek FileWrite FileWriteByte FileWriteWord FindClose FindFirst FindNext FindWindow FlushINI GetCurInstType GetCurrentAddress GetDlgItem GetDLLVersion GetDLLVersionLocal GetErrorLevel GetFileTime GetFileTimeLocal GetFullPathName GetFunctionAddress GetInstDirError GetKnownFolderPath GetLabelAddress GetTempFileName Goto HideWindow Icon IfAbort IfErrors IfFileExists IfRebootFlag IfRtlLanguage IfShellVarContextAll IfSilent InitPluginsDir InstallButtonText InstallColors InstallDir InstallDirRegKey InstProgressFlags InstType InstTypeGetText InstTypeSetText Int64Cmp Int64CmpU Int64Fmt IntCmp IntCmpU IntFmt IntOp IntPtrCmp IntPtrCmpU IntPtrOp IsWindow LangString LicenseBkColor LicenseData LicenseForceSelection LicenseLangString LicenseText LoadAndSetImage LoadLanguageFile LockWindow LogSet LogText ManifestDPIAware ManifestLongPathAware ManifestMaxVersionTested ManifestSupportedOS MessageBox MiscButtonText Name Nop OutFile Page PageCallbacks PEAddResource PEDllCharacteristics PERemoveResource PESubsysVer Pop Push Quit ReadEnvStr ReadINIStr ReadRegDWORD ReadRegStr Reboot RegDLL Rename RequestExecutionLevel ReserveFile Return RMDir SearchPath SectionGetFlags SectionGetInstTypes SectionGetSize SectionGetText SectionIn SectionSetFlags SectionSetInstTypes SectionSetSize SectionSetText SendMessage SetAutoClose SetBrandingImage SetCompress SetCompressor SetCompressorDictSize SetCtlColors SetCurInstType SetDatablockOptimize SetDateSave SetDetailsPrint SetDetailsView SetErrorLevel SetErrors SetFileAttributes SetFont SetOutPath SetOverwrite SetRebootFlag SetRegView SetShellVarContext SetSilent ShowInstDetails ShowUninstDetails ShowWindow SilentInstall SilentUnInstall Sleep SpaceTexts StrCmp StrCmpS StrCpy StrLen SubCaption Unicode UninstallButtonText UninstallCaption UninstallIcon UninstallSubCaption UninstallText UninstPage UnRegDLL Var VIAddVersionKey VIFileVersion VIProductVersion WindowIcon WriteINIStr WriteRegBin WriteRegDWORD WriteRegExpandStr WriteRegMultiStr WriteRegNone WriteRegStr WriteUninstaller XPStyle",
+          literal:
+            "admin all auto both bottom bzip2 colored components current custom directory false force hide highest ifdiff ifnewer instfiles lastused leave left license listonly lzma nevershow none normal notset off on open print right show silent silentlog smooth textonly top true try un.components un.custom un.directory un.instfiles un.license uninstConfirm user Win10 Win7 Win8 WinVista zlib",
+        },
         contains: [
-          _,
-          H.C_LINE_COMMENT_MODE,
+          H.HASH_COMMENT_MODE,
           H.C_BLOCK_COMMENT_MODE,
-          H.C_NUMBER_MODE,
-          H.QUOTE_STRING_MODE,
-          H.APOS_STRING_MODE,
-          {
-            className: "string",
-            variants: [{ begin: '@"', end: '"', illegal: "\\n", contains: [H.BACKSLASH_ESCAPE] }],
-          },
-          {
-            className: "meta",
-            begin: /#\s*[a-z]+\b/,
-            end: /$/,
-            keywords: {
-              "meta-keyword": "if else elif endif define undef warning error line pragma ifdef ifndef include",
-            },
-            contains: [
-              { begin: /\\\n/, relevance: 0 },
-              H.inherit(H.QUOTE_STRING_MODE, { className: "meta-string" }),
-              { className: "meta-string", begin: /<.*?>/, end: /$/, illegal: "\\n" },
-              H.C_LINE_COMMENT_MODE,
-              H.C_BLOCK_COMMENT_MODE,
-            ],
-          },
-          {
-            className: "class",
-            begin: "(" + K.keyword.split(" ").join("|") + ")\\b",
-            end: /(\{|$)/,
-            excludeEnd: !0,
-            keywords: K,
-            contains: [H.UNDERSCORE_TITLE_MODE],
-          },
-          { begin: "\\." + H.UNDERSCORE_IDENT_RE, relevance: 0 },
+          H.COMMENT(";", "$", { relevance: 0 }),
+          { className: "function", beginKeywords: "Function PageEx Section SectionGroup", end: "$" },
+          f,
+          T,
+          q,
+          $,
+          K,
+          O,
+          A,
+          H.NUMBER_MODE,
         ],
       };
     }
-    MY7.exports = E61;
+    DY7.exports = S61;
   });

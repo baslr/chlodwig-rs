@@ -1,0 +1,87 @@
+    ER();
+    t6();
+    L_();
+    UJ7();
+    kG();
+    dTH();
+    Cj();
+    I8();
+    H_();
+    g_();
+    h_();
+    uY();
+    fX();
+    dw();
+    M9();
+    c3();
+    F_();
+    Up();
+    pG();
+    rE7();
+    yh_();
+    sE7();
+    dx6();
+    Vh_();
+    ikH();
+    (noH = hh_), (ooH = df);
+    fP1 = new Set([
+      "sh",
+      "bash",
+      "zsh",
+      "fish",
+      "csh",
+      "tcsh",
+      "ksh",
+      "dash",
+      "cmd",
+      "powershell",
+      "pwsh",
+      "env",
+      "xargs",
+      "nice",
+      "stdbuf",
+      "nohup",
+      "timeout",
+      "time",
+      "sudo",
+      "doas",
+      "pkexec",
+    ]);
+    iE7 = wnH;
+    (Uc6 = jh_),
+      (pC_ = new Set([
+        "GOEXPERIMENT",
+        "GOOS",
+        "GOARCH",
+        "CGO_ENABLED",
+        "GO111MODULE",
+        "RUST_BACKTRACE",
+        "RUST_LOG",
+        "NODE_ENV",
+        "PYTHONUNBUFFERED",
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+        "PYTEST_DEBUG",
+        "ANTHROPIC_API_KEY",
+        "LANG",
+        "LANGUAGE",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_TIME",
+        "CHARSET",
+        "TERM",
+        "COLORTERM",
+        "NO_COLOR",
+        "FORCE_COLOR",
+        "TZ",
+        "LS_COLORS",
+        "LSCOLORS",
+        "GREP_COLOR",
+        "GREP_COLORS",
+        "GCC_COLORS",
+        "TIME_STYLE",
+        "BLOCK_SIZE",
+        "BLOCKSIZE",
+      ]));
+    $C7 = /^(LD_|DYLD_|PATH$)/;
+    TC7 = new Map();

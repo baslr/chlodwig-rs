@@ -64,9 +64,50 @@ for (let i = 0; i < lines.length; i++) {
 
 console.log(`Found ${modules.length} d() modules\n`);
 
+// --- Find G() blocks by line scanning ---
+// Extract only the BODY of G(() => { ... }); blocks (lines between the opening and closing)
+// The var declaration and G() wrapper stay in cli_split.js to avoid Bun's eval var-hoisting bug
+const gStartRe = /^(\s*)var\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*G\(\(\)\s*=>\s*\{$/;
+const gBlocks = [];
+
+for (let i = 0; i < lines.length; i++) {
+  const m = lines[i].match(gStartRe);
+  if (!m) continue;
+
+  const indent = m[1];
+  const name = m[2];
+  const closePattern = `${indent}});`;
+
+  for (let j = i + 1; j < lines.length; j++) {
+    if (lines[j] === closePattern) {
+      // Body = lines between the G(() => { line and the }); line (exclusive on both ends)
+      const bodyStart = i + 1;
+      const bodyEnd = j - 1;
+      if (bodyEnd >= bodyStart) {
+        let size = 0;
+        for (let k = bodyStart; k <= bodyEnd; k++) size += lines[k].length + 1;
+        gBlocks.push({ name, bodyStart, bodyEnd, gStart: i, gEnd: j, size, lineCount: bodyEnd - bodyStart + 1, indent });
+      }
+      i = j;
+      break;
+    }
+  }
+}
+
+// Use gBlocks directly (no sections needed since we extract bodies, not full sections)
+const gSections = gBlocks;
+
+console.log(`Found ${gBlocks.length} G() blocks, ${gSections.length} sections\n`);
+
 // --- Filter big ones ---
 const big = modules.filter(m => m.size >= THRESHOLD);
 big.sort((a, b) => b.size - a.size);
+
+// --- Filter big G() sections ---
+const G_THRESHOLD = 500; // 500 bytes — extract blocks with ~10+ lines (eval stub overhead ~130 bytes)
+const bigG = gSections.filter(s => s.size >= G_THRESHOLD);
+bigG.sort((a, b) => b.size - a.size);
+console.log(`G() sections >= ${G_THRESHOLD / 1024} KB: ${bigG.length} (${(bigG.reduce((s,m) => s+m.size, 0) / 1024 / 1024).toFixed(1)} MB)\n`);
 
 // --- Categorize ---
 function categorize(mod) {
@@ -507,38 +548,87 @@ const allDirs = [
   "vendor/jwt", "vendor/xmlbuilder", "vendor/libc", "vendor/lru", "vendor/retry",
   "vendor/shell", "vendor/lodash", "vendor/qr", "vendor/log", "vendor/emoji",
   "vendor/encoding",
-  "vendor", "chunks", "core"
+  "vendor", "chunks", "core", "sections"
 ];
 for (const d of allDirs) {
   fs.rmSync(path.join(ROOT, "src", d), { recursive: true, force: true });
 }
 
-// --- Extract ---
+// --- Extract d() modules ---
 const extractions = [];
 const cats = {};
+
+// Track used filenames case-insensitively (macOS has case-insensitive FS)
+const usedModuleNames = new Map(); // category → Set of lowercase names
 
 for (const mod of big) {
   const cat = categorize(mod);
   const outDir = path.join(ROOT, "src", cat);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const code = lines.slice(mod.startLine, mod.endLine + 1).join("\n");
-  fs.writeFileSync(path.join(outDir, `${mod.name}.js`), code + "\n");
+  // Handle case-insensitive filename collisions (e.g., H_.js vs h_.js on macOS)
+  if (!usedModuleNames.has(cat)) usedModuleNames.set(cat, new Set());
+  let modName = mod.name;
+  if (usedModuleNames.get(cat).has(modName.toLowerCase())) {
+    modName = `${mod.name}_ci`;
+    console.log(`  Case collision: ${cat}/${mod.name}.js → ${modName}.js`);
+  }
+  usedModuleNames.get(cat).add(modName.toLowerCase());
 
-  extractions.push({ ...mod, cat });
+  const code = lines.slice(mod.startLine, mod.endLine + 1).join("\n");
+  fs.writeFileSync(path.join(outDir, `${modName}.js`), code + "\n");
+
+  extractions.push({ ...mod, name: modName, cat });
   if (!cats[cat]) cats[cat] = { count: 0, size: 0 };
   cats[cat].count++;
   cats[cat].size += mod.size;
 }
 
+// --- Extract G() block bodies ---
+const sectionsDir = path.join(ROOT, "src", "sections");
+fs.mkdirSync(sectionsDir, { recursive: true });
+
+// Track used filenames case-insensitively (macOS has case-insensitive FS)
+const usedSectionNames = new Set();
+
+let gExtracted = 0, gTotalSize = 0;
+for (const blk of bigG) {
+  // Skip blocks that overlap with already-extracted d() modules
+  const overlaps = extractions.some(e =>
+    (e.startLine >= blk.bodyStart && e.startLine <= blk.bodyEnd) ||
+    (e.endLine >= blk.bodyStart && e.endLine <= blk.bodyEnd)
+  );
+  if (overlaps) continue;
+
+  // Handle case-insensitive filename collisions (e.g., H_.js vs h_.js on macOS)
+  let sectionName = blk.name;
+  if (usedSectionNames.has(sectionName.toLowerCase())) {
+    sectionName = `${blk.name}_ci`;
+    console.log(`  Case collision: ${blk.name}.js → ${sectionName}.js`);
+  }
+  usedSectionNames.add(sectionName.toLowerCase());
+
+  const code = lines.slice(blk.bodyStart, blk.bodyEnd + 1).join("\n");
+  fs.writeFileSync(path.join(sectionsDir, `${sectionName}.js`), code + "\n");
+
+  // For the extraction list, startLine/endLine refer to the body (what gets replaced)
+  // indent needs extra 2 spaces since we're inside the G(() => { ... }) block
+  extractions.push({ name: sectionName, startLine: blk.bodyStart, endLine: blk.bodyEnd, size: blk.size, indent: blk.indent + "  ", cat: "sections", type: "G" });
+  gExtracted++;
+  gTotalSize += blk.size;
+}
+console.log(`Extracted ${gExtracted} G() sections (${(gTotalSize / 1024).toFixed(0)} KB)\n`);
+
 // --- Summary ---
 let totalSize = 0;
-console.log(`Extracted ${extractions.length} modules > ${THRESHOLD / 1024} KB:\n`);
+console.log(`Extracted d() modules > ${THRESHOLD / 1024} KB:\n`);
 for (const [cat, info] of Object.entries(cats).sort((a, b) => b[1].size - a[1].size)) {
   console.log(`  ${cat.padEnd(18)} ${String(info.count).padStart(3)} modules  ${(info.size / 1024).toFixed(0).padStart(7)} KB`);
   totalSize += info.size;
 }
-console.log(`  ${"TOTAL".padEnd(18)} ${String(extractions.length).padStart(3)} modules  ${(totalSize / 1024).toFixed(0).padStart(7)} KB  (${(totalSize / content.length * 100).toFixed(0)}% of source)\n`);
+console.log(`  ${"TOTAL d()".padEnd(18)} ${String(Object.values(cats).reduce((s,c) => s+c.count, 0)).padStart(3)} modules  ${(totalSize / 1024).toFixed(0).padStart(7)} KB`);
+console.log(`  ${"TOTAL G()".padEnd(18)} ${String(gExtracted).padStart(3)} sections ${(gTotalSize / 1024).toFixed(0).padStart(7)} KB`);
+console.log(`  ${"GRAND TOTAL".padEnd(18)} ${String(extractions.length).padStart(3)} items    ${((totalSize + gTotalSize) / 1024).toFixed(0).padStart(7)} KB  (${((totalSize + gTotalSize) / content.length * 100).toFixed(0)}% of source)\n`);
 
 // --- Build cli_split.js ---
 // Sort by line number
@@ -567,6 +657,72 @@ for (let i = 0; i < lines.length; i++) {
   }
 }
 
+// --- Insert zone banners ---
+const zones = [
+  { marker: "function G6(H, _, q) {",
+    num: 2, name: "VALIDATION & CONFIG", desc: "zod, i18n, permission-types, settings, mcp-config" },
+  { marker: 'vendor/sharp/nW8',
+    num: 3, name: "CLOUD PROVIDERS & AUTH", desc: "aws-sdk, msal/azure, google-auth, bedrock, vertex, otel, ajv" },
+  { marker: 'vendor/react/_gq',
+    num: 4, name: "UI FRAMEWORK & RENDERING", desc: "react, ink, ansi, chokidar, yaml, sharp, highlight.js, parse5" },
+  { marker: 'chunks/fJ7',
+    num: 5, name: "TOOLS & PERMISSIONS", desc: "bash-parser, permission-engine, tools, mcp-client, hooks, teams, memories" },
+  { marker: 'J_(Oc_, { cleanupComputerUseAfterTurn: () => Ei1 });',
+    num: 6, name: "CONVERSATION & COMMANDS", desc: "auto-mode, compaction, slash-commands, ui-dialogs, voice" },
+  { marker: 'J_(ov9, { isVoiceStreamAvailable: () => S$8, connectVoiceStream: () => zi_, FINALIZE_TIMEOUTS_MS: () => V$8 });',
+    num: 7, name: "SYSTEM PROMPT, SESSION & APP", desc: "system-prompt, session-io, chrome-bridge, commander, app-component" },
+  { marker: 'J_(Sc9, { REPL: () => I38 });',
+    num: 8, name: "REPL, SKILLS & CLI ENTRY", desc: "repl, cron, onboarding, skills, mcp-server, cli-commands, main, entry-point" },
+];
+
+// Find zone boundary lines in newLines and insert banners
+const bannerInserts = []; // { lineIdx, banner }
+for (const z of zones) {
+  const idx = newLines.findIndex(l => l.includes(z.marker));
+  if (idx === -1) {
+    console.error(`WARNING: Zone ${z.num} marker not found: ${z.marker.slice(0, 60)}...`);
+    continue;
+  }
+  bannerInserts.push({ lineIdx: idx, zone: z });
+}
+bannerInserts.sort((a, b) => a.lineIdx - b.lineIdx);
+
+// Insert banners in reverse order so indices don't shift
+for (let i = bannerInserts.length - 1; i >= 0; i--) {
+  const { lineIdx, zone } = bannerInserts[i];
+  const prevZone = i === 0
+    ? { endLine: lineIdx }
+    : bannerInserts[i - 1];
+  const nextZone = i < bannerInserts.length - 1
+    ? bannerInserts[i + 1]
+    : { lineIdx: newLines.length };
+  const banner = [
+    "",
+    "  // " + "=".repeat(76),
+    `  // ZONE ${zone.num}: ${zone.name}`,
+    `  // ${zone.desc}`,
+    "  // " + "=".repeat(76),
+    "",
+  ];
+  newLines.splice(lineIdx, 0, ...banner);
+}
+
+// Insert Zone 1 banner at the very top (after the IIFE opening + copyright)
+const zone1Banner = [
+  "",
+  "  // " + "=".repeat(76),
+  "  // ZONE 1: RUNTIME & SDK",
+  "  // iife, module-helpers (G/d/J_), anthropic sdk base client",
+  "  // " + "=".repeat(76),
+  "",
+];
+// Find first non-comment, non-empty line after line 10 (skip copyright block)
+let z1InsertIdx = 0;
+for (let i = 0; i < newLines.length && i < 20; i++) {
+  if (newLines[i].includes("// Version:")) { z1InsertIdx = i + 1; break; }
+}
+newLines.splice(z1InsertIdx, 0, ...zone1Banner);
+
 const result = newLines.join("\n");
 fs.writeFileSync(OUT, result);
 
@@ -586,7 +742,7 @@ const walk = (dir) => {
     }
   }
 };
-for (const d of ["src/vendor", "src/chunks"]) {
+for (const d of ["src/vendor", "src/chunks", "src/core", "src/sections"]) {
   const p = path.join(ROOT, d);
   if (fs.existsSync(p)) walk(p);
 }

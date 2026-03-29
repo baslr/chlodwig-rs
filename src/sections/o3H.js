@@ -1,0 +1,25 @@
+    YE();
+    OA = {
+      CURSOR_VISIBLE: 25,
+      ALT_SCREEN: 47,
+      ALT_SCREEN_CLEAR: 1049,
+      MOUSE_NORMAL: 1000,
+      MOUSE_BUTTON: 1002,
+      MOUSE_ANY: 1003,
+      MOUSE_SGR: 1006,
+      FOCUS_EVENTS: 1004,
+      BRACKETED_PASTE: 2004,
+      SYNCHRONIZED_UPDATE: 2026,
+    };
+    (KQq = di(OA.SYNCHRONIZED_UPDATE)),
+      (OQq = ci(OA.SYNCHRONIZED_UPDATE)),
+      (TQq = di(OA.BRACKETED_PASTE)),
+      (Q0H = ci(OA.BRACKETED_PASTE)),
+      (ev6 = di(OA.FOCUS_EVENTS)),
+      (n3H = ci(OA.FOCUS_EVENTS)),
+      (du = di(OA.CURSOR_VISIBLE)),
+      (NUH = ci(OA.CURSOR_VISIBLE)),
+      (HN6 = di(OA.ALT_SCREEN_CLEAR)),
+      (cG_ = ci(OA.ALT_SCREEN_CLEAR)),
+      (hUH = di(OA.MOUSE_NORMAL) + di(OA.MOUSE_BUTTON) + di(OA.MOUSE_ANY) + di(OA.MOUSE_SGR)),
+      (r3H = ci(OA.MOUSE_SGR) + ci(OA.MOUSE_ANY) + ci(OA.MOUSE_BUTTON) + ci(OA.MOUSE_NORMAL));

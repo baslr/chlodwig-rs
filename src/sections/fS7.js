@@ -1,0 +1,42 @@
+    I8();
+    dw();
+    Rr();
+    BGH();
+    dV7();
+    UV7();
+    oV7();
+    $S7();
+    dkH();
+    (TS7 = require("path")),
+      (KS7 = new Set([
+        "new-item",
+        "set-content",
+        "add-content",
+        "out-file",
+        "copy-item",
+        "move-item",
+        "rename-item",
+        "expand-archive",
+        "invoke-webrequest",
+        "invoke-restmethod",
+        "tee-object",
+        "export-csv",
+        "export-clixml",
+      ])),
+      (HM1 = new Set([
+        "tar",
+        "tar.exe",
+        "bsdtar",
+        "bsdtar.exe",
+        "unzip",
+        "unzip.exe",
+        "7z",
+        "7z.exe",
+        "7za",
+        "7za.exe",
+        "gzip",
+        "gzip.exe",
+        "gunzip",
+        "gunzip.exe",
+        "expand-archive",
+      ]));

@@ -1,0 +1,22 @@
+    (Rcq = {
+      keydown: { bubble: "onKeyDown", capture: "onKeyDownCapture" },
+      focus: { bubble: "onFocus", capture: "onFocusCapture" },
+      blur: { bubble: "onBlur", capture: "onBlurCapture" },
+      paste: { bubble: "onPaste", capture: "onPasteCapture" },
+      resize: { bubble: "onResize" },
+      click: { bubble: "onClick" },
+    }),
+      (zv6 = new Set([
+        "onKeyDown",
+        "onKeyDownCapture",
+        "onFocus",
+        "onFocusCapture",
+        "onBlur",
+        "onBlurCapture",
+        "onPaste",
+        "onPasteCapture",
+        "onResize",
+        "onClick",
+        "onMouseEnter",
+        "onMouseLeave",
+      ]));

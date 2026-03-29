@@ -1,64 +1,98 @@
-  var ZD7 = d((MqO, RD7) => {
-    function j81(H) {
-      let q =
-          "abstract as async await become box break const continue crate do dyn else enum extern false final fn for if impl in let loop macro match mod move mut override priv pub ref return self Self static struct super trait true try type typeof unsafe unsized use virtual where while yield",
-        $ =
-          "drop i8 i16 i32 i64 i128 isize u8 u16 u32 u64 u128 usize f32 f64 str char bool Box Option Result String Vec Copy Send Sized Sync Drop Fn FnMut FnOnce ToOwned Clone Debug PartialEq PartialOrd Eq Ord AsRef AsMut Into From Default Iterator Extend IntoIterator DoubleEndedIterator ExactSizeIterator SliceConcatExt ToString assert! assert_eq! bitflags! bytes! cfg! col! concat! concat_idents! debug_assert! debug_assert_eq! env! panic! file! format! format_args! include_bin! include_str! line! local_data_key! module_path! option_env! print! println! select! stringify! try! unimplemented! unreachable! vec! write! writeln! macro_rules! assert_ne! debug_assert_ne!";
+  var zD7 = d((zqO, TD7) => {
+    function K81(H) {
+      if (!H) return null;
+      if (typeof H === "string") return H;
+      return H.source;
+    }
+    function O81(H) {
+      return wu6("(?=", H, ")");
+    }
+    function wu6(...H) {
+      return H.map((q) => K81(q)).join("");
+    }
+    function T81(H) {
+      let _ = /(?:(?:[a-zA-Z]|\.[._a-zA-Z])[._a-zA-Z0-9]*)|\.(?!\d)/,
+        q = /[a-zA-Z][a-zA-Z_0-9]*/;
       return {
-        name: "Rust",
-        aliases: ["rs"],
-        keywords: { $pattern: H.IDENT_RE + "!?", keyword: q, literal: "true false Some None Ok Err", built_in: $ },
-        illegal: "</",
+        name: "R",
+        illegal: /->/,
+        keywords: {
+          $pattern: _,
+          keyword: "function if in break next repeat else for while",
+          literal: "NULL NA TRUE FALSE Inf NaN NA_integer_|10 NA_real_|10 NA_character_|10 NA_complex_|10",
+          built_in:
+            "LETTERS letters month.abb month.name pi T F abs acos acosh all any anyNA Arg as.call as.character as.complex as.double as.environment as.integer as.logical as.null.default as.numeric as.raw asin asinh atan atanh attr attributes baseenv browser c call ceiling class Conj cos cosh cospi cummax cummin cumprod cumsum digamma dim dimnames emptyenv exp expression floor forceAndCall gamma gc.time globalenv Im interactive invisible is.array is.atomic is.call is.character is.complex is.double is.environment is.expression is.finite is.function is.infinite is.integer is.language is.list is.logical is.matrix is.na is.name is.nan is.null is.numeric is.object is.pairlist is.raw is.recursive is.single is.symbol lazyLoadDBfetch length lgamma list log max min missing Mod names nargs nzchar oldClass on.exit pos.to.env proc.time prod quote range Re rep retracemem return round seq_along seq_len seq.int sign signif sin sinh sinpi sqrt standardGeneric substitute sum switch tan tanh tanpi tracemem trigamma trunc unclass untracemem UseMethod xtfrm",
+        },
+        compilerExtensions: [
+          ($, K) => {
+            if (!$.beforeMatch) return;
+            if ($.starts) throw Error("beforeMatch cannot be used with starts");
+            let O = Object.assign({}, $);
+            Object.keys($).forEach((T) => {
+              delete $[T];
+            }),
+              ($.begin = wu6(O.beforeMatch, O81(O.begin))),
+              ($.starts = { relevance: 0, contains: [Object.assign(O, { endsParent: !0 })] }),
+              ($.relevance = 0),
+              delete O.beforeMatch;
+          },
+        ],
         contains: [
-          H.C_LINE_COMMENT_MODE,
-          H.COMMENT("/\\*", "\\*/", { contains: ["self"] }),
-          H.inherit(H.QUOTE_STRING_MODE, { begin: /b?"/, illegal: null }),
+          H.COMMENT(/#'/, /$/, {
+            contains: [
+              {
+                className: "doctag",
+                begin: "@examples",
+                starts: {
+                  contains: [
+                    { begin: /\n/ },
+                    { begin: /#'\s*(?=@[a-zA-Z]+)/, endsParent: !0 },
+                    { begin: /#'/, end: /$/, excludeBegin: !0 },
+                  ],
+                },
+              },
+              {
+                className: "doctag",
+                begin: "@param",
+                end: /$/,
+                contains: [
+                  { className: "variable", variants: [{ begin: _ }, { begin: /`(?:\\.|[^`\\])+`/ }], endsParent: !0 },
+                ],
+              },
+              { className: "doctag", begin: /@[a-zA-Z]+/ },
+              { className: "meta-keyword", begin: /\\[a-zA-Z]+/ },
+            ],
+          }),
+          H.HASH_COMMENT_MODE,
           {
             className: "string",
-            variants: [{ begin: /r(#*)"(.|\n)*?"\1(?!#)/ }, { begin: /b?'\\?(x\w{2}|u\w{4}|U\w{8}|.)'/ }],
+            contains: [H.BACKSLASH_ESCAPE],
+            variants: [
+              H.END_SAME_AS_BEGIN({ begin: /[rR]"(-*)\(/, end: /\)(-*)"/ }),
+              H.END_SAME_AS_BEGIN({ begin: /[rR]"(-*)\{/, end: /\}(-*)"/ }),
+              H.END_SAME_AS_BEGIN({ begin: /[rR]"(-*)\[/, end: /\](-*)"/ }),
+              H.END_SAME_AS_BEGIN({ begin: /[rR]'(-*)\(/, end: /\)(-*)'/ }),
+              H.END_SAME_AS_BEGIN({ begin: /[rR]'(-*)\{/, end: /\}(-*)'/ }),
+              H.END_SAME_AS_BEGIN({ begin: /[rR]'(-*)\[/, end: /\](-*)'/ }),
+              { begin: '"', end: '"', relevance: 0 },
+              { begin: "'", end: "'", relevance: 0 },
+            ],
           },
-          { className: "symbol", begin: /'[a-zA-Z_][a-zA-Z0-9_]*/ },
           {
             className: "number",
-            variants: [
-              { begin: "\\b0b([01_]+)([ui](8|16|32|64|128|size)|f(32|64))?" },
-              { begin: "\\b0o([0-7_]+)([ui](8|16|32|64|128|size)|f(32|64))?" },
-              { begin: "\\b0x([A-Fa-f0-9_]+)([ui](8|16|32|64|128|size)|f(32|64))?" },
-              { begin: "\\b(\\d[\\d_]*(\\.[0-9_]+)?([eE][+-]?[0-9_]+)?)([ui](8|16|32|64|128|size)|f(32|64))?" },
-            ],
             relevance: 0,
+            beforeMatch: /([^a-zA-Z0-9._])/,
+            variants: [
+              { match: /0[xX][0-9a-fA-F]+\.[0-9a-fA-F]*[pP][+-]?\d+i?/ },
+              { match: /0[xX][0-9a-fA-F]+([pP][+-]?\d+)?[Li]?/ },
+              { match: /(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?[Li]?/ },
+            ],
           },
-          {
-            className: "function",
-            beginKeywords: "fn",
-            end: "(\\(|<)",
-            excludeEnd: !0,
-            contains: [H.UNDERSCORE_TITLE_MODE],
-          },
-          {
-            className: "meta",
-            begin: "#!?\\[",
-            end: "\\]",
-            contains: [{ className: "meta-string", begin: /"/, end: /"/ }],
-          },
-          {
-            className: "class",
-            beginKeywords: "type",
-            end: ";",
-            contains: [H.inherit(H.UNDERSCORE_TITLE_MODE, { endsParent: !0 })],
-            illegal: "\\S",
-          },
-          {
-            className: "class",
-            beginKeywords: "trait enum struct union",
-            end: /\{/,
-            contains: [H.inherit(H.UNDERSCORE_TITLE_MODE, { endsParent: !0 })],
-            illegal: "[\\w\\d]",
-          },
-          { begin: H.IDENT_RE + "::", keywords: { built_in: $ } },
-          { begin: "->" },
+          { begin: "%", end: "%" },
+          { begin: wu6(q, "\\s+<-\\s+") },
+          { begin: "`", end: "`", contains: [{ begin: /\\./ }] },
         ],
       };
     }
-    RD7.exports = j81;
+    TD7.exports = T81;
   });

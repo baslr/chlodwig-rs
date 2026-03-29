@@ -1,47 +1,120 @@
-  var HA7 = d((w6O, ez7) => {
-    function TH1(H) {
-      let _ = {
-          $pattern: H.UNDERSCORE_IDENT_RE,
+  var hA7 = d((k6O, NA7) => {
+    function ZH1(H) {
+      let $ = {
+          $pattern: "[a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?",
           keyword:
-            "abstract alias align asm assert auto body break byte case cast catch class const continue debug default delete deprecated do else enum export extern final finally for foreach foreach_reverse|10 goto if immutable import in inout int interface invariant is lazy macro mixin module new nothrow out override package pragma private protected public pure ref return scope shared static struct super switch synchronized template this throw try typedef typeid typeof union unittest version void volatile while with __FILE__ __LINE__ __gshared|10 __thread __traits __DATE__ __EOF__ __TIME__ __TIMESTAMP__ __VENDOR__ __VERSION__",
-          built_in:
-            "bool cdouble cent cfloat char creal dchar delegate double dstring float function idouble ifloat ireal long real short string ubyte ucent uint ulong ushort wchar wstring",
-          literal: "false null true",
+            "and false then defined module in return redo retry end for true self when next until do begin unless nil break not case cond alias while ensure or include use alias fn quote require import with|0",
         },
-        q = "(0|[1-9][\\d_]*)",
-        $ = "(0|[1-9][\\d_]*|\\d[\\d_]*|[\\d_]+?\\d)",
-        K = "0[bB][01_]+",
-        O = "([\\da-fA-F][\\da-fA-F_]*|_[\\da-fA-F][\\da-fA-F_]*)",
-        T = "0[xX]([\\da-fA-F][\\da-fA-F_]*|_[\\da-fA-F][\\da-fA-F_]*)",
-        z = "([eE][+-]?(0|[1-9][\\d_]*|\\d[\\d_]*|[\\d_]+?\\d))",
-        A =
-          "((0|[1-9][\\d_]*|\\d[\\d_]*|[\\d_]+?\\d)(\\.\\d*|" +
-          z +
-          ")|\\d+\\.(0|[1-9][\\d_]*|\\d[\\d_]*|[\\d_]+?\\d)|\\.(0|[1-9][\\d_]*)" +
-          z +
-          "?)",
-        f =
-          "(0[xX](([\\da-fA-F][\\da-fA-F_]*|_[\\da-fA-F][\\da-fA-F_]*)\\.([\\da-fA-F][\\da-fA-F_]*|_[\\da-fA-F][\\da-fA-F_]*)|\\.?([\\da-fA-F][\\da-fA-F_]*|_[\\da-fA-F][\\da-fA-F_]*))[pP][+-]?(0|[1-9][\\d_]*|\\d[\\d_]*|[\\d_]+?\\d))",
-        w = "((0|[1-9][\\d_]*)|0[bB][01_]+|" + T + ")",
-        Y = "(" + f + "|" + A + ")",
-        D = `\\\\(['"\\?\\\\abfnrtv]|u[\\dA-Fa-f]{4}|[0-7]{1,3}|x[\\dA-Fa-f]{2}|U[\\dA-Fa-f]{8})|&[a-zA-Z\\d]{2,};`,
-        j = { className: "number", begin: "\\b" + w + "(L|u|U|Lu|LU|uL|UL)?", relevance: 0 },
-        M = { className: "number", begin: "\\b(" + Y + "([fF]|L|i|[fF]i|Li)?|" + w + "(i|[fF]i|Li))", relevance: 0 },
-        J = { className: "string", begin: "'(" + D + "|.)", end: "'", illegal: "." },
-        X = { className: "string", begin: '"', contains: [{ begin: D, relevance: 0 }], end: '"[cwd]?' },
-        R = { className: "string", begin: '[rq]"', end: '"[cwd]?', relevance: 5 },
-        W = { className: "string", begin: "`", end: "`[cwd]?" },
-        Z = { className: "string", begin: 'x"[\\da-fA-F\\s\\n\\r]*"[cwd]?', relevance: 10 },
-        k = { className: "string", begin: 'q"\\{', end: '\\}"' },
-        v = { className: "meta", begin: "^#!", end: "$", relevance: 5 },
-        y = { className: "meta", begin: "#(line)", end: "$", relevance: 5 },
-        E = { className: "keyword", begin: "@[a-zA-Z_][a-zA-Z_\\d]*" },
-        S = H.COMMENT("\\/\\+", "\\+\\/", { contains: ["self"], relevance: 10 });
-      return {
-        name: "D",
-        keywords: _,
-        contains: [H.C_LINE_COMMENT_MODE, H.C_BLOCK_COMMENT_MODE, S, Z, X, R, W, k, M, j, J, v, y, E],
-      };
+        K = { className: "subst", begin: /#\{/, end: /\}/, keywords: $ },
+        O = {
+          className: "number",
+          begin: "(\\b0o[0-7_]+)|(\\b0b[01_]+)|(\\b0x[0-9a-fA-F_]+)|(-?\\b[1-9][0-9_]*(\\.[0-9_]+([eE][-+]?[0-9]+)?)?)",
+          relevance: 0,
+        },
+        T = `[/|([{<"']`,
+        z = {
+          className: "string",
+          begin: `~[a-z](?=[/|([{<"'])`,
+          contains: [
+            {
+              endsParent: !0,
+              contains: [
+                {
+                  contains: [H.BACKSLASH_ESCAPE, K],
+                  variants: [
+                    { begin: /"/, end: /"/ },
+                    { begin: /'/, end: /'/ },
+                    { begin: /\//, end: /\// },
+                    { begin: /\|/, end: /\|/ },
+                    { begin: /\(/, end: /\)/ },
+                    { begin: /\[/, end: /\]/ },
+                    { begin: /\{/, end: /\}/ },
+                    { begin: /</, end: />/ },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+        A = {
+          className: "string",
+          begin: `~[A-Z](?=[/|([{<"'])`,
+          contains: [
+            { begin: /"/, end: /"/ },
+            { begin: /'/, end: /'/ },
+            { begin: /\//, end: /\// },
+            { begin: /\|/, end: /\|/ },
+            { begin: /\(/, end: /\)/ },
+            { begin: /\[/, end: /\]/ },
+            { begin: /\{/, end: /\}/ },
+            { begin: /</, end: />/ },
+          ],
+        },
+        f = {
+          className: "string",
+          contains: [H.BACKSLASH_ESCAPE, K],
+          variants: [
+            { begin: /"""/, end: /"""/ },
+            { begin: /'''/, end: /'''/ },
+            { begin: /~S"""/, end: /"""/, contains: [] },
+            { begin: /~S"/, end: /"/, contains: [] },
+            { begin: /~S'''/, end: /'''/, contains: [] },
+            { begin: /~S'/, end: /'/, contains: [] },
+            { begin: /'/, end: /'/ },
+            { begin: /"/, end: /"/ },
+          ],
+        },
+        w = {
+          className: "function",
+          beginKeywords: "def defp defmacro",
+          end: /\B\b/,
+          contains: [H.inherit(H.TITLE_MODE, { begin: "[a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?", endsParent: !0 })],
+        },
+        Y = H.inherit(w, {
+          className: "class",
+          beginKeywords: "defimpl defmodule defprotocol defrecord",
+          end: /\bdo\b|$|;/,
+        }),
+        D = [
+          f,
+          A,
+          z,
+          H.HASH_COMMENT_MODE,
+          Y,
+          w,
+          { begin: "::" },
+          {
+            className: "symbol",
+            begin: ":(?![\\s:])",
+            contains: [
+              f,
+              { begin: "[a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?" },
+            ],
+            relevance: 0,
+          },
+          { className: "symbol", begin: "[a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?:(?!:)", relevance: 0 },
+          O,
+          { className: "variable", begin: "(\\$\\W)|((\\$|@@?)(\\w+))" },
+          { begin: "->" },
+          {
+            begin: "(" + H.RE_STARTERS_RE + ")\\s*",
+            contains: [
+              H.HASH_COMMENT_MODE,
+              { begin: /\/: (?=\d+\s*[,\]])/, relevance: 0, contains: [O] },
+              {
+                className: "regexp",
+                illegal: "\\n",
+                contains: [H.BACKSLASH_ESCAPE, K],
+                variants: [
+                  { begin: "/", end: "/[a-z]*" },
+                  { begin: "%r\\[", end: "\\][a-z]*" },
+                ],
+              },
+            ],
+            relevance: 0,
+          },
+        ];
+      return (K.contains = D), { name: "Elixir", keywords: $, contains: D };
     }
-    ez7.exports = TH1;
+    NA7.exports = ZH1;
   });

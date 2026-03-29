@@ -1,0 +1,298 @@
+{
+  "generatedAt": "2026-03-29T21:14:02.874Z",
+  "totalNameMapEntries": 6527,
+  "totalCandidates": 3073,
+  "totalReplacements": 3073,
+  "duplicateNames": 225,
+  "splitSymbolsReplaced": 2691,
+  "sectionsProcessed": 473,
+  "sectionsWithReplacements": 230,
+  "skippedMetaLabels": 3289,
+  "skippedAmbiguous": 121,
+  "topReplacements": [
+    {
+      "hash": "_$_",
+      "name": "setEventLogger"
+    },
+    {
+      "hash": "_$q",
+      "name": "extendedEncodeURIComponent"
+    },
+    {
+      "hash": "_2K",
+      "name": "clearLogWritersForTesting"
+    },
+    {
+      "hash": "_3K",
+      "name": "EscToGoBackComponent"
+    },
+    {
+      "hash": "_48",
+      "name": "cacheSessionTitle"
+    },
+    {
+      "hash": "_5H",
+      "name": "instrumentBrokerParams"
+    },
+    {
+      "hash": "_66",
+      "name": "e164"
+    },
+    {
+      "hash": "_6K",
+      "name": "DoctorComponent"
+    },
+    {
+      "hash": "_76",
+      "name": "negative"
+    },
+    {
+      "hash": "_8K",
+      "name": "SelectAnIdeToOpenTheProjectDialog"
+    },
+    {
+      "hash": "_96",
+      "name": "ZodIssueCode"
+    },
+    {
+      "hash": "_A_",
+      "name": "CreateEvaluationJobCommand"
+    },
+    {
+      "hash": "_B_",
+      "name": "isModeSetRequest"
+    },
+    {
+      "hash": "_B1",
+      "name": "TeamMemCountParts"
+    },
+    {
+      "hash": "_bH",
+      "name": "getSessionCreatedTeams"
+    },
+    {
+      "hash": "_c$",
+      "name": "QueryTransformationType"
+    },
+    {
+      "hash": "_C9",
+      "name": "DiffPatchComponent"
+    },
+    {
+      "hash": "_d9",
+      "name": "HasShownLspRecommendationThisSessionWrapper"
+    },
+    {
+      "hash": "_dH",
+      "name": "ClientSecretCredential"
+    },
+    {
+      "hash": "_E6",
+      "name": "strFromU8"
+    },
+    {
+      "hash": "_E7",
+      "name": "FileNotFoundDisplay"
+    },
+    {
+      "hash": "_g_",
+      "name": "UserRejectedClaudesPlanComponent"
+    },
+    {
+      "hash": "_gH",
+      "name": "addInstanceAware"
+    },
+    {
+      "hash": "_H4",
+      "name": "CLIENT_INFO"
+    },
+    {
+      "hash": "_HK",
+      "name": "isCcrMirrorEnabled"
+    },
+    {
+      "hash": "_i$",
+      "name": "ToolUseType"
+    },
+    {
+      "hash": "_iH",
+      "name": "formatDeferredToolLine"
+    },
+    {
+      "hash": "_K_",
+      "name": "cidrv4"
+    },
+    {
+      "hash": "_kK",
+      "name": "VoiceKeybindingHandler"
+    },
+    {
+      "hash": "_m4",
+      "name": "decompressSync"
+    },
+    {
+      "hash": "_M6",
+      "name": "OBO_ASSERTION"
+    },
+    {
+      "hash": "_n9",
+      "name": "canBatchWith"
+    },
+    {
+      "hash": "_N9",
+      "name": "startRecording"
+    },
+    {
+      "hash": "_o_",
+      "name": "SharingTranscriptComponent"
+    },
+    {
+      "hash": "_O$",
+      "name": "browserEmail"
+    },
+    {
+      "hash": "_o6",
+      "name": "markInProcessFallback"
+    },
+    {
+      "hash": "_p8",
+      "name": "throwDefaultError"
+    },
+    {
+      "hash": "_P8",
+      "name": "ZodCustomStringFormat"
+    },
+    {
+      "hash": "_t_",
+      "name": "getApiKeyFromFd"
+    },
+    {
+      "hash": "_T$",
+      "name": "transform"
+    },
+    {
+      "hash": "_tH",
+      "name": "OTLPTraceExporter"
+    },
+    {
+      "hash": "_uH",
+      "name": "normalize"
+    },
+    {
+      "hash": "_vK",
+      "name": "ClaudeInChromeOnboarding"
+    },
+    {
+      "hash": "_W_",
+      "name": "BridgeClient"
+    },
+    {
+      "hash": "_WH",
+      "name": "saveOAuthTokensIfNeeded"
+    },
+    {
+      "hash": "_XH",
+      "name": "ClientConfigurationErrorCodes"
+    },
+    {
+      "hash": "_Y_",
+      "name": "GetFederationTokenCommand"
+    },
+    {
+      "hash": "_yK",
+      "name": "pluginEnableHandler"
+    },
+    {
+      "hash": "_z$",
+      "name": "nativeEnum"
+    },
+    {
+      "hash": "$$_",
+      "name": "setTracerProvider"
+    }
+  ],
+  "sampleBefore": [
+    {
+      "line": 1724,
+      "content": "setEventLogger: () => _$_,"
+    },
+    {
+      "line": 41146,
+      "content": "var _$q;"
+    },
+    {
+      "line": 267503,
+      "content": "_clearLogWritersForTesting: () => _2K,"
+    },
+    {
+      "line": 243105,
+      "content": "(J = aW.createElement(E6, { title: A, subtitle: O.description, onCancel: z, inputGuide: _3K }, M)),"
+    },
+    {
+      "line": 257406,
+      "content": "cacheSessionTitle: () => _48,"
+    },
+    {
+      "line": 51059,
+      "content": "instrumentBrokerParams: () => _5H,"
+    },
+    {
+      "line": 11418,
+      "content": "e164: () => _66,"
+    },
+    {
+      "line": 213975,
+      "content": "function _6K(H) {"
+    },
+    {
+      "line": 16302,
+      "content": "function _76(H) {"
+    },
+    {
+      "line": 215991,
+      "content": "function _8K(H) {"
+    }
+  ],
+  "sampleAfter": [
+    {
+      "line": 1724,
+      "content": "setEventLogger: () => setEventLogger,"
+    },
+    {
+      "line": 41146,
+      "content": "var extendedEncodeURIComponent;"
+    },
+    {
+      "line": 267503,
+      "content": "_clearLogWritersForTesting: () => clearLogWritersForTesting,"
+    },
+    {
+      "line": 243105,
+      "content": "(J = aW.createElement(PressDialog, { title: A, subtitle: O.description, onCancel: z, inputGuide: EscToGoBackComponent }, M)),"
+    },
+    {
+      "line": 257406,
+      "content": "cacheSessionTitle: () => cacheSessionTitle,"
+    },
+    {
+      "line": 51059,
+      "content": "instrumentBrokerParams: () => instrumentBrokerParams,"
+    },
+    {
+      "line": 11418,
+      "content": "e164: () => e164,"
+    },
+    {
+      "line": 213975,
+      "content": "function DoctorComponent(H) {"
+    },
+    {
+      "line": 16302,
+      "content": "function negative(H) {"
+    },
+    {
+      "line": 215991,
+      "content": "function SelectAnIdeToOpenTheProjectDialog(H) {"
+    }
+  ]
+}
