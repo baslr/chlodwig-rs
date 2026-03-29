@@ -1,154 +1,211 @@
 #!/usr/bin/env bun
 /**
- * Split cli_patched.js by extracting large d() modules into separate files.
- * Uses charCode-based bracket matching for performance on 12MB source.
+ * Split cli_formatted.js by extracting large d() modules.
+ *
+ * Uses line-based detection on formatted source:
+ *  - Module start: line matching /^\s*var\s+(\w+)\s*=\s*d\(/
+ *  - Module end:   line matching /^\s*\}\);$/ at same indent level
+ *
+ * Each extracted file contains the full `var XXX = d(...)` statement.
+ * The split bundle evals the file to re-create the var in scope.
  */
 
 const fs = require("fs");
 const path = require("path");
 
 const ROOT = path.join(__dirname, "..");
-const PATCHED = path.join(ROOT, "src", "cli_patched.js");
+const FORMATTED = path.join(ROOT, "src", "cli_formatted.js");
 const OUT = path.join(ROOT, "src", "cli_split.js");
-const VENDOR_DIR = path.join(ROOT, "src", "vendor");
-const CHUNKS_DIR = path.join(ROOT, "src", "chunks");
 
-const THRESHOLD = 100 * 1024; // 100 KB
+const THRESHOLD = 50 * 1024; // 50 KB
 
-const content = fs.readFileSync(PATCHED, "utf8");
-console.log(`Read source: ${(content.length / 1e6).toFixed(1)} MB\n`);
+const content = fs.readFileSync(FORMATTED, "utf8");
+const lines = content.split("\n");
+console.log(`Read: ${(content.length / 1e6).toFixed(1)} MB, ${lines.length} lines\n`);
 
-// --- Fast bracket matcher ---
-function matchParen(src, openPos) {
-  let depth = 0, i = openPos;
-  while (i < src.length) {
-    const c = src.charCodeAt(i);
-    if (c === 40) depth++;       // (
-    else if (c === 41) { depth--; if (depth === 0) return i; }  // )
-    else if (c === 34 || c === 39) {  // " or '
-      const q = c;
-      i++;
-      while (i < src.length && src.charCodeAt(i) !== q) {
-        if (src.charCodeAt(i) === 92) i++;  // backslash escape
-        i++;
-      }
+// --- Find d() modules by line scanning ---
+const startRe = /^(\s*)var\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*d\(/;
+const modules = [];
+
+for (let i = 0; i < lines.length; i++) {
+  const m = lines[i].match(startRe);
+  if (!m) continue;
+
+  const indent = m[1];
+  const name = m[2];
+  const startLine = i;
+
+  // Find closing `});` at same indent level
+  const closePattern = `${indent}});`;
+  let endLine = -1;
+
+  for (let j = i + 1; j < lines.length; j++) {
+    // Exact match: the line is exactly "  });" (same indent + "});")
+    if (lines[j] === closePattern || lines[j] === closePattern + "\n") {
+      endLine = j;
+      break;
     }
-    else if (c === 96) {  // ` template literal
-      i++;
-      let td = 0;
-      while (i < src.length) {
-        const cc = src.charCodeAt(i);
-        if (cc === 92) { i += 2; continue; }
-        if (cc === 96 && td === 0) break;
-        if (cc === 36 && src.charCodeAt(i + 1) === 123) { td++; i += 2; continue; }
-        if (cc === 125 && td > 0) { td--; }
-        i++;
-      }
-    }
-    i++;
   }
-  return -1;
+
+  if (endLine === -1) continue;
+
+  // Calculate size (chars, including newlines)
+  let size = 0;
+  for (let j = startLine; j <= endLine; j++) {
+    size += lines[j].length + 1; // +1 for newline
+  }
+
+  const lineCount = endLine - startLine + 1;
+  modules.push({ name, startLine, endLine, size, lineCount, indent });
+
+  // Skip past this module
+  i = endLine;
 }
 
-// --- Find d() modules ---
-console.log("Finding d() modules...");
-const re = /var\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*d\(/g;
-const allModules = [];
-let match;
+console.log(`Found ${modules.length} d() modules\n`);
 
-while ((match = re.exec(content)) !== null) {
-  const name = match[1];
-  const varStart = match.index;
-  const dParenPos = content.indexOf("d(", varStart + 4 + name.length);
-
-  const closePos = matchParen(content, dParenPos);
-  if (closePos === -1) continue;
-
-  let stmtEnd = closePos + 1;
-  if (content.charCodeAt(stmtEnd) === 59) stmtEnd++; // skip ;
-
-  allModules.push({ name, start: varStart, end: stmtEnd, size: stmtEnd - varStart });
-}
-
-console.log(`Found ${allModules.length} d() modules\n`);
-
-// Filter by size
-const bigModules = allModules.filter(m => m.size >= THRESHOLD);
-bigModules.sort((a, b) => b.size - a.size);
-console.log(`Modules > ${THRESHOLD / 1024} KB: ${bigModules.length}\n`);
+// --- Filter big ones ---
+const big = modules.filter(m => m.size >= THRESHOLD);
+big.sort((a, b) => b.size - a.size);
 
 // --- Categorize ---
 function categorize(mod) {
-  const s = content.slice(mod.start, Math.min(mod.start + 500, mod.end));
+  // Sample broader: first 80 lines for better heuristics
+  const sample = lines.slice(mod.startLine, Math.min(mod.startLine + 80, mod.endLine)).join("\n");
+  // Also check whole module content for definitive keywords
+  const full = lines.slice(mod.startLine, mod.endLine + 1).join("\n");
 
-  // hljs language defs have characteristic patterns
-  if ((s.includes("$pattern") || s.includes("className") || s.includes("COMMENT(")) &&
-      (s.includes(".exports=") || s.includes("keywords")))
-    return "vendor/hljs";
-  if (s.includes("highlightElement")) return "vendor/hljs";
+  // highlight.js language definitions (keywords, $pattern, etc.)
+  if (sample.includes("$pattern") || sample.includes("COMMENT(") || (sample.includes("className") && sample.includes("begin")))
+    if (sample.includes(".exports") || sample.includes("keywords") || sample.includes("variants"))
+      return "vendor/hljs";
+  if (sample.includes("highlightElement") || sample.includes("registerLanguage")) return "vendor/hljs";
+  // hljs language data: long keyword lists with Cyrillic (1C), Mathematica builtins, ISBL constants
+  if (full.includes("DECISION_BLOCK_") || full.includes("MONITOR_BLOCK_") || full.includes("NOTICE_BLOCK_")) return "vendor/hljs";
+  if (full.includes("AbsoluteCorrelation") || full.includes("AccuracyGoal")) return "vendor/hljs";
+  if (full.includes("\u0432\u0435\u0431\u043A\u043B\u0438\u0435\u043D\u0442") || full.includes("\u043D\u0430\u043A\u043B\u0438\u0435\u043D\u0442\u0435")) return "vendor/hljs";
+  if (sample.includes("\u0410-\u042F") || sample.includes("\u0434\u0430\u043B\u0435\u0435")) return "vendor/hljs";
+  if (full.includes("$pattern") && full.includes("keywords")) return "vendor/hljs";
 
-  // AWS
-  if (s.includes("CredentialsProvider") || s.includes("@aws-sdk") || s.includes("a.co/"))
-    return "vendor/aws";
-  // Zod
-  if (s.includes("_zod") || s.includes("ZodError")) return "vendor/zod";
+  // AWS SDK
+  if (sample.includes("CredentialsProvider") || sample.includes("@aws-sdk") || sample.includes("Bedrock")) return "vendor/aws";
+  if (sample.includes("NodeDeprecationWarning") && sample.includes("AWS SDK")) return "vendor/aws";
+
   // gRPC
-  if (s.includes("LogVerbosity") || s.includes("ChannelCredentials")) return "vendor/grpc";
+  if (sample.includes("LogVerbosity") || sample.includes("ChannelCredentials") || sample.includes("grpc")) return "vendor/grpc";
+
   // Protobuf
-  if (s.includes("Reader") && s.includes("Writer") && (s.includes("varint") || s.includes("proto")))
-    return "vendor/proto";
+  if (sample.includes("protobuf") || sample.includes("FieldDescriptorProto")) return "vendor/proto";
+  if (sample.includes("H.proto") && sample.includes("AnyValue")) return "vendor/proto";
+
+  // Zod
+  if (sample.includes("_zod") || sample.includes("ZodError")) return "vendor/zod";
+
+  // Crypto / PKI / TLS (node-forge)
+  if (sample.includes("ssh-") || sample.includes("cipher") || sample.includes("ECDH")) return "vendor/crypto";
+  if (sample.includes("f$.pki") || sample.includes("f$.asn1") || sample.includes("forge")) return "vendor/crypto";
+  if (sample.includes("hmac") && sample.includes("createBuffer")) return "vendor/crypto";
+
+  // AJV
+  if (sample.includes("ajv") || (sample.includes("$ref") && sample.includes("schema"))) return "vendor/ajv";
+
+  // React / React DOM (Ink uses React)
+  if (sample.includes("Minified React error") || sample.includes("react.element")) return "vendor/react";
+
+  // HTML parser (parse5)
+  if (sample.includes("TAG_NAMES") || sample.includes("NAMESPACES") || sample.includes("IN_BODY_MODE")) return "vendor/parse5";
+  if (sample.includes("DTD") && sample.includes("HTML")) return "vendor/parse5";
+
+  // HTML entities
+  if (full.includes("Acirc") && full.includes("acirc")) return "vendor/entities";
+  if (full.includes("CirclePlus") || (full.includes("59, 1,") && full.length > 40000)) return "vendor/entities";
+  if (sample.match(/^\s+\d+:\s+\d+,$/m)) return "vendor/entities";
+
+  // XML parser (fast-xml-parser)
+  if (sample.includes("XMLBuilder") || sample.includes("XMLParser") || sample.includes("XMLValidator")) return "vendor/xml";
 
   return "chunks";
 }
 
-// Clean
-fs.rmSync(VENDOR_DIR, { recursive: true, force: true });
-fs.rmSync(CHUNKS_DIR, { recursive: true, force: true });
+// --- Clean dirs ---
+for (const d of ["vendor/hljs", "vendor/aws", "vendor/grpc", "vendor/proto", "vendor/zod", "vendor/crypto", "vendor/ajv", "vendor/react", "vendor/parse5", "vendor/entities", "vendor/xml", "vendor", "chunks"]) {
+  fs.rmSync(path.join(ROOT, "src", d), { recursive: true, force: true });
+}
 
+// --- Extract ---
 const extractions = [];
-let totalExtracted = 0;
+const cats = {};
 
-// Stats by category
-const stats = {};
-
-for (const mod of bigModules) {
-  const dir = categorize(mod);
-  const outDir = path.join(ROOT, "src", dir);
+for (const mod of big) {
+  const cat = categorize(mod);
+  const outDir = path.join(ROOT, "src", cat);
   fs.mkdirSync(outDir, { recursive: true });
 
-  const moduleCode = content.slice(mod.start, mod.end);
-  fs.writeFileSync(path.join(outDir, `${mod.name}.js`), moduleCode + "\n");
+  const code = lines.slice(mod.startLine, mod.endLine + 1).join("\n");
+  fs.writeFileSync(path.join(outDir, `${mod.name}.js`), code + "\n");
 
-  extractions.push({ ...mod, dir });
-  totalExtracted += mod.size;
-
-  const cat = dir.split("/").pop();
-  stats[cat] = (stats[cat] || { count: 0, size: 0 });
-  stats[cat].count++;
-  stats[cat].size += mod.size;
+  extractions.push({ ...mod, cat });
+  if (!cats[cat]) cats[cat] = { count: 0, size: 0 };
+  cats[cat].count++;
+  cats[cat].size += mod.size;
 }
 
-// Print summary by category
-console.log("Extracted by category:");
-for (const [cat, s] of Object.entries(stats).sort((a, b) => b[1].size - a[1].size)) {
-  console.log(`  ${cat.padEnd(12)} ${String(s.count).padStart(4)} modules  ${(s.size / 1024).toFixed(0).padStart(7)} KB`);
+// --- Summary ---
+let totalSize = 0;
+console.log(`Extracted ${extractions.length} modules > ${THRESHOLD / 1024} KB:\n`);
+for (const [cat, info] of Object.entries(cats).sort((a, b) => b[1].size - a[1].size)) {
+  console.log(`  ${cat.padEnd(18)} ${String(info.count).padStart(3)} modules  ${(info.size / 1024).toFixed(0).padStart(7)} KB`);
+  totalSize += info.size;
 }
-console.log(`  ${"TOTAL".padEnd(12)} ${String(extractions.length).padStart(4)} modules  ${(totalExtracted / 1024).toFixed(0).padStart(7)} KB (${(totalExtracted / content.length * 100).toFixed(0)}%)\n`);
+console.log(`  ${"TOTAL".padEnd(18)} ${String(extractions.length).padStart(3)} modules  ${(totalSize / 1024).toFixed(0).padStart(7)} KB  (${(totalSize / content.length * 100).toFixed(0)}% of source)\n`);
 
 // --- Build cli_split.js ---
-extractions.sort((a, b) => a.start - b.start);
+// Sort by line number
+extractions.sort((a, b) => a.startLine - b.startLine);
 
-const parts = [];
-let cursor = 0;
-
-for (const ext of extractions) {
-  parts.push(content.slice(cursor, ext.start));
-  parts.push(`eval(require("fs").readFileSync(require("path").resolve(__dirname,"${ext.dir}/${ext.name}.js"),"utf8"))`);
-  cursor = ext.end;
+// Check no overlaps
+for (let i = 1; i < extractions.length; i++) {
+  if (extractions[i].startLine <= extractions[i - 1].endLine) {
+    console.error(`OVERLAP: ${extractions[i - 1].name}(L${extractions[i-1].startLine}-${extractions[i-1].endLine}) and ${extractions[i].name}(L${extractions[i].startLine}-${extractions[i].endLine})`);
+    process.exit(1);
+  }
 }
-parts.push(content.slice(cursor));
 
-const result = parts.join("");
+const newLines = [];
+let skip = -1;
+
+for (let i = 0; i < lines.length; i++) {
+  if (i <= skip) continue;
+
+  const ext = extractions.find(e => e.startLine === i);
+  if (ext) {
+    newLines.push(`${ext.indent}/* [${ext.cat}/${ext.name}] */ eval(require("fs").readFileSync(require("path").resolve(__dirname, "${ext.cat}/${ext.name}.js"), "utf8"));`);
+    skip = ext.endLine;
+  } else {
+    newLines.push(lines[i]);
+  }
+}
+
+const result = newLines.join("\n");
 fs.writeFileSync(OUT, result);
 
-console.log(`Wrote src/cli_split.js: ${(result.length / 1e6).toFixed(1)} MB (was ${(content.length / 1e6).toFixed(1)} MB, saved ${((content.length - result.length) / 1e6).toFixed(1)} MB)`);
+console.log(`Wrote src/cli_split.js:`);
+console.log(`  Size:  ${(result.length / 1e6).toFixed(1)} MB (was ${(content.length / 1e6).toFixed(1)} MB, -${((content.length - result.length) / 1e6).toFixed(1)} MB)`);
+console.log(`  Lines: ${newLines.length.toLocaleString()} (was ${lines.length.toLocaleString()}, -${(lines.length - newLines.length).toLocaleString()})`);
+
+// --- List extracted files ---
+console.log(`\nFiles created:`);
+const walk = (dir) => {
+  for (const f of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (f.isDirectory()) walk(path.join(dir, f.name));
+    else {
+      const rel = path.relative(ROOT, path.join(dir, f.name));
+      const sz = fs.statSync(path.join(dir, f.name)).size;
+      console.log(`  ${rel.padEnd(45)} ${(sz / 1024).toFixed(0).padStart(6)} KB`);
+    }
+  }
+};
+for (const d of ["src/vendor", "src/chunks"]) {
+  const p = path.join(ROOT, d);
+  if (fs.existsSync(p)) walk(p);
+}
