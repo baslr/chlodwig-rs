@@ -27,7 +27,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 step=0
-total=12
+total=13
 
 run_step() {
   step=$((step + 1))
@@ -114,7 +114,12 @@ run_step "Viz: Dependency-Graph HTML generieren"
 bun scripts/gen-dep-viz.js 2>&1 | tail -2
 echo -e "  ${GREEN}✓ dep-graph.html${NC}"
 
-# --- Schritt 11: Verify ---
+# --- Schritt 11: Call-Graph ---
+run_step "Call-Graph: Funktions-Level Abhängigkeiten analysieren"
+bun scripts/call-graph.js 2>&1 | grep -E 'Found|function nodes|hot paths|dead|cycles|Call-Graph|Functions:|Call edges:|Output:'
+echo -e "  ${GREEN}✓ call-graph.json${NC}"
+
+# --- Schritt 12: Verify ---
 run_step "Verify: Runtime + Tests"
 
 version=$(bun src/run_split.js --version 2>&1)
@@ -167,6 +172,8 @@ nm_entries=$(node -e "console.log(Object.keys(JSON.parse(require('fs').readFileS
 dg_nodes=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/dep-graph.json','utf8')).totalNodes)")
 dg_edges=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/dep-graph.json','utf8')).totalEdges)")
 rc_total=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/react-components.json','utf8')).totalComponents)")
+cg_funcs=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/call-graph.json','utf8')).totalFunctions)")
+cg_edges=$(node -e "console.log(JSON.parse(require('fs').readFileSync('src/call-graph.json','utf8')).totalCallEdges)")
 
 echo "  Artefakte:"
 echo "  ─────────────────────────────────────────────"
@@ -174,6 +181,7 @@ echo "  cli_split.js          ${split_lines} Zeilen / ${split_mb} MB"
 echo "  Extrahierte Dateien   ${total_files} (${sections} sections, ${vendor} vendor, ${chunks} chunks, ${core} core)"
 echo "  name-map.json         ${nm_entries} Einträge"
 echo "  dep-graph.json        ${dg_nodes} Knoten / ${dg_edges} Kanten"
+echo "  call-graph.json       ${cg_funcs} Funktionen / ${cg_edges} Call-Edges"
 echo "  react-components.json ${rc_total} Komponenten"
 echo "  zone-map.json         8 Zonen"
 echo ""
