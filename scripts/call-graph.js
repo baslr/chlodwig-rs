@@ -43,6 +43,7 @@ console.log("Phase 1: Parsing function definitions...");
 const funcStartRe = /^(\s*)(?:async\s+)?function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*\(/;
 const assignFuncRe = /^\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:async\s+)?function\s*\(/;
 const arrowRe = /^\s*(?:var|let|const)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*(?:async\s+)?\(?[^)]*\)?\s*=>/;
+const gBlockRe = /^\s*(?:var\s+)?([a-zA-Z_$][a-zA-Z0-9_$]*)\s*=\s*G\(\s*\(\)\s*=>\s*\{/;
 
 const functions = new Map(); // name → { startLine, endLine, zone, source, body }
 
@@ -56,6 +57,13 @@ function parseFunctions(sourceLines, source, lineOffset) {
     if (!funcName) {
       const am = sourceLines[i].match(assignFuncRe);
       if (am) funcName = am[1];
+    }
+
+    // G()-block initializers: var NAME = G(() => { ... })
+    // These are the lazy module init closures — important for tracing imports
+    if (!funcName) {
+      const gm = sourceLines[i].match(gBlockRe);
+      if (gm) funcName = gm[1];
     }
 
     // Skip arrows for now — too many false positives and tiny one-liners
@@ -177,6 +185,27 @@ function extractCalls(body) {
     keybindings.push(m[1]);
   }
 
+  // Lazy-accessor imports: (init(), Rq(module)) or .then(() => (init(), module))
+  // These are the cross-module import pattern in the bundled code.
+  // We add the init function as a call edge — it triggers the G()-block init.
+  const lazyRe = /\(([a-zA-Z_$][a-zA-Z0-9_$]*)\(\),\s*(?:Rq\()?([a-zA-Z_$][a-zA-Z0-9_$]*)\)?\)/g;
+  while ((m = lazyRe.exec(body)) !== null) {
+    const initFn = m[1];
+    if (!SKIP_CALLS.has(initFn)) calls.add(initFn);
+  }
+
+  // Destructured lazy imports: let { exportName: localVar } = await ...then(() => (init(), module))
+  // The localVar is later called as localVar() — already caught by direct call regex.
+  // But we also want to trace the destructured property to its source module.
+  // Pattern: { name: local } = await Promise.resolve().then(() => (init(), module))
+  const destructRe = /\{\s*([a-zA-Z_$][a-zA-Z0-9_$]*)(?::\s*[a-zA-Z_$][a-zA-Z0-9_$]*)?\s*\}\s*=\s*await\s+Promise\.resolve\(\)\.then\(\(\)\s*=>\s*\(([a-zA-Z_$][a-zA-Z0-9_$]*)\(\),\s*([a-zA-Z_$][a-zA-Z0-9_$]*)\)\)/g;
+  while ((m = destructRe.exec(body)) !== null) {
+    const exportedName = m[1];
+    const initFn = m[2];
+    if (!SKIP_CALLS.has(exportedName)) calls.add(exportedName);
+    if (!SKIP_CALLS.has(initFn)) calls.add(initFn);
+  }
+
   return { calls: [...calls], telemetry, keybindings };
 }
 
@@ -233,7 +262,27 @@ console.log(`  ${funcNodes.size} function nodes, ${totalEdges} call edges\n`);
 // =====================================================================
 console.log("Phase 3: Discovering hot paths...");
 
-const ENTRY_POINTS = ["REPL", "main", "authLogin", "DoctorComponent", "scanForSecrets"];
+const ENTRY_POINTS = ["dyK", "REPL", "main", "authLogin", "DoctorComponent", "scanForSecrets", "setup"];
+
+// Build reverse name map: readable name → hash (for entry point lookup)
+const readableToHash = new Map();
+for (const [hash, node] of funcNodes) {
+  if (node.name && node.name !== hash) {
+    // If multiple hashes map to same readable name, prefer the one with more calls
+    const existing = readableToHash.get(node.name);
+    if (!existing || node.callCount > (funcNodes.get(existing)?.callCount || 0)) {
+      readableToHash.set(node.name, hash);
+    }
+  }
+}
+
+// Resolve entry points to their hash names
+function resolveEntryPoint(name) {
+  if (funcNodes.has(name)) return name;
+  const hash = readableToHash.get(name);
+  if (hash && funcNodes.has(hash)) return hash;
+  return null;
+}
 
 function bfsHotPaths(startName, maxDepth = 8) {
   const paths = [];
@@ -279,9 +328,13 @@ function bfsHotPaths(startName, maxDepth = 8) {
 
 const hotPaths = {};
 for (const entry of ENTRY_POINTS) {
-  if (funcNodes.has(entry)) {
-    hotPaths[entry] = bfsHotPaths(entry);
-    console.log(`  ${entry}: ${hotPaths[entry].length} paths (max depth ${hotPaths[entry][0]?.depth || 0})`);
+  const resolved = resolveEntryPoint(entry);
+  if (resolved) {
+    const label = entry; // Use readable name as key
+    hotPaths[label] = bfsHotPaths(resolved);
+    console.log(`  ${label}: ${hotPaths[label].length} paths (max depth ${hotPaths[label][0]?.depth || 0})`);
+  } else {
+    console.log(`  ${entry}: not found`);
   }
 }
 
@@ -293,10 +346,10 @@ console.log("\nPhase 4: Detecting dead functions...");
 // Entry points: functions with 0 callers that are NOT G()-block inits, React components,
 // or exported functions
 const deadFunctions = [];
-const entryPointNames = new Set(ENTRY_POINTS);
+const entryPointHashes = new Set(ENTRY_POINTS.map(e => resolveEntryPoint(e)).filter(Boolean));
 
 for (const [name, node] of funcNodes) {
-  if (node.callerCount === 0 && !entryPointNames.has(name)) {
+  if (node.callerCount === 0 && !entryPointHashes.has(name)) {
     // Check if it's an exported function (referenced in J_() blocks)
     // or a React component (has createElement calls)
     const isComponent = node.calls.some(c => c === "createElement") ||
