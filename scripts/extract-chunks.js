@@ -17,7 +17,7 @@ const ROOT = path.join(__dirname, "..");
 const FORMATTED = path.join(ROOT, "src", "cli_formatted.js");
 const OUT = path.join(ROOT, "src", "cli_split.js");
 
-const THRESHOLD = 10 * 1024; // 10 KB
+const THRESHOLD = 3 * 1024; // 3 KB
 
 const content = fs.readFileSync(FORMATTED, "utf8");
 const lines = content.split("\n");
