@@ -27,7 +27,7 @@ BOLD='\033[1m'
 NC='\033[0m'
 
 step=0
-total=13
+total=14
 
 run_step() {
   step=$((step + 1))
@@ -119,7 +119,12 @@ run_step "Call-Graph: Funktions-Level Abhängigkeiten analysieren"
 bun scripts/call-graph.js 2>&1 | grep -E 'Found|function nodes|hot paths|dead|cycles|Call-Graph|Functions:|Call edges:|Output:'
 echo -e "  ${GREEN}✓ call-graph.json${NC}"
 
-# --- Schritt 12: Verify ---
+# --- Schritt 13: Call-Graph Visualisierung ---
+run_step "Call-Graph Viz: Interaktive HTML generieren"
+bun scripts/gen-call-viz.js 2>&1 | tail -2
+echo -e "  ${GREEN}✓ call-graph.html${NC}"
+
+# --- Schritt 14: Verify ---
 run_step "Verify: Runtime + Tests"
 
 version=$(bun src/run_split.js --version 2>&1)
