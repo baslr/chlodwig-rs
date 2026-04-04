@@ -353,6 +353,7 @@ extern "C" fn sigint_handler(_sig: libc::c_int) {
 fn trigger_session_save(
     state: &std::sync::Arc<tokio::sync::Mutex<ConversationState>>,
     model: &str,
+    constants: chlodwig_core::ConstantsSnapshot,
 ) {
     let state_clone = state.clone();
     let model = model.to_string();
@@ -363,6 +364,7 @@ fn trigger_session_save(
             model,
             messages: guard.messages.clone(),
             system_prompt: guard.system_prompt.clone(),
+            constants: Some(constants),
         };
         drop(guard); // release lock before blocking I/O
 
@@ -377,17 +379,33 @@ fn trigger_session_save(
     });
 }
 
+/// Trigger an asynchronous save of the standalone constants file.
+///
+/// Called when the user edits a constant value or resets to defaults.
+/// Writes to `~/.chlodwig-rs/constants.json` (atomic rename).
+fn trigger_constants_save(constants: chlodwig_core::ConstantsSnapshot) {
+    tokio::spawn(async move {
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = chlodwig_core::save_constants(&constants) {
+                tracing::warn!("Failed to save constants: {e}");
+            }
+        })
+        .await;
+    });
+}
+
 pub async fn run_tui(
     initial_state: ConversationState,
     api_client: Arc<dyn ApiClient>,
 ) -> anyhow::Result<()> {
-    run_tui_with_permissions(initial_state, api_client, false).await
+    run_tui_with_permissions(initial_state, api_client, false, None).await
 }
 
 pub async fn run_tui_with_permissions(
     initial_state: ConversationState,
     api_client: Arc<dyn ApiClient>,
     bypass_permissions: bool,
+    initial_constants: Option<chlodwig_core::ConstantsSnapshot>,
 ) -> anyhow::Result<()> {
     // Install panic hook before entering raw mode — ensures terminal is
     // restored and crash report is written on any panic.
@@ -443,6 +461,15 @@ pub async fn run_tui_with_permissions(
         app.mark_dirty();
     }
 
+    // Restore constants from snapshot if provided (e.g. from --resume).
+    // Otherwise, try loading from the standalone constants.json file.
+    if let Some(ref constants_snap) = initial_constants {
+        app.constants.from_snapshot(constants_snap);
+    } else if let Ok(Some(constants_snap)) = chlodwig_core::load_constants() {
+        app.constants.from_snapshot(&constants_snap);
+        tracing::info!("Loaded constants from constants.json");
+    }
+
     // Channels
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ConversationEvent>();
     let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermissionRequest>();
@@ -484,6 +511,10 @@ pub async fn run_tui_with_permissions(
             if app.requests_dirty && app.active_tab == 2 {
                 app.rebuild_requests_lines();
             }
+            // Rebuild constants lines when the tab is visible.
+            if app.active_tab == 3 {
+                app.rebuild_constants_lines();
+            }
             // Update crash state snapshot (for panic hook)
             if let Ok(mut guard) = crash_state().lock() {
                 *guard = app.crash_dump();
@@ -513,7 +544,9 @@ pub async fn run_tui_with_permissions(
         }
 
         // Poll terminal events — block up to 100ms (idle-friendly)
+        tracing::trace!("loop: poll start");
         let poll_result = event::poll(Duration::from_millis(100));
+        tracing::trace!(?poll_result, "loop: poll returned");
         match poll_result {
             Err(e) => {
                 tracing::error!("event::poll() failed: {e}");
@@ -529,6 +562,7 @@ pub async fn run_tui_with_permissions(
             // mouse move/drag events from causing a busy-loop.
             // Trackpad gestures can queue hundreds of events.
             loop {
+                tracing::trace!("loop: read start");
                 let ev = match event::read() {
                     Ok(ev) => ev,
                     Err(e) => {
@@ -540,6 +574,7 @@ pub async fn run_tui_with_permissions(
                         return Err(e.into());
                     }
                 };
+                tracing::trace!("loop: read returned");
                 match ev {
                 Event::Mouse(mouse) => {
                     match mouse.kind {
@@ -607,6 +642,13 @@ pub async fn run_tui_with_permissions(
                                     // Restore display blocks so the user can scroll back
                                     app.clear_conversation();
                                     app.restore_messages_to_display(&snapshot.messages);
+                                    // Restore constants if present in the snapshot
+                                    if let Some(ref constants_snap) = snapshot.constants {
+                                        app.constants.from_snapshot(constants_snap);
+                                    } else if let Ok(Some(constants_snap)) = chlodwig_core::load_constants() {
+                                        // Fallback: old session without constants → load from constants.json
+                                        app.constants.from_snapshot(&constants_snap);
+                                    }
                                     app.display_blocks.push(DisplayBlock::SystemMessage(
                                         format!(
                                             "✓ Resumed session ({msg_count} messages, saved at {})",
@@ -638,7 +680,7 @@ pub async fn run_tui_with_permissions(
 
                         // /save command — manually persist the current session
                         if trimmed == "/save" {
-                            trigger_session_save(&state, &app.model);
+                            trigger_session_save(&state, &app.model, app.constants.to_snapshot());
                             app.display_blocks.push(DisplayBlock::SystemMessage(
                                 "✓ Session saved.".into(),
                             ));
@@ -828,6 +870,51 @@ pub async fn run_tui_with_permissions(
                         let _ = perm.respond.send(PermissionDecision::AllowAlways);
                     }
 
+                    // ── Constants tab: inline editing ─────────────────────
+                    // When editing a constant value, all input goes to the edit buffer.
+                    KeyCode::Char(c) if app.active_tab == 3 && app.constants.is_editing => {
+                        app.constants.edit_buffer.push(c);
+                    }
+                    KeyCode::Backspace if app.active_tab == 3 && app.constants.is_editing => {
+                        app.constants.edit_buffer.pop();
+                    }
+                    KeyCode::Enter if app.active_tab == 3 && app.constants.is_editing => {
+                        if app.constants.apply_edit() {
+                            // Value changed — persist to constants.json
+                            trigger_constants_save(app.constants.to_snapshot());
+                        }
+                    }
+                    KeyCode::Esc if app.active_tab == 3 && app.constants.is_editing => {
+                        app.constants.cancel_edit();
+                    }
+                    // Constants tab: field navigation (when not editing)
+                    KeyCode::Up if app.active_tab == 3 && !app.constants.is_editing
+                        && app.pending_permission.is_none() =>
+                    {
+                        app.constants.select_prev();
+                    }
+                    KeyCode::Down if app.active_tab == 3 && !app.constants.is_editing
+                        && app.pending_permission.is_none() =>
+                    {
+                        app.constants.select_next();
+                    }
+                    KeyCode::Enter if app.active_tab == 3 && !app.constants.is_editing
+                        && !app.is_loading && app.pending_permission.is_none() =>
+                    {
+                        if app.constants.is_reset_button_selected() {
+                            app.constants.reset_to_defaults();
+                            // Persist reset values to constants.json
+                            trigger_constants_save(app.constants.to_snapshot());
+                        } else {
+                            app.constants.start_editing();
+                        }
+                    }
+                    KeyCode::Esc if app.active_tab == 3 && !app.constants.is_editing => {
+                        // Esc while not editing: go back to prompt tab
+                        app.active_tab = 0;
+                        app.focus = Focus::Input;
+                    }
+
                     // Word-jump: Alt+Left / Option+Left
                     KeyCode::Left
                         if matches!(app.focus, Focus::Input)
@@ -1012,9 +1099,15 @@ pub async fn run_tui_with_permissions(
             }
 
                 // Break if no more events are pending
+                tracing::trace!("loop: drain-poll start");
                 match event::poll(Duration::from_millis(0)) {
-                    Ok(true) => {} // more events, continue drain loop
-                    Ok(false) => break,
+                    Ok(true) => {
+                        tracing::trace!("loop: drain-poll more events");
+                    }
+                    Ok(false) => {
+                        tracing::trace!("loop: drain-poll done, breaking");
+                        break;
+                    }
                     Err(e) => {
                         tracing::error!("event::poll(0) failed: {e}");
                         break; // don't crash on drain poll error, just exit loop
@@ -1032,6 +1125,7 @@ pub async fn run_tui_with_permissions(
         } // end match poll_result
 
         // Drain conversation events
+        tracing::trace!("loop: channel-drain start");
         while let Ok(ev) = event_rx.try_recv() {
             match ev {
                 ConversationEvent::TextDelta(text) => {
@@ -1098,7 +1192,7 @@ pub async fn run_tui_with_permissions(
                     app.is_loading = false;
                     app.streaming_buffer.clear();
                     // Auto-save session after every completed turn
-                    trigger_session_save(&state, &app.model);
+                    trigger_session_save(&state, &app.model, app.constants.to_snapshot());
                 }
                 ConversationEvent::Error(e) => {
                     app.display_blocks.push(DisplayBlock::Error(e));
@@ -1173,7 +1267,7 @@ pub async fn run_tui_with_permissions(
                 } => {
                     app.on_compaction_complete(old_messages, summary_tokens);
                     // Auto-save session after compaction (messages were replaced)
-                    trigger_session_save(&state, &app.model);
+                    trigger_session_save(&state, &app.model, app.constants.to_snapshot());
                 }
                 _ => {}
             }
@@ -1190,6 +1284,8 @@ pub async fn run_tui_with_permissions(
             });
             needs_redraw = true;
         }
+
+        tracing::trace!("loop: channel-drain done");
 
         // Check if the conversation task panicked (JoinHandle monitoring).
         // If the spawned task panicked, the JoinHandle resolves to Err(JoinError).
@@ -1243,6 +1339,7 @@ pub async fn run_tui_with_permissions(
         if app.needs_timer_redraw() {
             needs_redraw = true;
         }
+        tracing::trace!(needs_redraw, "loop: iteration end");
     }
 
     tracing::info!(

@@ -6,6 +6,7 @@ use ratatui::text::Span;
 use ratatui::Terminal;
 
 use crate::app::App;
+use crate::app::ConstantsConfig;
 use crate::render::{compute_scrollbar_state, render_output};
 use crate::rendered_line::RenderedLine;
 use crate::types::*;
@@ -83,3 +84,4 @@ mod spawn_robustness;
 mod session_save;
 mod session_restore_display;
 mod multiline_input;
+mod constants_tab;

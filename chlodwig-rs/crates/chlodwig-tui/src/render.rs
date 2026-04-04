@@ -49,6 +49,7 @@ pub(crate) fn ui(f: &mut Frame, app: &App) {
         0 => render_output(f, app, chunks[0]),
         1 => render_sys_prompt_view(f, app, chunks[0]),
         2 => render_requests_view(f, app, chunks[0]),
+        3 => render_constants_view(f, app, chunks[0]),
         _ => render_output(f, app, chunks[0]),
     }
     render_input(f, app, chunks[1]);
@@ -181,7 +182,7 @@ pub(crate) fn format_tokens(n: u64) -> String {
 }
 
 pub(crate) fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
-    let tabs = ["Prompt", "Sys-Prompt", "Requests"];
+    let tabs = ["Prompt", "Sys-Prompt", "Requests", "Constants"];
     let mut spans: Vec<Span> = Vec::new();
 
     spans.push(Span::raw(" "));
@@ -346,6 +347,69 @@ pub(crate) fn render_requests_view(f: &mut Frame, app: &App, area: Rect) {
             .title(scroll_info)
             .border_style(Style::default().fg(Color::Cyan)),
     );
+
+    f.render_widget(paragraph, area);
+
+    // Scrollbar
+    if total > view_height {
+        let (position, content_length, viewport_length) =
+            compute_scrollbar_state(scroll_pos, total, view_height);
+
+        let mut scrollbar_state = ScrollbarState::new(content_length)
+            .position(position)
+            .viewport_content_length(viewport_length);
+
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None)
+            .track_symbol(Some("│"))
+            .thumb_symbol("█");
+
+        f.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
+    }
+}
+
+pub(crate) fn render_constants_view(f: &mut Frame, app: &App, area: Rect) {
+    let view_height = area.height.saturating_sub(2) as usize; // borders
+    let total = app.constants_lines.len();
+
+    let scroll_pos = app.constants_scroll.min(total.saturating_sub(view_height));
+    let visible_end = (scroll_pos + view_height).min(total);
+    let visible_start = scroll_pos.min(visible_end);
+
+    let inner_width = area.width.saturating_sub(2) as usize;
+
+    let mut lines: Vec<Line> = app.constants_lines[visible_start..visible_end]
+        .iter()
+        .map(|rl| {
+            let mut line = rl.to_line();
+            let text_width = line.width();
+            if text_width < inner_width {
+                line.spans.push(Span::raw(" ".repeat(inner_width - text_width)));
+            }
+            line
+        })
+        .collect();
+
+    // Pad with empty lines to fill viewport
+    while lines.len() < view_height {
+        lines.push(Line::from(" ".repeat(inner_width)));
+    }
+
+    let scroll_info = if total > view_height {
+        let pct = ((scroll_pos as f64 / (total - view_height).max(1) as f64) * 100.0) as usize;
+        format!(" Constants [{}/{} lines · {}%] ", scroll_pos + view_height, total, pct)
+    } else {
+        " Constants ".to_string()
+    };
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(scroll_info)
+                .border_style(Style::default().fg(Color::Cyan)),
+        );
 
     f.render_widget(paragraph, area);
 

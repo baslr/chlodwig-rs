@@ -1,2 +1,2 @@
 #!/bin/bash
-cargo run --release -- --api-key oiasdfoasidf
+RUST_LOG=chlodwig_tui::event_loop=trace cargo run --release -- --api-key oiasdfoasidf

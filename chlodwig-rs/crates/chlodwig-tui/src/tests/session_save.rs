@@ -34,6 +34,7 @@ fn test_session_snapshot_from_conversation_state() {
         model: "claude-sonnet-4-20250514".into(),
         messages: messages.clone(),
         system_prompt: system_prompt.clone(),
+        constants: None,
     };
 
     assert_eq!(snap.messages.len(), 2);
@@ -90,6 +91,7 @@ fn test_session_snapshot_survives_serde_roundtrip_with_all_block_types() {
         model: "test-model".into(),
         messages,
         system_prompt: vec![SystemBlock::text("Be helpful")],
+        constants: None,
     };
 
     let json = serde_json::to_string_pretty(&snap).unwrap();
@@ -138,6 +140,7 @@ fn test_save_and_reload_via_temp_dir() {
             },
         ],
         system_prompt: vec![SystemBlock::text("You are a helpful assistant.")],
+        constants: None,
     };
 
     // Save
@@ -176,6 +179,7 @@ fn test_clear_does_not_overwrite_saved_session() {
             }],
         }],
         system_prompt: vec![],
+        constants: None,
     };
     let json = serde_json::to_string_pretty(&original).unwrap();
     std::fs::write(&path, &json).unwrap();
@@ -227,6 +231,7 @@ fn test_manual_save_writes_current_state_to_disk() {
         model: "claude-sonnet-4-20250514".into(),
         messages: messages.clone(),
         system_prompt: vec![SystemBlock::text("Be helpful")],
+        constants: None,
     };
 
     // Write via atomic pattern (same as save_session uses)

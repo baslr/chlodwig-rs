@@ -12,6 +12,408 @@ use crate::markdown;
 use crate::rendered_line::RenderedLine;
 use crate::types::*;
 
+// ── Editable constants: helpers ─────────────────────────────────
+
+/// Format a u64 with underscore thousand separators (e.g. `1_048_576`).
+pub(crate) fn format_with_underscores(n: u64) -> String {
+    let s = n.to_string();
+    if s.len() <= 3 {
+        return s;
+    }
+    let mut result = String::with_capacity(s.len() + s.len() / 3);
+    for (i, ch) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            result.push('_');
+        }
+        result.push(ch);
+    }
+    result
+}
+
+/// Parse a string that may contain a numeric value with an optional byte-size
+/// unit suffix (B, KB, KiB, MB, MiB, GB, GiB, TB, TiB).
+///
+/// Supports:
+/// - Plain integers: `"42"`, `"1000"`
+/// - Underscore/comma separators: `"1_000"`, `"1,000"`
+/// - Fractional values with units: `"1.5 MiB"`, `"0.5 KB"`
+/// - Case-insensitive units: `"1 mib"`, `"100 kb"`
+/// - Optional space between number and unit: `"1MiB"`, `"1 MiB"`
+///
+/// Returns `None` if the string cannot be parsed.
+pub(crate) fn parse_value_with_units(input: &str) -> Option<u64> {
+    let s = input.trim().replace('_', "").replace(',', "");
+    if s.is_empty() {
+        return None;
+    }
+
+    // Find where the numeric part ends and the unit begins.
+    // Numeric part: digits and '.'
+    let num_end = s
+        .find(|c: char| !c.is_ascii_digit() && c != '.')
+        .unwrap_or(s.len());
+
+    let num_str = s[..num_end].trim();
+    let unit_str = s[num_end..].trim();
+
+    if num_str.is_empty() {
+        return None;
+    }
+
+    let multiplier: u64 = match unit_str.to_lowercase().as_str() {
+        "" => 0, // sentinel: plain number, no multiplier
+        "b" => 1,
+        "k" => 1_000,
+        "kb" => 1_000,
+        "kib" => 1_024,
+        "m" => 1_000_000,
+        "mb" => 1_000_000,
+        "mib" => 1_048_576,
+        "g" => 1_000_000_000,
+        "gb" => 1_000_000_000,
+        "gib" => 1_073_741_824,
+        "t" => 1_000_000_000_000,
+        "tb" => 1_000_000_000_000,
+        "tib" => 1_099_511_627_776,
+        _ => return None,
+    };
+
+    if multiplier == 0 {
+        // Plain number — try integer first, then float truncated
+        if let Ok(v) = num_str.parse::<u64>() {
+            return Some(v);
+        }
+        // Might be float like "1.5" without unit — just truncate
+        if let Ok(v) = num_str.parse::<f64>() {
+            return Some(v as u64);
+        }
+        return None;
+    }
+
+    // Has a unit — parse as f64 to support fractional values like "1.5 MiB"
+    if let Ok(v) = num_str.parse::<f64>() {
+        Some((v * multiplier as f64) as u64)
+    } else {
+        None
+    }
+}
+
+// ── Editable constants configuration ─────────────────────────────
+
+/// Holds all editable constants with their current values.
+/// Each field mirrors a `const` from the various crates.
+/// The user can edit these in the Constants tab at runtime.
+#[derive(Debug, Clone)]
+pub(crate) struct ConstantsConfig {
+    // chlodwig-core / conversation
+    pub(crate) auto_compact_threshold: u64,
+    pub(crate) max_retries: u32,
+    // chlodwig-core / subagent
+    pub(crate) subagent_max_turns: u32,
+    pub(crate) subagent_max_tokens: u32,
+    // chlodwig-tools / websearch
+    pub(crate) default_max_results: usize,
+    pub(crate) absolute_max_results: usize,
+    pub(crate) search_timeout_secs: u64,
+    // chlodwig-tools / webfetch
+    pub(crate) default_max_size: usize,
+    pub(crate) absolute_max_size: usize,
+    // chlodwig-tools / glob
+    pub(crate) max_glob_results: usize,
+    // chlodwig-tools / grep
+    pub(crate) default_head_limit: usize,
+    // chlodwig-tui / app
+    pub(crate) input_max_visual_lines: usize,
+
+    // UI state for the Constants tab editor
+    pub(crate) selected_field: usize,
+    pub(crate) is_editing: bool,
+    pub(crate) edit_buffer: String,
+}
+
+impl Default for ConstantsConfig {
+    fn default() -> Self {
+        Self {
+            auto_compact_threshold: 160_000,
+            max_retries: 3,
+            subagent_max_turns: 1000,
+            subagent_max_tokens: 16_384,
+            default_max_results: 10,
+            absolute_max_results: 20,
+            search_timeout_secs: 15,
+            default_max_size: 100_000,
+            absolute_max_size: 1_000_000,
+            max_glob_results: 100,
+            default_head_limit: 250,
+            input_max_visual_lines: 10,
+            selected_field: 0,
+            is_editing: false,
+            edit_buffer: String::new(),
+        }
+    }
+}
+
+/// Metadata for a single editable constant field.
+pub(crate) struct ConstantFieldMeta {
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) crate_name: &'static str,
+}
+
+impl ConstantsConfig {
+    /// Total number of selectable items: fields + reset button.
+    pub(crate) fn field_count(&self) -> usize {
+        Self::FIELD_METAS.len() + 1 // +1 for reset button
+    }
+
+    /// Whether the reset button is currently selected.
+    pub(crate) fn is_reset_button_selected(&self) -> bool {
+        self.selected_field == Self::FIELD_METAS.len()
+    }
+
+    /// Move selection to next field.
+    pub(crate) fn select_next(&mut self) {
+        let max = self.field_count() - 1;
+        if self.selected_field < max {
+            self.selected_field += 1;
+        }
+    }
+
+    /// Move selection to previous field.
+    pub(crate) fn select_prev(&mut self) {
+        if self.selected_field > 0 {
+            self.selected_field -= 1;
+        }
+    }
+
+    /// Start editing the currently selected field.
+    /// Populates the edit buffer with the current value.
+    pub(crate) fn start_editing(&mut self) {
+        if self.is_reset_button_selected() {
+            return;
+        }
+        self.is_editing = true;
+        self.edit_buffer = self.get_field_value_string(self.selected_field);
+    }
+
+    /// Cancel editing without applying changes.
+    pub(crate) fn cancel_edit(&mut self) {
+        self.is_editing = false;
+        self.edit_buffer.clear();
+    }
+
+    /// Apply the current edit buffer to the selected field.
+    /// Returns `true` if the value was valid and applied.
+    ///
+    /// Supports plain numbers, underscore/comma separators, and byte-size
+    /// unit suffixes (KB, KiB, MB, MiB, GB, GiB, TB, TiB, B).
+    pub(crate) fn apply_edit(&mut self) -> bool {
+        let idx = self.selected_field;
+        if idx >= Self::FIELD_METAS.len() {
+            self.is_editing = false;
+            return false;
+        }
+        // Try unit-aware parsing first, fall back to plain number
+        let ok = if let Some(v) = parse_value_with_units(&self.edit_buffer) {
+            self.set_field_from_string(idx, &v.to_string())
+        } else {
+            false
+        };
+        if ok {
+            self.is_editing = false;
+            self.edit_buffer.clear();
+        }
+        ok
+    }
+
+    /// Reset all values to their compile-time defaults.
+    pub(crate) fn reset_to_defaults(&mut self) {
+        let defaults = Self::default();
+        self.auto_compact_threshold = defaults.auto_compact_threshold;
+        self.max_retries = defaults.max_retries;
+        self.subagent_max_turns = defaults.subagent_max_turns;
+        self.subagent_max_tokens = defaults.subagent_max_tokens;
+        self.default_max_results = defaults.default_max_results;
+        self.absolute_max_results = defaults.absolute_max_results;
+        self.search_timeout_secs = defaults.search_timeout_secs;
+        self.default_max_size = defaults.default_max_size;
+        self.absolute_max_size = defaults.absolute_max_size;
+        self.max_glob_results = defaults.max_glob_results;
+        self.default_head_limit = defaults.default_head_limit;
+        self.input_max_visual_lines = defaults.input_max_visual_lines;
+    }
+
+    /// Create a serialisable snapshot of the current constant values.
+    pub(crate) fn to_snapshot(&self) -> chlodwig_core::ConstantsSnapshot {
+        chlodwig_core::ConstantsSnapshot {
+            auto_compact_threshold: self.auto_compact_threshold,
+            max_retries: self.max_retries,
+            subagent_max_turns: self.subagent_max_turns,
+            subagent_max_tokens: self.subagent_max_tokens,
+            default_max_results: self.default_max_results,
+            absolute_max_results: self.absolute_max_results,
+            search_timeout_secs: self.search_timeout_secs,
+            default_max_size: self.default_max_size,
+            absolute_max_size: self.absolute_max_size,
+            max_glob_results: self.max_glob_results,
+            default_head_limit: self.default_head_limit,
+            input_max_visual_lines: self.input_max_visual_lines,
+        }
+    }
+
+    /// Restore constant values from a snapshot.
+    /// UI state (selected_field, is_editing, edit_buffer) is NOT touched.
+    pub(crate) fn from_snapshot(&mut self, snap: &chlodwig_core::ConstantsSnapshot) {
+        self.auto_compact_threshold = snap.auto_compact_threshold;
+        self.max_retries = snap.max_retries;
+        self.subagent_max_turns = snap.subagent_max_turns;
+        self.subagent_max_tokens = snap.subagent_max_tokens;
+        self.default_max_results = snap.default_max_results;
+        self.absolute_max_results = snap.absolute_max_results;
+        self.search_timeout_secs = snap.search_timeout_secs;
+        self.default_max_size = snap.default_max_size;
+        self.absolute_max_size = snap.absolute_max_size;
+        self.max_glob_results = snap.max_glob_results;
+        self.default_head_limit = snap.default_head_limit;
+        self.input_max_visual_lines = snap.input_max_visual_lines;
+    }
+
+    /// Metadata for all editable fields (order matters — matches field indices).
+    pub(crate) const FIELD_METAS: &'static [ConstantFieldMeta] = &[
+        ConstantFieldMeta {
+            name: "auto_compact_threshold",
+            description: "Token threshold for auto-compaction",
+            crate_name: "chlodwig-core",
+        },
+        ConstantFieldMeta {
+            name: "max_retries",
+            description: "Max API retry attempts",
+            crate_name: "chlodwig-core",
+        },
+        ConstantFieldMeta {
+            name: "subagent_max_turns",
+            description: "Max turns for subagent",
+            crate_name: "chlodwig-core",
+        },
+        ConstantFieldMeta {
+            name: "subagent_max_tokens",
+            description: "Max tokens per subagent response",
+            crate_name: "chlodwig-core",
+        },
+        ConstantFieldMeta {
+            name: "default_max_results",
+            description: "Default max web search results",
+            crate_name: "chlodwig-tools",
+        },
+        ConstantFieldMeta {
+            name: "absolute_max_results",
+            description: "Absolute max web search results",
+            crate_name: "chlodwig-tools",
+        },
+        ConstantFieldMeta {
+            name: "search_timeout_secs",
+            description: "Web search timeout (seconds)",
+            crate_name: "chlodwig-tools",
+        },
+        ConstantFieldMeta {
+            name: "default_max_size",
+            description: "Default max fetch size (bytes)",
+            crate_name: "chlodwig-tools",
+        },
+        ConstantFieldMeta {
+            name: "absolute_max_size",
+            description: "Absolute max fetch size (bytes)",
+            crate_name: "chlodwig-tools",
+        },
+        ConstantFieldMeta {
+            name: "max_glob_results",
+            description: "Max glob results",
+            crate_name: "chlodwig-tools",
+        },
+        ConstantFieldMeta {
+            name: "default_head_limit",
+            description: "Default grep head limit (lines)",
+            crate_name: "chlodwig-tools",
+        },
+        ConstantFieldMeta {
+            name: "input_max_visual_lines",
+            description: "Max visual lines in input area",
+            crate_name: "chlodwig-tui",
+        },
+    ];
+
+    /// Get the current value of field at `idx` as a string (raw, no formatting).
+    /// Used for populating the edit buffer.
+    fn get_field_value_string(&self, idx: usize) -> String {
+        match idx {
+            0 => self.auto_compact_threshold.to_string(),
+            1 => self.max_retries.to_string(),
+            2 => self.subagent_max_turns.to_string(),
+            3 => self.subagent_max_tokens.to_string(),
+            4 => self.default_max_results.to_string(),
+            5 => self.absolute_max_results.to_string(),
+            6 => self.search_timeout_secs.to_string(),
+            7 => self.default_max_size.to_string(),
+            8 => self.absolute_max_size.to_string(),
+            9 => self.max_glob_results.to_string(),
+            10 => self.default_head_limit.to_string(),
+            11 => self.input_max_visual_lines.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// Get the current value of field at `idx` formatted with underscore separators.
+    /// Used for display in the Constants tab.
+    pub(crate) fn get_field_display_string(&self, idx: usize) -> String {
+        match idx {
+            0 => format_with_underscores(self.auto_compact_threshold),
+            1 => format_with_underscores(self.max_retries as u64),
+            2 => format_with_underscores(self.subagent_max_turns as u64),
+            3 => format_with_underscores(self.subagent_max_tokens as u64),
+            4 => format_with_underscores(self.default_max_results as u64),
+            5 => format_with_underscores(self.absolute_max_results as u64),
+            6 => format_with_underscores(self.search_timeout_secs),
+            7 => format_with_underscores(self.default_max_size as u64),
+            8 => format_with_underscores(self.absolute_max_size as u64),
+            9 => format_with_underscores(self.max_glob_results as u64),
+            10 => format_with_underscores(self.default_head_limit as u64),
+            11 => format_with_underscores(self.input_max_visual_lines as u64),
+            _ => String::new(),
+        }
+    }
+
+    /// Set the value of field at `idx` from a string. Returns true on success.
+    fn set_field_from_string(&mut self, idx: usize, s: &str) -> bool {
+        match idx {
+            0 => s.parse::<u64>().map(|v| self.auto_compact_threshold = v).is_ok(),
+            1 => s.parse::<u32>().map(|v| self.max_retries = v).is_ok(),
+            2 => s.parse::<u32>().map(|v| self.subagent_max_turns = v).is_ok(),
+            3 => s.parse::<u32>().map(|v| self.subagent_max_tokens = v).is_ok(),
+            4 => s.parse::<usize>().map(|v| self.default_max_results = v).is_ok(),
+            5 => s.parse::<usize>().map(|v| self.absolute_max_results = v).is_ok(),
+            6 => s.parse::<u64>().map(|v| self.search_timeout_secs = v).is_ok(),
+            7 => s.parse::<usize>().map(|v| self.default_max_size = v).is_ok(),
+            8 => s.parse::<usize>().map(|v| self.absolute_max_size = v).is_ok(),
+            9 => s.parse::<usize>().map(|v| self.max_glob_results = v).is_ok(),
+            10 => s.parse::<usize>().map(|v| self.default_head_limit = v).is_ok(),
+            11 => s.parse::<usize>().map(|v| self.input_max_visual_lines = v).is_ok(),
+            _ => false,
+        }
+    }
+
+    /// Get the default value string for field at `idx` (raw, no formatting).
+    pub(crate) fn get_default_value_string(idx: usize) -> String {
+        let d = Self::default();
+        d.get_field_value_string(idx)
+    }
+
+    /// Get the default value string for field at `idx` formatted with underscores.
+    pub(crate) fn get_default_display_string(idx: usize) -> String {
+        let d = Self::default();
+        d.get_field_display_string(idx)
+    }
+}
+
 pub(crate) struct App {
     pub(crate) display_blocks: Vec<DisplayBlock>,
     pub(crate) input: String,
@@ -57,6 +459,10 @@ pub(crate) struct App {
     pub(crate) context_start: Instant,                   // When the current context started (resets on compaction/clear)
     pub(crate) compaction_count: u32,                    // How many compactions have occurred
     pub(crate) last_redraw: Instant,                     // When the last redraw happened (for periodic timer refresh)
+    // Constants tab
+    pub(crate) constants: ConstantsConfig,               // Editable constants
+    pub(crate) constants_lines: Vec<RenderedLine>,       // Pre-rendered constants tab lines
+    pub(crate) constants_scroll: usize,                  // Scroll position in constants tab
 }
 
 impl App {
@@ -99,6 +505,9 @@ impl App {
             context_start: Instant::now(),
             compaction_count: 0,
             last_redraw: Instant::now(),
+            constants: ConstantsConfig::default(),
+            constants_lines: Vec::new(),
+            constants_scroll: 0,
         }
     }
 
@@ -578,14 +987,11 @@ impl App {
         self.input.chars().count()
     }
 
-    /// Maximum number of visual lines the input area can grow to.
-    const INPUT_MAX_VISUAL_LINES: usize = 10;
-
     /// Count the number of visual lines the input text occupies when rendered
     /// at the given `width` (in terminal columns). Accounts for both explicit
     /// newlines (`\n`) and soft-wrapping of long lines using ratatui-compatible
     /// word-wrapping (matching `Wrap { trim: false }`). Returns at least 1,
-    /// capped at `INPUT_MAX_VISUAL_LINES`.
+    /// capped at the editable `input_max_visual_lines` constant.
     pub(crate) fn input_visual_line_count(&self, width: usize) -> usize {
         if self.input.is_empty() || width == 0 {
             return 1;
@@ -594,7 +1000,7 @@ impl App {
         for logical_line in self.input.split('\n') {
             total_visual += Self::word_wrap_line_count(logical_line, width);
         }
-        total_visual.max(1).min(Self::INPUT_MAX_VISUAL_LINES)
+        total_visual.max(1).min(self.constants.input_max_visual_lines)
     }
 
     /// Compute the visual (row, col) position of the cursor in the input text,
@@ -842,6 +1248,9 @@ impl App {
             2 => {
                 self.requests_scroll = self.requests_scroll.saturating_sub(n);
             }
+            3 => {
+                self.constants_scroll = self.constants_scroll.saturating_sub(n);
+            }
             _ => {}
         }
     }
@@ -857,6 +1266,10 @@ impl App {
             2 => {
                 let max = self.requests_lines.len().saturating_sub(view_height);
                 self.requests_scroll = (self.requests_scroll + n).min(max);
+            }
+            3 => {
+                let max = self.constants_lines.len().saturating_sub(view_height);
+                self.constants_scroll = (self.constants_scroll + n).min(max);
             }
             _ => {}
         }
@@ -883,7 +1296,7 @@ impl App {
 
     /// Handle Right key when focus is on TabBar: switch to next tab.
     pub(crate) fn handle_tab_bar_right(&mut self) {
-        if self.active_tab < 2 {
+        if self.active_tab < 3 {
             self.active_tab += 1;
         }
     }
@@ -1195,6 +1608,170 @@ impl App {
         }
     }
 
+    /// Build rendered lines for the constants editor tab.
+    pub(crate) fn rebuild_constants_lines(&mut self) {
+        let mut logical_lines: Vec<RenderedLine> = Vec::new();
+
+        logical_lines.push(RenderedLine::styled(
+            "── Editable Constants ──",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        logical_lines.push(RenderedLine::styled(
+            "  ↑/↓ navigate │ Enter edit │ Esc cancel │ Enter apply",
+            Style::default().fg(Color::DarkGray),
+        ));
+        logical_lines.push(RenderedLine::plain(""));
+
+        let metas = ConstantsConfig::FIELD_METAS;
+        let mut current_crate = "";
+
+        for (idx, meta) in metas.iter().enumerate() {
+            // Show crate section header when the crate changes
+            if meta.crate_name != current_crate {
+                current_crate = meta.crate_name;
+                logical_lines.push(RenderedLine::styled(
+                    &format!("  [{}]", current_crate),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
+
+            let is_selected = idx == self.constants.selected_field;
+            let is_editing = is_selected && self.constants.is_editing;
+
+            // Raw values for comparison (modified detection)
+            let raw_default = ConstantsConfig::get_default_value_string(idx);
+            let raw_current = self.constants.get_field_value_string(idx);
+            let modified = raw_current != raw_default && !is_editing;
+
+            // Formatted values for display
+            let default_display = ConstantsConfig::get_default_display_string(idx);
+            let current_display = if is_editing {
+                self.constants.edit_buffer.clone()
+            } else {
+                self.constants.get_field_display_string(idx)
+            };
+
+            let marker = if is_selected { "▸ " } else { "  " };
+            let mod_tag = if modified { " ✎" } else { "" };
+
+            if is_editing {
+                // Editing: show name and editable value with cursor-style highlight
+                logical_lines.push(RenderedLine::multi(vec![
+                    (
+                        &format!("  {} ", marker),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    (
+                        meta.name,
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    (
+                        " = ",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    (
+                        &current_display,
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::White),
+                    ),
+                    (
+                        &format!("  (default: {})", default_display),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            } else if is_selected {
+                // Selected but not editing
+                logical_lines.push(RenderedLine::multi(vec![
+                    (
+                        &format!("  {} ", marker),
+                        Style::default().fg(Color::Cyan),
+                    ),
+                    (
+                        meta.name,
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    (
+                        " = ",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    (
+                        &current_display,
+                        Style::default().fg(Color::White),
+                    ),
+                    (
+                        &format!("{mod_tag}  ({})", meta.description),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                ]));
+            } else {
+                // Not selected
+                logical_lines.push(RenderedLine::multi(vec![
+                    (
+                        &format!("  {} ", marker),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    (
+                        meta.name,
+                        Style::default().fg(Color::White),
+                    ),
+                    (
+                        " = ",
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    (
+                        &current_display,
+                        if modified {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default().fg(Color::White)
+                        },
+                    ),
+                    (
+                        mod_tag,
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]));
+            }
+        }
+
+        // Reset Defaults button
+        logical_lines.push(RenderedLine::plain(""));
+        let is_reset_selected = self.constants.is_reset_button_selected();
+        if is_reset_selected {
+            logical_lines.push(RenderedLine::styled(
+                "  ▸ [ Reset Defaults ]",
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else {
+            logical_lines.push(RenderedLine::styled(
+                "    [ Reset Defaults ]",
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        logical_lines.push(RenderedLine::plain(""));
+
+        let w = if self.wrap_width > 0 { self.wrap_width } else { usize::MAX };
+        self.constants_lines.clear();
+        for logical in &logical_lines {
+            for wrapped in logical.wrap(w) {
+                self.constants_lines.push(wrapped);
+            }
+        }
+    }
+
     /// Generate a crash dump string with all relevant App state.
     /// Used by the panic hook to write a human-readable state snapshot.
     pub(crate) fn crash_dump(&self) -> String {
@@ -1215,6 +1792,7 @@ impl App {
         let _ = writeln!(out, "sys_prompt_lines.len():      {}", self.sys_prompt_lines.len());
         let _ = writeln!(out, "sys_prompt_blocks.len():     {}", self.system_prompt_blocks.len());
         let _ = writeln!(out, "requests_lines.len():        {}", self.requests_lines.len());
+        let _ = writeln!(out, "constants_lines.len():       {}", self.constants_lines.len());
 
         let _ = writeln!(out);
         let _ = writeln!(out, "=== Counters ===");

@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
     };
 
     // Resume previous session if --resume flag is set
-    let state = if cli.resume {
+    let (state, initial_constants) = if cli.resume {
         match chlodwig_core::load_session() {
             Ok(Some(snapshot)) => {
                 let msg_count = snapshot.messages.len();
@@ -284,30 +284,32 @@ async fn main() -> Result<()> {
                     "\x1b[32m✓ Resumed session ({msg_count} messages, saved at {})\x1b[0m",
                     snapshot.saved_at
                 );
-                ConversationState {
+                let constants = snapshot.constants.clone();
+                let state = ConversationState {
                     messages: snapshot.messages,
                     // Use current CLI settings (model, tools, etc.) not the saved ones,
                     // because tools/system prompt may have changed between sessions.
                     ..state
-                }
+                };
+                (state, constants)
             }
             Ok(None) => {
                 eprintln!("\x1b[33mNo saved session found — starting fresh.\x1b[0m");
-                state
+                (state, None)
             }
             Err(e) => {
                 eprintln!("\x1b[31mFailed to load session: {e} — starting fresh.\x1b[0m");
-                state
+                (state, None)
             }
         }
     } else {
-        state
+        (state, None)
     };
 
     if let Some(ref prompt) = cli.print_mode {
         run_headless(state, &client, &cli, prompt).await
     } else {
-        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions).await
+        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions, initial_constants).await
     }
 }
 
@@ -404,6 +406,7 @@ async fn run_headless(
         model: state.model.clone(),
         messages: state.messages.clone(),
         system_prompt: state.system_prompt.clone(),
+        constants: None, // headless mode doesn't have editable constants
     };
     if let Err(e) = chlodwig_core::save_session(&snapshot) {
         eprintln!("\x1b[33mWarning: failed to save session: {e}\x1b[0m");

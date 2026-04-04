@@ -59,9 +59,9 @@ fn test_left_in_tabbar_clamps_at_zero() {
 fn test_right_in_tabbar_clamps_at_max() {
     let mut app = App::new("test".into());
     app.focus = Focus::TabBar;
-    app.active_tab = 2;
+    app.active_tab = 3;
     app.handle_tab_bar_right();
-    assert_eq!(app.active_tab, 2, "Should not go above 2");
+    assert_eq!(app.active_tab, 3, "Should not go above 3");
 }
 
 #[test]
