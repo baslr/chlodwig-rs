@@ -296,3 +296,42 @@ fn test_rebuild_requests_shows_response_data() {
         "Should contain message ID from pretty-printed JSON"
     );
 }
+
+#[test]
+fn test_rebuild_requests_lines_is_lazy_not_eager() {
+    // Regression test: rebuild_requests_lines() must NOT be called eagerly
+    // on every HttpRequest/HttpResponseMeta/HttpResponseComplete event.
+    // Instead, it should only rebuild when the requests tab is visible.
+    // This prevents O(n²) CPU burn from re-rendering all SSE chunks on every event.
+    let mut app = App::new("test".into());
+
+    // Simulate receiving a request event — only sets dirty flag
+    app.requests_log.push_back(RequestLogEntry {
+        timestamp: "t1".into(),
+        request_body: "{}".into(),
+        response_model: String::new(),
+        response_input_tokens: 0,
+        response_output_tokens: 0,
+        duration_ms: None,
+        response_chunks: Vec::new(),
+    });
+    app.requests_dirty = true;
+    // Do NOT call rebuild_requests_lines() here (that's the fix)
+
+    // Lines should still be empty because we haven't rebuilt yet
+    assert!(
+        app.requests_lines.is_empty(),
+        "requests_lines should be empty until lazy rebuild is triggered"
+    );
+    assert!(
+        app.requests_dirty,
+        "requests_dirty should remain true until rebuild happens"
+    );
+
+    // Now simulate switching to requests tab — triggers lazy rebuild
+    app.rebuild_requests_lines();
+    assert!(
+        !app.requests_lines.is_empty(),
+        "After lazy rebuild, requests_lines should be populated"
+    );
+}

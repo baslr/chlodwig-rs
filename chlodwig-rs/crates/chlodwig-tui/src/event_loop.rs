@@ -248,7 +248,7 @@ pub(crate) fn write_crash_report_sync(signal_name: &str, log_path: &std::path::P
     let _ = std::fs::write(log_path, contents);
 }
 
-/// Install signal handlers for fatal signals (SIGSEGV, SIGBUS, SIGABRT, SIGFPE)
+/// Install signal handlers for fatal signals (SIGSEGV, SIGBUS, SIGABRT, SIGFPE, SIGHUP)
 /// and SIGINT (Ctrl+C) for terminal cleanup.
 /// Fatal signals write a crash report. SIGINT only restores the terminal.
 ///
@@ -271,7 +271,7 @@ pub(crate) fn install_signal_handlers() {
         unsafe {
             // Fatal signals: full crash report + terminal restore
             for &sig in &[
-                libc::SIGSEGV, libc::SIGBUS, libc::SIGABRT, libc::SIGFPE,
+                libc::SIGSEGV, libc::SIGBUS, libc::SIGABRT, libc::SIGFPE, libc::SIGHUP,
             ] {
                 libc::signal(sig, signal_handler as *const () as libc::sighandler_t);
             }
@@ -297,6 +297,7 @@ extern "C" fn signal_handler(sig: libc::c_int) {
         libc::SIGBUS  => "SIGBUS (Bus error)",
         libc::SIGABRT => "SIGABRT (Abort)",
         libc::SIGFPE  => "SIGFPE (Floating point exception)",
+        libc::SIGHUP  => "SIGHUP (Hangup)",
         _ => "Unknown signal",
     };
 
@@ -432,6 +433,12 @@ pub async fn run_tui_with_permissions(
                 app.mark_dirty(); // re-wrap all lines
             }
             app.rebuild_lines();
+            // Lazy rebuild of requests lines — only when the tab is visible.
+            // This avoids O(n²) CPU burn from re-rendering all SSE chunks
+            // (JSON pretty-print + syntect highlighting) on every incoming event.
+            if app.requests_dirty && app.active_tab == 2 {
+                app.rebuild_requests_lines();
+            }
             // Update crash state snapshot (for panic hook)
             if let Ok(mut guard) = crash_state().lock() {
                 *guard = app.crash_dump();
@@ -980,7 +987,6 @@ pub async fn run_tui_with_permissions(
                         app.requests_log.pop_front();
                     }
                     app.requests_dirty = true;
-                    app.rebuild_requests_lines();
                 }
                 ConversationEvent::HttpResponseMeta {
                     model,
@@ -993,14 +999,12 @@ pub async fn run_tui_with_permissions(
                         last.response_output_tokens = output_tokens;
                     }
                     app.requests_dirty = true;
-                    app.rebuild_requests_lines();
                 }
                 ConversationEvent::HttpResponseComplete { duration_ms } => {
                     if let Some(last) = app.requests_log.back_mut() {
                         last.duration_ms = Some(duration_ms);
                     }
                     app.requests_dirty = true;
-                    app.rebuild_requests_lines();
                 }
                 ConversationEvent::SseRawChunk(raw) => {
                     if let Some(last) = app.requests_log.back_mut() {
@@ -1046,7 +1050,6 @@ pub async fn run_tui_with_permissions(
             // all lines). With 700+ rendered lines that takes >100ms and
             // causes the UI to freeze.
             app.update_spinner_line();
-            needs_redraw = true;
             needs_redraw = true;
         }
 

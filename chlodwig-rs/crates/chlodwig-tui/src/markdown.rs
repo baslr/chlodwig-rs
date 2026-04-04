@@ -141,6 +141,17 @@ pub(crate) fn highlight_code(lang: &str, code: &str) -> Vec<RenderedLine> {
 
 // ── Markdown rendering ───────────────────────────────────────────────
 
+/// Apply U+0336 (Combining Long Stroke Overlay) after each character to produce
+/// a visible strikethrough that works on every terminal — no SGR 9 needed.
+fn apply_combining_stroke(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() * 2);
+    for ch in text.chars() {
+        out.push(ch);
+        out.push('\u{0336}');
+    }
+    out
+}
+
 /// Merge modifier flags from a style stack into a single Style.
 fn merge_styles(stack: &[Style]) -> Style {
     let mut merged = Style::default();
@@ -187,6 +198,9 @@ pub fn render_markdown(text: &str) -> Vec<RenderedLine> {
 
     // Link URL accumulator
     let mut link_url: Option<String> = None;
+
+    // Strikethrough flag — when true, text gets U+0336 combining strokes
+    let mut in_strikethrough = false;
 
     // Table accumulator
     let mut in_table = false;
@@ -267,17 +281,13 @@ pub fn render_markdown(text: &str) -> Vec<RenderedLine> {
             }
 
             Event::Start(Tag::Strikethrough) => {
-                let style = Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::CROSSED_OUT);
+                let style = Style::default().fg(Color::DarkGray);
                 style_stack.push(style);
-                // Visible ~ marker for terminals that don't support SGR 9
-                current_spans.push(("~".to_string(), style));
+                in_strikethrough = true;
             }
             Event::End(TagEnd::Strikethrough) => {
-                let style = style_stack.last().copied().unwrap_or_default();
-                current_spans.push(("~".to_string(), style));
                 style_stack.pop();
+                in_strikethrough = false;
             }
 
             Event::Start(Tag::Link { dest_url, .. }) => {
@@ -419,7 +429,13 @@ pub fn render_markdown(text: &str) -> Vec<RenderedLine> {
                 }
 
                 let style = merge_styles(&style_stack);
-                current_spans.push((t.to_string(), style));
+                let text_out = if in_strikethrough {
+                    // Insert U+0336 (Combining Long Stroke Overlay) after each char
+                    apply_combining_stroke(&t)
+                } else {
+                    t.to_string()
+                };
+                current_spans.push((text_out, style));
             }
 
             Event::SoftBreak => {
@@ -1134,25 +1150,39 @@ mod tests {
     fn test_md_strikethrough() {
         let lines = render_markdown("~~deleted~~");
         let text = text_of(&lines);
-        assert!(text.contains("deleted"), "Strikethrough text should be shown, got:\n{text}");
+        // With U+0336 combining strokes, plain "deleted" won't match —
+        // check that the base characters are present (with strokes).
+        assert!(text.contains("d\u{0336}e\u{0336}l\u{0336}e\u{0336}t\u{0336}e\u{0336}d\u{0336}"),
+            "Strikethrough text should be shown with combining strokes, got:\n{text}");
     }
 
     #[test]
-    fn test_md_strikethrough_has_tildes() {
-        // Since many terminals don't support ANSI strikethrough (SGR 9),
-        // we render ~~text~~ with visible ~ markers as well.
+    fn test_md_strikethrough_uses_combining_stroke() {
+        // U+0336 (Combining Long Stroke Overlay) works on every terminal,
+        // unlike SGR 9 which many terminals ignore.
+        let lines = render_markdown("~~ab~~");
+        let text = text_of(&lines);
+        // Each char should be followed by U+0336
+        assert!(text.contains("a\u{0336}b\u{0336}"),
+            "Strikethrough should use U+0336 combining overlay, got:\n{text}");
+    }
+
+    #[test]
+    fn test_md_strikethrough_no_tildes() {
+        // No ~~ markers needed — U+0336 is the visual indicator.
         let lines = render_markdown("~~removed~~");
         let text = text_of(&lines);
-        assert!(text.contains("~removed~"),
-            "Strikethrough should show ~text~ markers for terminal compatibility, got:\n{text}");
+        assert!(!text.contains('~'),
+            "Strikethrough should NOT have tilde markers, got:\n{text}");
     }
 
     #[test]
     fn test_md_strikethrough_styled() {
         let lines = render_markdown("~~removed~~");
-        let spans = find_line_spans(&lines, "removed").expect("Should have line with 'removed'");
-        assert!(has_modifier(spans, Modifier::CROSSED_OUT),
-            "Strikethrough should have CROSSED_OUT modifier, spans: {spans:?}");
+        let spans = find_line_spans(&lines, "r\u{0336}").expect("Should have line with stroked text");
+        // DarkGray color for de-emphasis
+        let has_gray = spans.iter().any(|(_, s)| s.fg == Some(Color::DarkGray));
+        assert!(has_gray, "Strikethrough should be DarkGray, spans: {spans:?}");
     }
 
     #[test]
@@ -1160,7 +1190,17 @@ mod tests {
         let lines = render_markdown("keep ~~remove~~ keep");
         let text = text_of(&lines);
         assert!(text.contains("keep"), "got:\n{text}");
-        assert!(text.contains("remove"), "got:\n{text}");
+        assert!(text.contains("r\u{0336}e\u{0336}m\u{0336}o\u{0336}v\u{0336}e\u{0336}"),
+            "Strikethrough text should have combining strokes, got:\n{text}");
+    }
+
+    #[test]
+    fn test_md_strikethrough_unicode_input() {
+        // U+0336 must be inserted after each char, including multi-byte ones.
+        let lines = render_markdown("~~ä~~");
+        let text = text_of(&lines);
+        assert!(text.contains("ä\u{0336}"),
+            "Strikethrough should work with multi-byte chars, got:\n{text}");
     }
 
     // ── Ordered list with inline code at start ──────────────────────

@@ -1,5 +1,8 @@
 //! Rendering functions for the TUI.
 
+/// Build timestamp set by `build.rs` at compile time (e.g. "2026-04-04 14:30").
+const BUILD_TIME: &str = env!("BUILD_TIME");
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -395,22 +398,24 @@ pub(crate) fn render_status_line(f: &mut Frame, app: &App, area: Rect) {
 
     let turn_info = if app.is_loading {
         format!(
-            "{} turn tx:{} rx:{} │ streaming({})… │ {}",
+            "{} turn tx:{} rx:{} │ streaming({})… │ build {} │ {}",
             app.spinner_char(),
             format_tokens(app.turn_input_tokens),
             format_tokens(app.turn_output_tokens),
             app.stream_chunks,
+            BUILD_TIME,
             now,
         )
     } else if app.turn_count > 0 {
         format!(
-            "last tx:{} rx:{} │ {}",
+            "last tx:{} rx:{} │ build {} │ {}",
             format_tokens(app.turn_input_tokens),
             format_tokens(app.turn_output_tokens),
+            BUILD_TIME,
             now,
         )
     } else {
-        now
+        format!("build {} │ {}", BUILD_TIME, now)
     };
 
     // Pad to fill the line (use display width, not byte length — UTF-8 chars like │ are multi-byte)
@@ -490,4 +495,19 @@ pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect 
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_build_time_is_set() {
+        // BUILD_TIME should be set by build.rs at compile time
+        let bt = BUILD_TIME;
+        assert!(!bt.is_empty(), "BUILD_TIME must not be empty");
+        // Should look like "2026-04-04 14:30" (16 chars)
+        assert!(bt.len() >= 16, "BUILD_TIME should be at least 'YYYY-MM-DD HH:MM', got: {bt}");
+        assert!(bt.starts_with("20"), "BUILD_TIME should start with '20xx', got: {bt}");
+    }
 }

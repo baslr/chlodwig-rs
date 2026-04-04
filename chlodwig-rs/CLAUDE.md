@@ -86,6 +86,10 @@ These were discovered during development. **Never regress on these:**
 
 16. **ToolResult preview byte-slicing panic**: `&t[..500]` panics when byte 500 lands inside a multi-byte UTF-8 character (e.g. `├` is 3 bytes E2 94 9C). **This was the production crash bug** — `cargo tree` output contains box-drawing characters. **Fix**: Walk backwards from byte 500 with `is_char_boundary()` to find the last valid boundary. Same pattern for `crash_dump()` streaming_buffer tail. **Never use `&str[..N]` with a hardcoded byte offset.** Always use `is_char_boundary()`, `char_indices()`, or `.chars().take(N)`. Tested by `test_tool_result_preview_truncation_at_utf8_boundary`, `test_tool_result_preview_emoji_boundary`.
 
+17. **SIGHUP causes silent death**: Without a SIGHUP handler, the process terminates silently with no crash log when the controlling terminal sends SIGHUP (e.g. SSH disconnect, terminal multiplexer detach, or macOS terminal session cleanup). The default handler just kills the process — no panic hook, no signal handler, no log. **Fix**: Register SIGHUP alongside the other fatal signals (SIGSEGV, SIGBUS, SIGABRT, SIGFPE) so it writes a full crash report before terminating. Tested by `test_sighup_is_in_signal_handler_list`, `test_sighup_crash_report_contains_signal_name`.
+
+18. **Eager `rebuild_requests_lines()` causes 100% CPU**: The Requests tab renders every SSE chunk as pretty-printed JSON with syntect syntax highlighting (`render_markdown` → regex DFA). Calling `rebuild_requests_lines()` eagerly on every `HttpRequest`, `HttpResponseMeta`, and `HttpResponseComplete` event creates an O(n²) loop — each new event re-renders ALL previous chunks. With hundreds of SSE events per request, this pegs the CPU at 100%. **Fix**: Only set `requests_dirty = true` on incoming events. Defer the actual rebuild to just before `terminal.draw()`, and only when `active_tab == 2` (Requests tab is visible). When the user is on the Prompt tab, zero rendering work happens for request data. Tested by `test_rebuild_requests_lines_is_lazy_not_eager`.
+
 ## Compact Instructions
 
 When summarizing the conversation, focus on:
