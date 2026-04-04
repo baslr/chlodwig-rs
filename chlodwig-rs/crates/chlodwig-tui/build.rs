@@ -12,16 +12,22 @@ fn main() {
     println!("cargo:rustc-env=BUILD_TIME={build_time}");
 
     // --- BUILD_ID ---
-    // Read the current build ID from `build_id.txt`, increment it, write it back,
-    // and emit it as a compile-time env variable.
-    let id_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("build_id.txt");
-    let current = std::fs::read_to_string(&id_path)
-        .unwrap_or_else(|_| "0".to_string());
-    let next: u64 = current.trim().parse().unwrap_or(0) + 1;
-    std::fs::write(&id_path, format!("{next}\n"))
-        .expect("failed to write build_id.txt");
-    println!("cargo:rustc-env=BUILD_ID={next}");
+    // Use the git commit count as a monotonically increasing build ID.
+    // No file needed — derived from git history.
+    let build_id = Command::new("git")
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_else(|| "0".to_string());
+    println!("cargo:rustc-env=BUILD_ID={build_id}");
 
-    // Always re-run so BUILD_TIME and BUILD_ID update on every build.
+    // Always re-run so BUILD_TIME reflects the actual build time.
     println!("cargo:rerun-if-changed=FORCE_ALWAYS");
 }
