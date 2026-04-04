@@ -1,0 +1,24 @@
+[package]
+name = "claude-tui"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+claude-api = { path = "../claude-api" }
+claude-tools = { path = "../claude-tools" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+ratatui = "0.30"
+crossterm = "0.29"
+tracing = { workspace = true }
+anyhow = { workspace = true }
+unicode-width = "0.2"
+unicode-segmentation = "1.13"
+chrono = "0.4"
+pulldown-cmark = "0.13"
+syntect = { version = "5.3", default-features = false, features = ["default-fancy"] }
+ansi-to-tui = "8"
+dirs = "6"
+libc = "0.2"

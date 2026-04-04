@@ -1,0 +1,24 @@
+[package]
+name = "claude-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "claude-rs"
+path = "src/main.rs"
+
+[dependencies]
+claude-core = { path = "../claude-core" }
+claude-api = { path = "../claude-api" }
+claude-tools = { path = "../claude-tools" }
+claude-tui = { path = "../claude-tui" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+chrono = "0.4"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = "0.2"
+dirs = "6"
