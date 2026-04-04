@@ -1,0 +1,24 @@
+[package]
+name = "chlodwig-cli"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "chlodwig-rs"
+path = "src/main.rs"
+
+[dependencies]
+chlodwig-core = { path = "../chlodwig-core" }
+chlodwig-api = { path = "../chlodwig-api" }
+chlodwig-tools = { path = "../chlodwig-tools" }
+chlodwig-tui = { path = "../chlodwig-tui" }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive", "env"] }
+chrono = "0.4"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = "0.2"
+dirs = "6"
