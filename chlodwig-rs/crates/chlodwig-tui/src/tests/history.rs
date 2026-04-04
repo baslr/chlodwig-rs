@@ -75,10 +75,12 @@ fn test_history_empty_noop() {
 
 #[test]
 fn test_input_height_multiline() {
-    let input = "line one\nline two\nline three";
-    let input_lines = input.lines().count().max(1).min(10);
+    let mut app = App::new("test".into());
+    app.input = "line one\nline two\nline three".to_string();
+    // 3 logical lines, each short enough to not wrap at width 80
+    let input_lines = app.input_visual_line_count(80);
     let input_height = (input_lines as u16) + 2;
-    assert_eq!(input_height, 5);
+    assert_eq!(input_height, 5); // 3 lines + 2 border
 }
 
 #[test]

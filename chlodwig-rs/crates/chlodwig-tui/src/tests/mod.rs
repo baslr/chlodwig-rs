@@ -82,3 +82,4 @@ mod word_jump;
 mod spawn_robustness;
 mod session_save;
 mod session_restore_display;
+mod multiline_input;

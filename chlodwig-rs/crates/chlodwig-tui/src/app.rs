@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use ansi_to_tui::IntoText;
 use chlodwig_core::{ContentBlock, Message, Role, SystemBlock, ToolResultContent};
+use unicode_width::UnicodeWidthChar;
 
 use crate::markdown;
 use crate::rendered_line::RenderedLine;
@@ -575,6 +576,236 @@ impl App {
     /// Number of chars in the input string.
     pub(crate) fn input_char_count(&self) -> usize {
         self.input.chars().count()
+    }
+
+    /// Maximum number of visual lines the input area can grow to.
+    const INPUT_MAX_VISUAL_LINES: usize = 10;
+
+    /// Count the number of visual lines the input text occupies when rendered
+    /// at the given `width` (in terminal columns). Accounts for both explicit
+    /// newlines (`\n`) and soft-wrapping of long lines using ratatui-compatible
+    /// word-wrapping (matching `Wrap { trim: false }`). Returns at least 1,
+    /// capped at `INPUT_MAX_VISUAL_LINES`.
+    pub(crate) fn input_visual_line_count(&self, width: usize) -> usize {
+        if self.input.is_empty() || width == 0 {
+            return 1;
+        }
+        let mut total_visual = 0usize;
+        for logical_line in self.input.split('\n') {
+            total_visual += Self::word_wrap_line_count(logical_line, width);
+        }
+        total_visual.max(1).min(Self::INPUT_MAX_VISUAL_LINES)
+    }
+
+    /// Compute the visual (row, col) position of the cursor in the input text,
+    /// accounting for soft-wrapping at the given `width` (terminal columns).
+    /// Uses ratatui-compatible word-wrapping (matching `Wrap { trim: false }`).
+    /// Row 0 is the first visual line of the input area.
+    /// Col is measured in terminal columns (display width), not char indices.
+    pub(crate) fn input_cursor_visual_pos(&self, width: usize) -> (usize, usize) {
+        if width == 0 {
+            return (0, 0);
+        }
+        Self::word_wrap_cursor_pos(&self.input, self.cursor, width)
+    }
+
+    /// Count the visual lines for a single logical line (no `\n`) using
+    /// ratatui-compatible word-wrapping (`trim: false`).
+    fn word_wrap_line_count(line: &str, width: usize) -> usize {
+        if line.is_empty() {
+            return 1;
+        }
+        let (total_lines, _, _, _) =
+            Self::word_wrap_line_with_cursor(line, width, usize::MAX);
+        total_lines
+    }
+
+    /// Compute the cursor's visual (row, col) position, accounting for
+    /// ratatui-compatible word-wrapping across the full input text.
+    /// `cursor` is the char index, `width` is the terminal column width.
+    fn word_wrap_cursor_pos(input: &str, cursor: usize, width: usize) -> (usize, usize) {
+        let mut global_row = 0usize;
+        let mut char_idx = 0usize;
+
+        for logical_line in input.split('\n') {
+            let chars_in_line = logical_line.chars().count();
+            let cursor_in_line = cursor.saturating_sub(char_idx);
+
+            if char_idx + chars_in_line >= cursor && char_idx <= cursor {
+                // Cursor is on this logical line
+                let (_, cursor_row, cursor_col, _) =
+                    Self::word_wrap_line_with_cursor(logical_line, width, cursor_in_line);
+                return (global_row + cursor_row, cursor_col);
+            }
+
+            let (lines, _, _, _) =
+                Self::word_wrap_line_with_cursor(logical_line, width, usize::MAX);
+            global_row += lines;
+            char_idx += chars_in_line + 1; // +1 for the '\n'
+        }
+
+        // Fallback: cursor at end
+        (global_row, 0)
+    }
+
+    /// Word-wrap a single logical line and compute where a given char offset
+    /// (relative to the start of this line) would appear visually.
+    ///
+    /// Returns: (total_visual_lines, cursor_row, cursor_col, chars_in_line)
+    ///
+    /// Two-pass approach:
+    /// 1. Build wrapped lines using ratatui's WordWrapper algorithm (trim=false).
+    ///    Each wrapped line is a Vec of (char_index, display_width) pairs.
+    ///    Also tracks consumed/skipped chars (whitespace eaten at line breaks).
+    /// 2. Look up the cursor's char index in the wrapped lines to find (row, col).
+    fn word_wrap_line_with_cursor(
+        line: &str,
+        width: usize,
+        cursor_in_line: usize,
+    ) -> (usize, usize, usize, usize) {
+        let char_count = line.chars().count();
+        if char_count == 0 {
+            return (1, 0, 0, 0);
+        }
+
+        // Phase 1: Build wrapped lines faithfully reproducing ratatui's WordWrapper (trim=false).
+
+        let chars_vec: Vec<char> = line.chars().collect();
+        let chars_with_width: Vec<(usize, usize)> = chars_vec
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, c.width().unwrap_or(0)))
+            .collect();
+
+        // Each wrapped line: list of (char_index, display_width)
+        let mut wrapped_lines: Vec<Vec<(usize, usize)>> = Vec::new();
+
+        // Chars consumed at line breaks: char_index → (visual_row_after_break, 0)
+        // These are whitespace chars drained or skipped during wrapping.
+        let mut consumed_chars: Vec<(usize, usize)> = Vec::new(); // (char_idx, row_after)
+
+        let mut pending_line: Vec<(usize, usize)> = Vec::new();
+        let mut pending_ws: Vec<(usize, usize)> = Vec::new();
+        let mut pending_word: Vec<(usize, usize)> = Vec::new();
+        let mut line_w: usize = 0;
+        let mut ws_w: usize = 0;
+        let mut word_w: usize = 0;
+        let mut prev_non_ws = false;
+        let mut current_visual_row: usize = 0;
+
+        for &(ci, cw) in &chars_with_width {
+            let ch = chars_vec[ci];
+            let is_ws = ch.is_whitespace();
+
+            let word_found = prev_non_ws && is_ws;
+            let untrimmed_overflow =
+                pending_line.is_empty() && (word_w + ws_w + cw) > width;
+
+            // Flush pending ws+word to committed line
+            if word_found || untrimmed_overflow {
+                // trim=false: always append whitespace
+                pending_line.extend(pending_ws.drain(..));
+                line_w += ws_w;
+                pending_line.extend(pending_word.drain(..));
+                line_w += word_w;
+                ws_w = 0;
+                word_w = 0;
+            }
+
+            let line_full = line_w >= width;
+            let pending_word_overflow =
+                cw > 0 && (line_w + ws_w + word_w) >= width;
+
+            if line_full || pending_word_overflow {
+                // Push current committed line
+                wrapped_lines.push(std::mem::take(&mut pending_line));
+                let remaining = width.saturating_sub(line_w);
+                line_w = 0;
+                current_visual_row += 1;
+
+                // Drain whitespace that fits in remaining space
+                let mut rem = remaining;
+                while let Some(&(ws_ci, ww)) = pending_ws.first() {
+                    if ww > rem {
+                        break;
+                    }
+                    ws_w -= ww;
+                    rem -= ww;
+                    // This whitespace char was consumed at the line break
+                    consumed_chars.push((ws_ci, current_visual_row));
+                    pending_ws.remove(0);
+                }
+
+                // Skip first whitespace at line break
+                if is_ws && pending_ws.is_empty() && pending_word.is_empty() {
+                    consumed_chars.push((ci, current_visual_row));
+                    prev_non_ws = false;
+                    continue;
+                }
+            }
+
+            // Accumulate
+            if is_ws {
+                ws_w += cw;
+                pending_ws.push((ci, cw));
+            } else {
+                word_w += cw;
+                pending_word.push((ci, cw));
+            }
+
+            prev_non_ws = !is_ws;
+        }
+
+        // Flush remaining content
+        // trim=false: always append whitespace
+        pending_line.extend(pending_ws.drain(..));
+        pending_line.extend(pending_word.drain(..));
+        if !pending_line.is_empty() {
+            wrapped_lines.push(pending_line);
+        }
+        if wrapped_lines.is_empty() {
+            wrapped_lines.push(Vec::new());
+        }
+
+        let total_lines = wrapped_lines.len();
+
+        // Phase 2: Look up cursor position in wrapped lines.
+        let (cursor_row, cursor_col) = if cursor_in_line < char_count {
+            // First check if cursor is on a consumed char
+            let consumed = consumed_chars.iter().find(|&&(ci, _)| ci == cursor_in_line);
+            if let Some(&(_, row_after)) = consumed {
+                (row_after, 0)
+            } else {
+                // Find in wrapped lines
+                let mut found = (0usize, 0usize);
+                'outer: for (row, wline) in wrapped_lines.iter().enumerate() {
+                    let mut col = 0usize;
+                    for &(ci, cw) in wline {
+                        if ci == cursor_in_line {
+                            found = (row, col);
+                            break 'outer;
+                        }
+                        col += cw;
+                    }
+                }
+                found
+            }
+        } else {
+            // Cursor at end of line
+            let last_row = total_lines - 1;
+            let last_line_w: usize = wrapped_lines[last_row].iter().map(|(_, w)| w).sum();
+            if last_line_w == width {
+                // Last line exactly fills → cursor wraps to virtual next line
+                (total_lines, 0)
+            } else {
+                // last_line_w < width: cursor at end of content
+                // last_line_w > width: content overflowed (CJK char didn't fit,
+                //   but word-wrap couldn't break it) → cursor at end, past visible area
+                (last_row, last_line_w)
+            }
+        };
+
+        (total_lines, cursor_row, cursor_col, char_count)
     }
 
     /// Scroll up by `n` lines. Leaves auto_scroll mode, anchors from current position.

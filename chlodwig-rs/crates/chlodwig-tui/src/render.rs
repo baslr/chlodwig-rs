@@ -29,8 +29,10 @@ pub(crate) fn compute_scrollbar_state(
 }
 
 pub(crate) fn ui(f: &mut Frame, app: &App) {
-    // Dynamic input height: count lines in current input (min 1, max 10) + 2 for borders
-    let input_lines = if app.input.is_empty() { 1 } else { app.input.lines().count().max(1).min(10) };
+    // Dynamic input height: count visual lines (including soft-wrap) + 2 for borders.
+    // The inner width is the frame width minus 2 border columns.
+    let inner_width = f.area().width.saturating_sub(2) as usize;
+    let input_lines = app.input_visual_line_count(inner_width);
     let input_height = (input_lines as u16) + 2;
 
     let chunks = Layout::default()
@@ -147,29 +149,23 @@ pub(crate) fn render_output(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub(crate) fn render_input(f: &mut Frame, app: &App, area: Rect) {
-    let input = Paragraph::new(app.input.as_str()).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Input (Enter to send, Ctrl+C to quit) "),
-    );
+    let input = Paragraph::new(app.input.as_str())
+        .wrap(Wrap { trim: false })
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Input (Enter to send, Ctrl+C to quit) "),
+        );
 
     f.render_widget(input, area);
 
     if !app.is_loading && app.pending_permission.is_none() {
-        // Compute cursor position for multi-line input
-        let byte_pos = app.cursor_byte_pos();
-        let text_before = &app.input[..byte_pos];
-        let (line_offset, col_offset) = if text_before.ends_with('\n') {
-            // Cursor is at the start of a new line after a newline
-            (text_before.lines().count(), 0)
-        } else {
-            let line_idx = text_before.lines().count().saturating_sub(1);
-            let col = text_before.lines().last().map(|l| l.chars().count()).unwrap_or(0);
-            (line_idx, col)
-        };
+        // Compute cursor position accounting for soft-wrap
+        let inner_width = area.width.saturating_sub(2) as usize; // borders
+        let (row, col) = app.input_cursor_visual_pos(inner_width);
         f.set_cursor_position((
-            area.x + col_offset as u16 + 1,
-            area.y + line_offset as u16 + 1,
+            area.x + col as u16 + 1,
+            area.y + row as u16 + 1,
         ));
     }
 }
