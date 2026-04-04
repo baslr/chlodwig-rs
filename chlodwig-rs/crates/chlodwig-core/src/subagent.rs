@@ -222,7 +222,14 @@ impl Tool for SubAgentTool {
             let _ = tx.send(ConversationEvent::SubAgentComplete {
                 id: agent_id.clone(),
                 result: if final_text.len() > 200 {
-                    format!("{}...", &final_text[..200])
+                    // Walk backwards from byte 200 to find a valid char boundary.
+                    // Never use &str[..N] with a hardcoded byte offset — it panics
+                    // when N lands inside a multi-byte UTF-8 character.
+                    let mut end = 200;
+                    while !final_text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}...", &final_text[..end])
                 } else {
                     final_text.clone()
                 },
@@ -786,6 +793,100 @@ mod tests {
                 );
             }
             _ => panic!("Expected text result"),
+        }
+    }
+
+    // ── TEST: UTF-8 multi-byte chars in long output don't panic ─────
+    // Regression: &final_text[..200] panics when byte 200 is inside
+    // a multi-byte char (emoji = 4 bytes, CJK = 3, umlaut = 2).
+
+    #[tokio::test]
+    async fn test_subagent_preview_truncation_utf8_no_panic() {
+        // Build a string where byte 200 lands inside a multi-byte char.
+        // "ä" is 2 bytes (0xC3 0xA4). 99 × "ä" = 198 bytes, + "a" = 199 bytes.
+        // The next "ä" spans bytes 199..201 — so byte 200 is mid-char.
+        // This is exactly what triggers the panic in &final_text[..200].
+        let long_text = "ä".repeat(99).to_string() + "a" + &"ä".repeat(60); // 199 + 120 = 319 bytes
+
+        let mock = Arc::new(MockApiClient {
+            responses: std::sync::Mutex::new(vec![
+                text_response("msg_1", &long_text),
+            ]),
+        });
+
+        let (parent_tx, mut parent_rx) = mpsc::unbounded_channel::<ConversationEvent>();
+
+        let tool = SubAgentTool::new(
+            mock,
+            "test-model".into(),
+            vec![],
+            Arc::new(AutoApprovePrompter),
+        )
+        .with_parent_event_tx(parent_tx);
+
+        let ctx = ToolContext::default();
+        // This must NOT panic
+        let result = tool
+            .call(serde_json::json!({"task": "Give me umlauts"}), &ctx)
+            .await
+            .unwrap();
+
+        // Verify the full result is intact (not truncated)
+        match &result.content {
+            ToolResultContent::Text(t) => {
+                assert!(t.contains("ä"), "Result should contain umlauts, got: {t}");
+            }
+            _ => panic!("Expected text result"),
+        }
+
+        // Verify the SubAgentComplete preview was truncated safely
+        let events: Vec<_> = std::iter::from_fn(|| parent_rx.try_recv().ok()).collect();
+        let complete_event = events.iter().find(|e| matches!(e, ConversationEvent::SubAgentComplete { .. }));
+        assert!(complete_event.is_some(), "Should have SubAgentComplete event");
+        if let ConversationEvent::SubAgentComplete { result, .. } = complete_event.unwrap() {
+            assert!(result.ends_with("..."), "Truncated preview should end with '...', got: {result}");
+            // Verify it's valid UTF-8 (implicitly: it's a String, so it is)
+            assert!(result.len() <= 210, "Preview should be roughly 200 bytes + '...', got {} bytes", result.len());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subagent_preview_truncation_emoji_boundary() {
+        // "🦀" is 4 bytes (F0 9F A6 80). 49 × "🦀" = 196 bytes.
+        // + "abcd" = 200 bytes exactly (boundary). + "🦀" starts at 200 — byte 201 is mid-emoji.
+        // But we need byte 200 mid-char: 49 × "🦀" + "abc" = 199 bytes, next "🦀" spans 199..203.
+        let long_text = "🦀".repeat(49).to_string() + "abc" + &"🦀".repeat(20); // 199 + 80 = 279 bytes
+
+        let mock = Arc::new(MockApiClient {
+            responses: std::sync::Mutex::new(vec![
+                text_response("msg_1", &long_text),
+            ]),
+        });
+
+        let (parent_tx, mut parent_rx) = mpsc::unbounded_channel::<ConversationEvent>();
+
+        let tool = SubAgentTool::new(
+            mock,
+            "test-model".into(),
+            vec![],
+            Arc::new(AutoApprovePrompter),
+        )
+        .with_parent_event_tx(parent_tx);
+
+        let ctx = ToolContext::default();
+        // This must NOT panic
+        let result = tool
+            .call(serde_json::json!({"task": "Give me crabs"}), &ctx)
+            .await
+            .unwrap();
+
+        assert!(!result.is_error);
+
+        let events: Vec<_> = std::iter::from_fn(|| parent_rx.try_recv().ok()).collect();
+        let complete_event = events.iter().find(|e| matches!(e, ConversationEvent::SubAgentComplete { .. }));
+        assert!(complete_event.is_some(), "Should have SubAgentComplete event");
+        if let ConversationEvent::SubAgentComplete { result, .. } = complete_event.unwrap() {
+            assert!(result.ends_with("..."), "Should be truncated with '...'");
         }
     }
 }

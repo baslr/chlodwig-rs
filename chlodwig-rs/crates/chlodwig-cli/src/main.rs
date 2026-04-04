@@ -5,7 +5,8 @@ use clap::Parser;
 use chlodwig_api::AnthropicClient;
 use chlodwig_core::{
     AutoApprovePrompter, ContentBlock, ConversationEvent, ConversationState, Message,
-    PermissionDecision, PermissionPrompter, Role, SystemBlock, ToolContext, ToolResultContent,
+    PermissionDecision, PermissionPrompter, Role, SessionSnapshot, SystemBlock, ToolContext,
+    ToolResultContent,
 };
 use std::io::Write;
 use std::time::Duration;
@@ -42,6 +43,10 @@ struct Cli {
     /// Skip tool permission prompts (auto-approve all)
     #[arg(long, default_value_t = true)]
     dangerously_skip_permissions: bool,
+
+    /// Resume the last saved session
+    #[arg(long, short = 'r')]
+    resume: bool,
 
     /// API base URL override
     #[arg(long, env = "ANTHROPIC_BASE_URL")]
@@ -269,10 +274,40 @@ async fn main() -> Result<()> {
         },
     };
 
+    // Resume previous session if --resume flag is set
+    let state = if cli.resume {
+        match chlodwig_core::load_session() {
+            Ok(Some(snapshot)) => {
+                let msg_count = snapshot.messages.len();
+                tracing::info!("Resuming session with {msg_count} messages");
+                eprintln!(
+                    "\x1b[32m✓ Resumed session ({msg_count} messages, saved at {})\x1b[0m",
+                    snapshot.saved_at
+                );
+                ConversationState {
+                    messages: snapshot.messages,
+                    // Use current CLI settings (model, tools, etc.) not the saved ones,
+                    // because tools/system prompt may have changed between sessions.
+                    ..state
+                }
+            }
+            Ok(None) => {
+                eprintln!("\x1b[33mNo saved session found — starting fresh.\x1b[0m");
+                state
+            }
+            Err(e) => {
+                eprintln!("\x1b[31mFailed to load session: {e} — starting fresh.\x1b[0m");
+                state
+            }
+        }
+    } else {
+        state
+    };
+
     if let Some(ref prompt) = cli.print_mode {
         run_headless(state, &client, &cli, prompt).await
     } else {
-        chlodwig_tui::run_tui_with_permissions(state, Box::new(client), cli.dangerously_skip_permissions).await
+        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions).await
     }
 }
 
@@ -362,6 +397,17 @@ async fn run_headless(
     };
 
     println!(); // final newline
+
+    // Auto-save session after headless turn
+    let snapshot = SessionSnapshot {
+        saved_at: chrono::Local::now().to_rfc3339(),
+        model: state.model.clone(),
+        messages: state.messages.clone(),
+        system_prompt: state.system_prompt.clone(),
+    };
+    if let Err(e) = chlodwig_core::save_session(&snapshot) {
+        eprintln!("\x1b[33mWarning: failed to save session: {e}\x1b[0m");
+    }
 
     if let Err(e) = loop_result {
         eprintln!("\x1b[31mConversation error: {e}\x1b[0m");

@@ -90,6 +90,10 @@ These were discovered during development. **Never regress on these:**
 
 18. **Eager `rebuild_requests_lines()` causes 100% CPU**: The Requests tab renders every SSE chunk as pretty-printed JSON with syntect syntax highlighting (`render_markdown` → regex DFA). Calling `rebuild_requests_lines()` eagerly on every `HttpRequest`, `HttpResponseMeta`, and `HttpResponseComplete` event creates an O(n²) loop — each new event re-renders ALL previous chunks. With hundreds of SSE events per request, this pegs the CPU at 100%. **Fix**: Only set `requests_dirty = true` on incoming events. Defer the actual rebuild to just before `terminal.draw()`, and only when `active_tab == 2` (Requests tab is visible). When the user is on the Prompt tab, zero rendering work happens for request data. Tested by `test_rebuild_requests_lines_is_lazy_not_eager`.
 
+19. **`tokio::spawn` silently swallows panics + `unsafe` lifetime UB**: The conversation turn was spawned via `tokio::spawn` with the `JoinHandle` immediately dropped. If the task panicked, the panic message went to stderr (invisible under alternate screen), and the event loop never learned the task died — the UI hung forever with a spinner. Additionally, `api_client` was passed via a raw pointer cast to `&'static dyn ApiClient` (`unsafe`), which is Undefined Behavior if the event loop exits before the spawned task. **Fix**: (1) Changed `api_client` from `Box<dyn ApiClient>` to `Arc<dyn ApiClient>` — eliminates the `unsafe` block entirely. (2) Store the `JoinHandle` and poll `is_finished()` each loop iteration; on panic, extract the panic message, log it via `tracing::error!`, and display it in the UI. (3) Always send `TurnComplete` after the task finishes (even after `Error`), consistent with the `/compact` handler. (4) Added `tracing::error!` before sending `ConversationEvent::Error` so conversation failures appear in the debug log. Tested by `test_api_client_is_arc_not_box`, `test_run_tui_is_arc_not_box`.
+
+20. **macOS Terminal sends Alt+b/Alt+f instead of Alt+Left/Alt+Right**: macOS Terminal (and many others with default settings) sends `ESC b` / `ESC f` for Option+Left / Option+Right. crossterm decodes these as `KeyCode::Char('b')` / `KeyCode::Char('f')` with `KeyModifiers::ALT`. Without explicit handling, the general `Char(c)` arm inserts a literal 'b' or 'f' into the input. **Fix**: Added dedicated match arms for `Char('b')` + ALT → `move_cursor_word_left()`, `Char('f')` + ALT → `move_cursor_word_right()`, and `Char('d')` + ALT → `delete_word_forward()` (Emacs binding), all placed before the general `Char(c)` arm. Tested by `test_event_loop_has_alt_b_word_left_binding`, `test_event_loop_has_alt_f_word_right_binding`, `test_event_loop_has_alt_d_delete_word_forward_binding`, `test_alt_b_does_not_insert_b`, `test_alt_f_does_not_insert_f`.
+
 ## Compact Instructions
 
 When summarizing the conversation, focus on:
@@ -105,8 +109,32 @@ When summarizing the conversation, focus on:
 cargo test --workspace          # Run all tests (ALWAYS do this)
 cargo build --release           # Release build
 cargo run --release             # Run TUI
+cargo run --release -- --resume # Resume last saved session
 cargo run --release -- --print "prompt"  # Headless mode
 ```
+
+### TUI Commands
+
+| Command | Effect |
+|---------|--------|
+| `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
+| `/compact [instructions]` | Compact conversation history |
+| `/resume` | Load the last saved session from disk |
+| `! <cmd>` | Execute shell command |
+| `exit`, `quit`, `/exit`, `/quit` | Exit |
+
+## Session Persistence
+
+Sessions are automatically saved to `~/.chlodwig-rs/session.json` after:
+- Every completed conversation turn (`TurnComplete`)
+- Every completed compaction (`CompactionComplete`)
+- Every `/clear` (saves empty session)
+
+The save is **asynchronous** (via `tokio::spawn` + `spawn_blocking`) so it never blocks the event loop. Writes use atomic rename (write to `.tmp`, then rename) to prevent corruption on crash.
+
+**Resume**: Use `--resume` CLI flag or `/resume` TUI command. When resuming, only messages are restored — model, tools, and system prompt use the current CLI settings (they may have changed between sessions).
+
+**Implementation**: `chlodwig-core/src/session.rs` — `SessionSnapshot`, `save_session()`, `load_session()`, `session_path()`.
 
 ## Self-Improvement Protocol
 

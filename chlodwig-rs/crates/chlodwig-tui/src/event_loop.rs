@@ -2,14 +2,14 @@
 
 use chlodwig_core::{
     ApiClient, ConversationEvent, ConversationState, PermissionDecision, PermissionPrompter,
-    ToolResultContent,
+    SessionSnapshot, ToolResultContent,
 };
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, Terminal};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -345,16 +345,48 @@ extern "C" fn sigint_handler(_sig: libc::c_int) {
     }
 }
 
+/// Trigger an asynchronous session save.
+///
+/// Clones the current messages + system prompt from `ConversationState`,
+/// builds a `SessionSnapshot`, and writes it to disk in a blocking task
+/// (so the event loop is never stalled by I/O).
+fn trigger_session_save(
+    state: &std::sync::Arc<tokio::sync::Mutex<ConversationState>>,
+    model: &str,
+) {
+    let state_clone = state.clone();
+    let model = model.to_string();
+    tokio::spawn(async move {
+        let guard = state_clone.lock().await;
+        let snapshot = SessionSnapshot {
+            saved_at: chrono::Local::now().to_rfc3339(),
+            model,
+            messages: guard.messages.clone(),
+            system_prompt: guard.system_prompt.clone(),
+        };
+        drop(guard); // release lock before blocking I/O
+
+        // Write to disk on the blocking thread pool so we never block the
+        // async runtime (session.json can be several MB after long sessions).
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(e) = chlodwig_core::save_session(&snapshot) {
+                tracing::warn!("Failed to auto-save session: {e}");
+            }
+        })
+        .await;
+    });
+}
+
 pub async fn run_tui(
     initial_state: ConversationState,
-    api_client: Box<dyn ApiClient>,
+    api_client: Arc<dyn ApiClient>,
 ) -> anyhow::Result<()> {
     run_tui_with_permissions(initial_state, api_client, false).await
 }
 
 pub async fn run_tui_with_permissions(
     initial_state: ConversationState,
-    api_client: Box<dyn ApiClient>,
+    api_client: Arc<dyn ApiClient>,
     bypass_permissions: bool,
 ) -> anyhow::Result<()> {
     // Install panic hook before entering raw mode — ensures terminal is
@@ -393,11 +425,23 @@ pub async fn run_tui_with_permissions(
 
     let model_name = initial_state.model.clone();
     let system_prompt_blocks = initial_state.system_prompt.clone();
+    let initial_messages = initial_state.messages.clone();
     let mut app = App::new(model_name);
 
     // Store system prompt blocks for the Sys-Prompt tab
     app.system_prompt_blocks = system_prompt_blocks;
     app.rebuild_sys_prompt_lines();
+
+    // If initial_state contains messages (e.g. from --resume), restore them
+    // as display blocks so the user can scroll back through the conversation.
+    if !initial_messages.is_empty() {
+        let msg_count = initial_messages.len();
+        app.restore_messages_to_display(&initial_messages);
+        app.display_blocks.push(DisplayBlock::SystemMessage(
+            format!("✓ Resumed session ({msg_count} messages)"),
+        ));
+        app.mark_dirty();
+    }
 
     // Channels
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ConversationEvent>();
@@ -414,6 +458,7 @@ pub async fn run_tui_with_permissions(
     let mut needs_redraw = true;
     let mut redraw_count: u64 = 0;
     let mut last_resize = std::time::Instant::now();
+    let mut conversation_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     tracing::info!(
         model = app.model.as_str(),
@@ -549,6 +594,56 @@ pub async fn run_tui_with_permissions(
                                 let mut guard = state_clone.lock().await;
                                 guard.messages.clear();
                             });
+                            // Do NOT auto-save here — keeps the previous session
+                            // intact so the user can /resume to get it back.
+                            break; // exit inner drain loop
+                        }
+
+                        // /resume command — load the last saved session
+                        if trimmed == "/resume" {
+                            match chlodwig_core::load_session() {
+                                Ok(Some(snapshot)) => {
+                                    let msg_count = snapshot.messages.len();
+                                    // Restore display blocks so the user can scroll back
+                                    app.clear_conversation();
+                                    app.restore_messages_to_display(&snapshot.messages);
+                                    app.display_blocks.push(DisplayBlock::SystemMessage(
+                                        format!(
+                                            "✓ Resumed session ({msg_count} messages, saved at {})",
+                                            snapshot.saved_at
+                                        ),
+                                    ));
+                                    // Restore messages into ConversationState
+                                    let state_clone = state.clone();
+                                    tokio::spawn(async move {
+                                        let mut guard = state_clone.lock().await;
+                                        guard.messages = snapshot.messages;
+                                    });
+                                }
+                                Ok(None) => {
+                                    app.display_blocks.push(DisplayBlock::SystemMessage(
+                                        "No saved session found.".into(),
+                                    ));
+                                }
+                                Err(e) => {
+                                    app.display_blocks.push(DisplayBlock::Error(
+                                        format!("Failed to load session: {e}"),
+                                    ));
+                                }
+                            }
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
+                            break; // exit inner drain loop
+                        }
+
+                        // /save command — manually persist the current session
+                        if trimmed == "/save" {
+                            trigger_session_save(&state, &app.model);
+                            app.display_blocks.push(DisplayBlock::SystemMessage(
+                                "✓ Session saved.".into(),
+                            ));
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
                             break; // exit inner drain loop
                         }
 
@@ -565,17 +660,14 @@ pub async fn run_tui_with_permissions(
                             app.mark_dirty();
 
                             let state_clone = state.clone();
-                            let api_clone = api_client.as_ref() as *const dyn ApiClient;
+                            let api_clone = api_client.clone();
                             let tx = event_tx.clone();
-
-                            // SAFETY: api_client lives for the duration of the outer loop
-                            let api_ref: &'static dyn ApiClient = unsafe { &*api_clone };
 
                             tokio::spawn(async move {
                                 let mut state_guard = state_clone.lock().await;
                                 if let Err(e) = chlodwig_core::compact_conversation(
                                     &mut state_guard,
-                                    api_ref,
+                                    api_clone.as_ref(),
                                     &tx,
                                     custom_instructions.as_deref(),
                                 )
@@ -677,14 +769,11 @@ pub async fn run_tui_with_permissions(
 
                         // Spawn conversation turn
                         let state_clone = state.clone();
-                        let api_clone = api_client.as_ref() as *const dyn ApiClient;
+                        let api_clone = api_client.clone();
                         let perm_clone = permission_prompter.clone();
                         let tx = event_tx.clone();
 
-                        // SAFETY: api_client lives for the duration of the outer loop
-                        let api_ref: &'static dyn ApiClient = unsafe { &*api_clone };
-
-                        tokio::spawn(async move {
+                        let handle = tokio::spawn(async move {
                             let mut state_guard = state_clone.lock().await;
 
                             // Auto-compact if context is too large
@@ -694,7 +783,7 @@ pub async fn run_tui_with_permissions(
                                 );
                                 if let Err(e) = chlodwig_core::compact_conversation(
                                     &mut state_guard,
-                                    api_ref,
+                                    api_clone.as_ref(),
                                     &tx,
                                     None,
                                 )
@@ -711,15 +800,18 @@ pub async fn run_tui_with_permissions(
                             });
                             if let Err(e) = chlodwig_core::run_turn(
                                 &mut state_guard,
-                                api_ref,
+                                api_clone.as_ref(),
                                 perm_clone.as_ref(),
                                 &tx,
                             )
                             .await
                             {
+                                tracing::error!("Conversation turn failed: {e}");
                                 let _ = tx.send(ConversationEvent::Error(e.to_string()));
                             }
+                            let _ = tx.send(ConversationEvent::TurnComplete);
                         });
+                        conversation_handle = Some(handle);
                     }
 
                     // Permission dialog keys
@@ -734,6 +826,59 @@ pub async fn run_tui_with_permissions(
                     KeyCode::Char('a') if app.pending_permission.is_some() => {
                         let perm = app.pending_permission.take().unwrap();
                         let _ = perm.respond.send(PermissionDecision::AllowAlways);
+                    }
+
+                    // Word-jump: Alt+Left / Option+Left
+                    KeyCode::Left
+                        if matches!(app.focus, Focus::Input)
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.move_cursor_word_left();
+                    }
+                    // Word-jump: Alt+Right / Option+Right
+                    KeyCode::Right
+                        if matches!(app.focus, Focus::Input)
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.move_cursor_word_right();
+                    }
+                    // Word-jump: Alt+b (macOS Terminal sends ESC b for Option+Left)
+                    KeyCode::Char('b')
+                        if matches!(app.focus, Focus::Input)
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.move_cursor_word_left();
+                    }
+                    // Word-jump: Alt+f (macOS Terminal sends ESC f for Option+Right)
+                    KeyCode::Char('f')
+                        if matches!(app.focus, Focus::Input)
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.move_cursor_word_right();
+                    }
+                    // Delete word backwards: Alt+Backspace / Option+Backspace
+                    KeyCode::Backspace
+                        if !app.is_loading
+                            && app.pending_permission.is_none()
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.delete_word_back();
+                    }
+                    // Delete word forwards: Alt+Delete / fn+Option+Backspace on macOS
+                    KeyCode::Delete
+                        if !app.is_loading
+                            && app.pending_permission.is_none()
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.delete_word_forward();
+                    }
+                    // Delete word forwards: Alt+d (Emacs binding, macOS Terminal sends ESC d)
+                    KeyCode::Char('d')
+                        if !app.is_loading
+                            && app.pending_permission.is_none()
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.delete_word_forward();
                     }
 
                     // Text input
@@ -854,8 +999,8 @@ pub async fn run_tui_with_permissions(
                     }
 
                     _ => {}
-                }
-            }
+                } // match key.code
+            } // Event::Key
             Event::Resize(_, _) => {
                 // Don't set needs_redraw here — just record that a resize happened.
                 // The redraw will happen after the drain loop finishes, so we only
@@ -952,6 +1097,8 @@ pub async fn run_tui_with_permissions(
                 ConversationEvent::TurnComplete => {
                     app.is_loading = false;
                     app.streaming_buffer.clear();
+                    // Auto-save session after every completed turn
+                    trigger_session_save(&state, &app.model);
                 }
                 ConversationEvent::Error(e) => {
                     app.display_blocks.push(DisplayBlock::Error(e));
@@ -1025,6 +1172,8 @@ pub async fn run_tui_with_permissions(
                     summary_tokens,
                 } => {
                     app.on_compaction_complete(old_messages, summary_tokens);
+                    // Auto-save session after compaction (messages were replaced)
+                    trigger_session_save(&state, &app.model);
                 }
                 _ => {}
             }
@@ -1040,6 +1189,43 @@ pub async fn run_tui_with_permissions(
                 respond: req.respond,
             });
             needs_redraw = true;
+        }
+
+        // Check if the conversation task panicked (JoinHandle monitoring).
+        // If the spawned task panicked, the JoinHandle resolves to Err(JoinError).
+        // Without this check, a panic in tokio::spawn is completely silent
+        // (alternate screen hides stderr, and the event loop never learns the task died).
+        if let Some(ref handle) = conversation_handle {
+            if handle.is_finished() {
+                // Take ownership so we can inspect it
+                let handle = conversation_handle.take().unwrap();
+                match handle.await {
+                    Ok(()) => {
+                        // Normal completion — task already sent TurnComplete
+                    }
+                    Err(join_error) => {
+                        let msg = if join_error.is_panic() {
+                            let panic_info = join_error.into_panic();
+                            let panic_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                                s.clone()
+                            } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                (*s).to_string()
+                            } else {
+                                "unknown panic payload".to_string()
+                            };
+                            tracing::error!("Conversation task panicked: {panic_msg}");
+                            format!("Internal error: conversation task panicked: {panic_msg}")
+                        } else {
+                            tracing::error!("Conversation task cancelled");
+                            "Internal error: conversation task was cancelled".to_string()
+                        };
+                        app.display_blocks.push(DisplayBlock::Error(msg));
+                        app.is_loading = false;
+                        app.streaming_buffer.clear();
+                        needs_redraw = true;
+                    }
+                }
+            }
         }
 
         // Tick spinner animation while loading (every 100ms poll cycle)

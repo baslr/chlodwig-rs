@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ansi_to_tui::IntoText;
-use chlodwig_core::SystemBlock;
+use chlodwig_core::{ContentBlock, Message, Role, SystemBlock, ToolResultContent};
 
 use crate::markdown;
 use crate::rendered_line::RenderedLine;
@@ -430,6 +430,139 @@ impl App {
         // If user has scrolled up (auto_scroll=false), do nothing.
     }
 
+    // ── Word-wise cursor movement (Option+Arrow / Alt+Arrow) ───────
+
+    /// Classify a character into a word-boundary category.
+    /// Three categories: whitespace, alphanumeric (includes '_'), punctuation/symbol.
+    /// Word boundaries occur between different categories.
+    fn char_category(c: char) -> u8 {
+        if c.is_whitespace() {
+            0
+        } else if c.is_alphanumeric() || c == '_' {
+            1
+        } else {
+            2 // punctuation / symbols
+        }
+    }
+
+    /// Move cursor one word to the left (Option+Left / Alt+Left).
+    /// Behavior matches macOS text editors:
+    /// 1. Skip any whitespace immediately before the cursor
+    /// 2. Then skip all characters of the same category (word or punctuation)
+    pub(crate) fn move_cursor_word_left(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let chars: Vec<char> = self.input.chars().collect();
+        let mut pos = self.cursor;
+
+        // Phase 1: skip whitespace backwards
+        while pos > 0 && chars[pos - 1].is_whitespace() {
+            pos -= 1;
+        }
+
+        // Phase 2: skip same-category characters backwards
+        if pos > 0 {
+            let cat = Self::char_category(chars[pos - 1]);
+            while pos > 0 && Self::char_category(chars[pos - 1]) == cat {
+                pos -= 1;
+            }
+        }
+
+        self.cursor = pos;
+    }
+
+    /// Move cursor one word to the right (Option+Right / Alt+Right).
+    /// Behavior matches macOS text editors:
+    /// 1. Skip all characters of the same category (word or punctuation) forward
+    /// 2. Then skip any whitespace
+    pub(crate) fn move_cursor_word_right(&mut self) {
+        let chars: Vec<char> = self.input.chars().collect();
+        let len = chars.len();
+        if self.cursor >= len {
+            return;
+        }
+        let mut pos = self.cursor;
+
+        // If currently on whitespace, skip it first
+        if chars[pos].is_whitespace() {
+            while pos < len && chars[pos].is_whitespace() {
+                pos += 1;
+            }
+            // Then skip the next word/punctuation group
+            if pos < len {
+                let cat = Self::char_category(chars[pos]);
+                while pos < len && Self::char_category(chars[pos]) == cat {
+                    pos += 1;
+                }
+            }
+        } else {
+            // On a word/punctuation char: skip to end of current group
+            let cat = Self::char_category(chars[pos]);
+            while pos < len && Self::char_category(chars[pos]) == cat {
+                pos += 1;
+            }
+        }
+
+        self.cursor = pos;
+    }
+
+    /// Delete the word before the cursor (Alt+Backspace / Option+Backspace).
+    /// Uses the same boundary logic as `move_cursor_word_left()`.
+    pub(crate) fn delete_word_back(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let old_cursor = self.cursor;
+        self.move_cursor_word_left();
+        let new_cursor = self.cursor;
+
+        // Delete chars between new_cursor and old_cursor (as byte range)
+        let start_byte = self.input
+            .char_indices()
+            .nth(new_cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len());
+        let end_byte = self.input
+            .char_indices()
+            .nth(old_cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len());
+
+        self.input.drain(start_byte..end_byte);
+        // cursor is already at new_cursor from move_cursor_word_left()
+    }
+
+    /// Delete the word after the cursor (Alt+Delete / fn+Option+Backspace on macOS).
+    /// Uses the same boundary logic as `move_cursor_word_right()`.
+    pub(crate) fn delete_word_forward(&mut self) {
+        let len = self.input_char_count();
+        if self.cursor >= len {
+            return;
+        }
+        let old_cursor = self.cursor;
+
+        // Temporarily move cursor right to find the word boundary
+        self.move_cursor_word_right();
+        let end_cursor = self.cursor;
+
+        // Delete chars between old_cursor and end_cursor (as byte range)
+        let start_byte = self.input
+            .char_indices()
+            .nth(old_cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len());
+        let end_byte = self.input
+            .char_indices()
+            .nth(end_cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len());
+
+        self.input.drain(start_byte..end_byte);
+        // Restore cursor to original position (everything after was deleted/shifted)
+        self.cursor = old_cursor;
+    }
+
     /// Convert char-based cursor position to byte index in `self.input`.
     pub(crate) fn cursor_byte_pos(&self) -> usize {
         self.input
@@ -565,6 +698,96 @@ impl App {
         ));
         self.mark_dirty();
         self.rebuild_lines();
+    }
+
+    /// Restore saved messages into `display_blocks` so the user can scroll
+    /// back through the conversation after `/resume` or `--resume`.
+    ///
+    /// Converts each `Message` + `ContentBlock` into the appropriate
+    /// `DisplayBlock` variant, matching what the event loop produces during
+    /// live streaming.
+    pub(crate) fn restore_messages_to_display(&mut self, messages: &[Message]) {
+        for msg in messages {
+            match msg.role {
+                Role::User => {
+                    for block in &msg.content {
+                        match block {
+                            ContentBlock::Text { text } => {
+                                self.display_blocks
+                                    .push(DisplayBlock::UserMessage(text.clone()));
+                            }
+                            ContentBlock::ToolResult {
+                                content, is_error, ..
+                            } => {
+                                let preview = match content {
+                                    ToolResultContent::Text(t) => {
+                                        Self::truncate_preview(t, 500)
+                                    }
+                                    ToolResultContent::Blocks(blocks) => {
+                                        let text: String = blocks
+                                            .iter()
+                                            .filter_map(|b| match b {
+                                                chlodwig_core::ToolResultBlock::Text { text } => {
+                                                    Some(text.as_str())
+                                                }
+                                                _ => None,
+                                            })
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        Self::truncate_preview(&text, 500)
+                                    }
+                                };
+                                self.display_blocks.push(DisplayBlock::ToolResult {
+                                    is_error: is_error.unwrap_or(false),
+                                    preview,
+                                });
+                            }
+                            // Image blocks in user messages are not displayed in restore
+                            _ => {}
+                        }
+                    }
+                }
+                Role::Assistant => {
+                    for block in &msg.content {
+                        match block {
+                            ContentBlock::Text { text } => {
+                                self.display_blocks
+                                    .push(DisplayBlock::AssistantText(text.clone()));
+                            }
+                            ContentBlock::ToolUse { name, input, .. } => {
+                                let input_preview = Self::truncate_preview(
+                                    &serde_json::to_string(input).unwrap_or_default(),
+                                    200,
+                                );
+                                self.display_blocks.push(DisplayBlock::ToolCall {
+                                    name: name.clone(),
+                                    input_preview,
+                                });
+                            }
+                            ContentBlock::Thinking { thinking } => {
+                                self.display_blocks
+                                    .push(DisplayBlock::Thinking(thinking.clone()));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        self.mark_dirty();
+    }
+
+    /// Truncate a string at a safe UTF-8 char boundary.
+    /// Gotcha #16: never slice at a hardcoded byte offset — always use `is_char_boundary()`.
+    fn truncate_preview(s: &str, max_bytes: usize) -> String {
+        if s.len() <= max_bytes {
+            return s.to_string();
+        }
+        let mut end = max_bytes;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 
     /// Build rendered lines for the system prompt view from stored blocks.

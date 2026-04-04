@@ -22,3 +22,6 @@ syntect = { version = "5.3", default-features = false, features = ["default-fanc
 ansi-to-tui = "8"
 dirs = "6"
 libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

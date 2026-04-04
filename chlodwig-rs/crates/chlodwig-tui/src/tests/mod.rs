@@ -78,3 +78,7 @@ mod word_wrap;
 mod timer_compaction;
 mod signal_handler;
 mod tool_result_truncation;
+mod word_jump;
+mod spawn_robustness;
+mod session_save;
+mod session_restore_display;

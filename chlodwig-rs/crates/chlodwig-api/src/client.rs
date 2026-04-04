@@ -116,6 +116,9 @@ fn parse_sse_stream(
                             Err(e) => {
                                 tracing::debug!("SSE event type: '{}', raw data: {}", _current_event_type, &data[..data.len().min(500)]);
                                 tracing::warn!("SSE parse error: {} for data: {}", e, &data[..data.len().min(200)]);
+                                yield Err(ApiError::SseParseError(
+                                    format!("{e}: {}", &data[..data.len().min(200)])
+                                ));
                             }
                         }
                     }
@@ -236,5 +239,34 @@ mod tests {
         assert!(matches!(events[3], (_, SseEvent::ContentBlockStop { .. })));
         assert!(matches!(events[4], (_, SseEvent::MessageDelta { .. })));
         assert!(matches!(events[5], (_, SseEvent::MessageStop)));
+    }
+
+    #[tokio::test]
+    async fn test_parse_malformed_event_yields_error() {
+        // An SSE event with invalid JSON should yield Err(SseParseError), not be silently dropped.
+        let raw = concat!(
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{INVALID JSON}}\n\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n\n",
+        );
+
+        let byte_stream =
+            futures::stream::once(async move { Ok::<_, reqwest::Error>(Bytes::from(raw)) });
+
+        let events: Vec<_> = parse_sse_stream(byte_stream).collect().await;
+
+        // Should have 2 events: 1 error + 1 success
+        assert_eq!(events.len(), 2, "Should yield error for malformed + valid MessageStop, got: {:?}", events);
+        assert!(
+            matches!(&events[0], Err(ApiError::SseParseError(_))),
+            "First event should be SseParseError, got: {:?}",
+            events[0]
+        );
+        assert!(
+            matches!(&events[1], Ok((_, SseEvent::MessageStop))),
+            "Second event should be MessageStop, got: {:?}",
+            events[1]
+        );
     }
 }

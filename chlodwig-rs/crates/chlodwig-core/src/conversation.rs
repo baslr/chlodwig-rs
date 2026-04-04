@@ -551,7 +551,16 @@ pub async fn run_turn(
         let mut blocks: HashMap<u32, BlockAcc> = HashMap::new();
 
         while let Some(result) = stream.next().await {
-            let (raw_data, event) = result?;
+            let (raw_data, event) = match result {
+                Ok(pair) => pair,
+                Err(ApiError::SseParseError(msg)) => {
+                    // Malformed SSE event — log and skip, don't abort the stream.
+                    // Other errors (Connection, HttpError, etc.) are still fatal.
+                    tracing::warn!("Skipping malformed SSE event: {msg}");
+                    continue;
+                }
+                Err(e) => return Err(ConversationLoopError::Api(e)),
+            };
             let _ = event_tx.send(ConversationEvent::SseRawChunk(raw_data));
             match event {
                 SseEvent::MessageStart { message } => {

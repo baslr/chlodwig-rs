@@ -101,7 +101,7 @@ Reine Bestandsaufnahme — keine Änderungen, nur Befunde.
 | Problem | Wo |
 |---------|----|
 | `format_summary()` kompiliert 3 Regexe bei **jedem Aufruf** | `conversation.rs` L326–342 |
-| `unsafe &'static`-Cast fuer `api_client` — 2x dupliziert, potenziell unsound | `event_loop.rs` L565, L678 |
+| ~~`unsafe &'static`-Cast fuer `api_client`~~ — **GEFIXT**: durch `Arc<dyn ApiClient>` ersetzt | `event_loop.rs` |
 | Inkonsistente Error-Handling: File-not-found ist `Err(ToolError)` in edit/read, aber `Ok(is_error:true)` in glob/listdir | Tools-Crate |
 | Edit/Read/Write validieren nicht, ob `file_path` absolut ist | edit.rs, read.rs, write.rs |
 | `RenderedLine::clone()` fuer jede Zeile die passt (Common Case) — unnoetige Allokation | `rendered_line.rs` L62 |
