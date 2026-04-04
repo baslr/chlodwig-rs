@@ -19,12 +19,38 @@ pub(crate) enum DisplayBlock {
         is_error: bool,
         preview: String,
     },
+    /// Farbige Diff-Anzeige für Edit-ToolCalls.
+    EditDiff {
+        file_path: String,
+        diff_lines: Vec<DiffLine>,
+        /// Language token for syntax highlighting (e.g. "rust", "python").
+        lang: String,
+    },
     Error(String),
     SystemMessage(String),
     BashOutput {
         command: String,
         raw_output: String,
     },
+}
+
+/// A single line in an Edit diff display.
+#[derive(Debug, Clone)]
+pub(crate) struct DiffLine {
+    pub(crate) line_num: usize,
+    pub(crate) kind: DiffKind,
+    pub(crate) text: String,
+}
+
+/// Kind of diff line: removed, added, or unchanged context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiffKind {
+    /// Removed line (red, prefix "-")
+    Removal,
+    /// Added line (green, prefix "+")
+    Addition,
+    /// Unchanged context line (gray, prefix " ")
+    Context,
 }
 
 pub(crate) struct PendingPermission {

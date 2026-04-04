@@ -394,6 +394,139 @@ fn trigger_constants_save(constants: chlodwig_core::ConstantsSnapshot) {
     });
 }
 
+// ── Edit-Diff helpers ────────────────────────────────────────────────
+
+/// Number of context lines to show before and after the changed region.
+const DIFF_CONTEXT: usize = 2;
+
+/// Map a file path to a syntect language token based on its extension.
+pub(crate) fn lang_from_path(path: &str) -> &'static str {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    match ext {
+        "rs" => "rust",
+        "py" | "pyw" => "python",
+        "js" | "mjs" | "cjs" => "javascript",
+        "ts" | "mts" | "cts" => "typescript",
+        "tsx" | "jsx" => "javascript",
+        "rb" => "ruby",
+        "go" => "go",
+        "java" => "java",
+        "kt" | "kts" => "kotlin",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => "c++",
+        "cs" => "c#",
+        "swift" => "swift",
+        "sh" | "bash" | "zsh" | "fish" => "bash",
+        "json" | "jsonc" => "json",
+        "yaml" | "yml" => "yaml",
+        "toml" => "toml",
+        "xml" | "svg" | "html" | "htm" => "html",
+        "css" | "scss" | "less" => "css",
+        "sql" => "sql",
+        "md" | "markdown" => "markdown",
+        "r" | "R" => "r",
+        "lua" => "lua",
+        "pl" | "pm" => "perl",
+        "php" => "php",
+        "ex" | "exs" => "elixir",
+        "erl" | "hrl" => "erlang",
+        "hs" => "haskell",
+        "ml" | "mli" => "ocaml",
+        "clj" | "cljs" | "cljc" => "clojure",
+        "scala" | "sc" => "scala",
+        "tf" | "hcl" => "hcl",
+        "dockerfile" | "Dockerfile" => "bash",
+        _ => "",
+    }
+}
+
+/// Build a `DisplayBlock::EditDiff` from an Edit tool's JSON input.
+///
+/// Reads the file to determine the starting line number and includes
+/// context lines before and after the changed region.
+/// Returns `None` if required fields (`file_path`, `old_string`, `new_string`) are missing.
+pub(crate) fn build_edit_diff(input: &serde_json::Value) -> Option<DisplayBlock> {
+    let file_path = input["file_path"].as_str()?;
+    let old_string = input["old_string"].as_str()?;
+    let new_string = input["new_string"].as_str()?;
+
+    let lang = lang_from_path(file_path).to_string();
+
+    // Read file to find the line number where old_string starts.
+    // At this point the edit has NOT been executed yet (ToolUseStart comes before execution).
+    let file_content = std::fs::read_to_string(file_path).ok();
+    let all_lines: Vec<&str> = file_content
+        .as_deref()
+        .map(|c| c.lines().collect())
+        .unwrap_or_default();
+
+    let start_line = file_content
+        .as_deref()
+        .and_then(|content| {
+            content.find(old_string).map(|byte_pos| {
+                content[..byte_pos].lines().count() + 1 // 1-based
+            })
+        })
+        .unwrap_or(1);
+
+    let old_line_count = old_string.lines().count().max(1);
+
+    let mut diff_lines = Vec::new();
+
+    // Context lines before the change (up to DIFF_CONTEXT)
+    let ctx_start = start_line.saturating_sub(1).saturating_sub(DIFF_CONTEXT); // 0-based
+    let change_start_0 = start_line.saturating_sub(1); // 0-based
+    for i in ctx_start..change_start_0 {
+        if let Some(line_text) = all_lines.get(i) {
+            diff_lines.push(DiffLine {
+                line_num: i + 1,
+                kind: DiffKind::Context,
+                text: line_text.to_string(),
+            });
+        }
+    }
+
+    // Removed lines (old_string)
+    for (i, line) in old_string.lines().enumerate() {
+        diff_lines.push(DiffLine {
+            line_num: start_line + i,
+            kind: DiffKind::Removal,
+            text: line.to_string(),
+        });
+    }
+
+    // Added lines (new_string)
+    for (i, line) in new_string.lines().enumerate() {
+        diff_lines.push(DiffLine {
+            line_num: start_line + i,
+            kind: DiffKind::Addition,
+            text: line.to_string(),
+        });
+    }
+
+    // Context lines after the change (up to DIFF_CONTEXT)
+    let after_start_0 = change_start_0 + old_line_count; // 0-based
+    let after_end_0 = (after_start_0 + DIFF_CONTEXT).min(all_lines.len());
+    for i in after_start_0..after_end_0 {
+        if let Some(line_text) = all_lines.get(i) {
+            diff_lines.push(DiffLine {
+                line_num: i + 1,
+                kind: DiffKind::Context,
+                text: line_text.to_string(),
+            });
+        }
+    }
+
+    Some(DisplayBlock::EditDiff {
+        file_path: file_path.to_string(),
+        diff_lines,
+        lang,
+    })
+}
+
 pub async fn run_tui(
     initial_state: ConversationState,
     api_client: Arc<dyn ApiClient>,
@@ -1152,14 +1285,25 @@ pub async fn run_tui_with_permissions(
                     app.display_blocks.push(DisplayBlock::AssistantText(text));
                 }
                 ConversationEvent::ToolUseStart { name, input, .. } => {
-                    if !input.is_null() {
+                    if name == "Edit" {
+                        if let Some(diff_block) = build_edit_diff(&input) {
+                            app.display_blocks.push(diff_block);
+                        } else if !input.is_null() {
+                            // Fallback: missing fields → generic display
+                            app.display_blocks.push(DisplayBlock::ToolCall {
+                                name,
+                                input_preview: serde_json::to_string_pretty(&input)
+                                    .unwrap_or_default(),
+                            });
+                        }
+                    } else if !input.is_null() {
                         app.display_blocks.push(DisplayBlock::ToolCall {
                             name,
                             input_preview: serde_json::to_string_pretty(&input)
                                 .unwrap_or_default(),
                         });
-                        app.scroll_to_bottom_if_auto();
                     }
+                    app.scroll_to_bottom_if_auto();
                 }
                 ConversationEvent::ToolResult {
                     output, is_error, ..

@@ -741,6 +741,65 @@ impl App {
                     }
                     logical_lines.push(RenderedLine::plain(""));
                 }
+                DisplayBlock::EditDiff { file_path, diff_lines, lang } => {
+                    // Header with file path
+                    logical_lines.push(RenderedLine::styled(
+                        &format!("── Edit: {file_path} ──"),
+                        Style::default().fg(Color::Yellow),
+                    ));
+
+                    // Max line number width for alignment
+                    let max_line_num = diff_lines.iter()
+                        .map(|dl| dl.line_num)
+                        .max()
+                        .unwrap_or(0);
+                    let num_width = if max_line_num == 0 { 1 } else {
+                        (max_line_num as f64).log10().floor() as usize + 1
+                    };
+
+                    for dl in diff_lines {
+                        let (marker, marker_color) = match dl.kind {
+                            DiffKind::Removal  => ("-", Color::Red),
+                            DiffKind::Addition => ("+", Color::Green),
+                            DiffKind::Context  => (" ", Color::DarkGray),
+                        };
+
+                        // Build the gutter: " {line_num} │{marker} "
+                        let gutter = format!(
+                            " {:>width$} │{marker} ",
+                            dl.line_num,
+                            width = num_width,
+                        );
+
+                        // Syntax-highlight the code portion
+                        let highlighted = markdown::highlight_code(lang, &dl.text);
+                        // highlight_code returns at least one RenderedLine
+                        let code_spans = if let Some(rl) = highlighted.first() {
+                            rl.spans.clone()
+                        } else {
+                            vec![(dl.text.clone(), Style::default())]
+                        };
+
+                        // Combine gutter + code spans into one RenderedLine
+                        let mut spans = Vec::with_capacity(1 + code_spans.len());
+                        spans.push((gutter, Style::default().fg(marker_color)));
+                        // For removal/addition, tint the code background
+                        let bg_tint = match dl.kind {
+                            DiffKind::Removal  => Some(Color::Rgb(60, 20, 20)),
+                            DiffKind::Addition => Some(Color::Rgb(20, 50, 20)),
+                            DiffKind::Context  => None,
+                        };
+                        for (text, mut style) in code_spans {
+                            if let Some(bg) = bg_tint {
+                                style = style.bg(bg);
+                            }
+                            spans.push((text, style));
+                        }
+
+                        logical_lines.push(RenderedLine { spans, wrap_prefix: None });
+                    }
+                    logical_lines.push(RenderedLine::plain(""));
+                }
             }
         }
 
@@ -1399,14 +1458,31 @@ impl App {
                                     .push(DisplayBlock::AssistantText(text.clone()));
                             }
                             ContentBlock::ToolUse { name, input, .. } => {
-                                let input_preview = Self::truncate_preview(
-                                    &serde_json::to_string(input).unwrap_or_default(),
-                                    200,
-                                );
-                                self.display_blocks.push(DisplayBlock::ToolCall {
-                                    name: name.clone(),
-                                    input_preview,
-                                });
+                                if name == "Edit" {
+                                    // Try to build a diff display (file may no longer exist
+                                    // on restore, so fall back to generic ToolCall).
+                                    if let Some(diff_block) = crate::event_loop::build_edit_diff(input) {
+                                        self.display_blocks.push(diff_block);
+                                    } else {
+                                        let input_preview = Self::truncate_preview(
+                                            &serde_json::to_string(input).unwrap_or_default(),
+                                            200,
+                                        );
+                                        self.display_blocks.push(DisplayBlock::ToolCall {
+                                            name: name.clone(),
+                                            input_preview,
+                                        });
+                                    }
+                                } else {
+                                    let input_preview = Self::truncate_preview(
+                                        &serde_json::to_string(input).unwrap_or_default(),
+                                        200,
+                                    );
+                                    self.display_blocks.push(DisplayBlock::ToolCall {
+                                        name: name.clone(),
+                                        input_preview,
+                                    });
+                                }
                             }
                             ContentBlock::Thinking { thinking } => {
                                 self.display_blocks
@@ -1883,6 +1959,7 @@ impl App {
                 DisplayBlock::Thinking(_) => "Thinking",
                 DisplayBlock::ToolCall { .. } => "ToolCall",
                 DisplayBlock::ToolResult { .. } => "ToolResult",
+                DisplayBlock::EditDiff { .. } => "EditDiff",
                 DisplayBlock::Error(_) => "Error",
                 DisplayBlock::SystemMessage(_) => "SystemMessage",
                 DisplayBlock::BashOutput { .. } => "BashOutput",
