@@ -376,3 +376,106 @@ fn test_edit_diff_context_lines_are_present_in_rendering() {
     assert!(all_text.contains("context before"), "Should contain context before, got:\n{all_text}");
     assert!(all_text.contains("context after"), "Should contain context after, got:\n{all_text}");
 }
+
+// ── No CODE_BG in diff spans ──
+
+#[test]
+fn test_edit_diff_context_lines_have_no_code_bg() {
+    // Context lines in EditDiff should NOT have the CODE_BG background
+    // that highlight_code normally applies for markdown code blocks.
+    let mut app = App::new("test".into());
+    app.display_blocks.push(DisplayBlock::EditDiff {
+        file_path: "test.rs".into(),
+        diff_lines: vec![
+            DiffLine { line_num: 3, kind: DiffKind::Context, text: "let ctx = true;".into() },
+        ],
+        lang: "rust".into(),
+    });
+    app.mark_dirty();
+    app.rebuild_lines();
+
+    let code_bg = Color::Rgb(45, 45, 45);
+    // Skip the header line ("── Edit: ..."), check actual diff lines
+    for rl in &app.rendered_lines {
+        let full_text: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
+        if full_text.contains("let ctx") {
+            for (text, style) in &rl.spans {
+                // The gutter span won't have CODE_BG, only check code spans
+                if text.contains("let") || text.contains("ctx") || text.contains("true") {
+                    assert_ne!(
+                        style.bg, Some(code_bg),
+                        "Context code span '{text}' should NOT have CODE_BG background"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_edit_diff_removal_lines_have_red_tint_not_code_bg() {
+    let mut app = App::new("test".into());
+    app.display_blocks.push(DisplayBlock::EditDiff {
+        file_path: "test.rs".into(),
+        diff_lines: vec![
+            DiffLine { line_num: 1, kind: DiffKind::Removal, text: "let old = 1;".into() },
+        ],
+        lang: "rust".into(),
+    });
+    app.mark_dirty();
+    app.rebuild_lines();
+
+    let code_bg = Color::Rgb(45, 45, 45);
+    let removal_bg = Color::Rgb(60, 20, 20);
+    for rl in &app.rendered_lines {
+        let full_text: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
+        if full_text.contains("let old") {
+            for (text, style) in &rl.spans {
+                if text.contains("let") || text.contains("old") {
+                    assert_ne!(
+                        style.bg, Some(code_bg),
+                        "Removal code span '{text}' should NOT have CODE_BG"
+                    );
+                    assert_eq!(
+                        style.bg, Some(removal_bg),
+                        "Removal code span '{text}' should have red tint bg"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_edit_diff_addition_lines_have_green_tint_not_code_bg() {
+    let mut app = App::new("test".into());
+    app.display_blocks.push(DisplayBlock::EditDiff {
+        file_path: "test.rs".into(),
+        diff_lines: vec![
+            DiffLine { line_num: 1, kind: DiffKind::Addition, text: "let new = 2;".into() },
+        ],
+        lang: "rust".into(),
+    });
+    app.mark_dirty();
+    app.rebuild_lines();
+
+    let code_bg = Color::Rgb(45, 45, 45);
+    let addition_bg = Color::Rgb(20, 50, 20);
+    for rl in &app.rendered_lines {
+        let full_text: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
+        if full_text.contains("let new") {
+            for (text, style) in &rl.spans {
+                if text.contains("let") || text.contains("new") {
+                    assert_ne!(
+                        style.bg, Some(code_bg),
+                        "Addition code span '{text}' should NOT have CODE_BG"
+                    );
+                    assert_eq!(
+                        style.bg, Some(addition_bg),
+                        "Addition code span '{text}' should have green tint bg"
+                    );
+                }
+            }
+        }
+    }
+}

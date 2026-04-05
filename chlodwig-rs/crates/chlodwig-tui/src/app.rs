@@ -790,6 +790,9 @@ impl App {
                             DiffKind::Context  => None,
                         };
                         for (text, mut style) in code_spans {
+                            // Remove CODE_BG from syntax-highlighting; diff uses
+                            // its own tint (or no bg for context lines).
+                            style.bg = None;
                             if let Some(bg) = bg_tint {
                                 style = style.bg(bg);
                             }
@@ -1000,6 +1003,16 @@ impl App {
 
         self.input.drain(start_byte..end_byte);
         // cursor is already at new_cursor from move_cursor_word_left()
+    }
+
+    /// Delete the single character right of the cursor (Delete key / fn+Backspace on macOS).
+    /// No-op if the cursor is at the end of the input. Cursor position stays unchanged.
+    pub(crate) fn delete_char_forward(&mut self) {
+        if self.cursor >= self.input_char_count() {
+            return;
+        }
+        let byte_pos = self.cursor_byte_pos();
+        self.input.remove(byte_pos);
     }
 
     /// Delete the word after the cursor (Alt+Delete / fn+Option+Backspace on macOS).
