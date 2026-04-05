@@ -1,0 +1,20 @@
+[package]
+name = "git-vanity"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+sha1 = "0.11"
+# sha1 0.11 removed the "asm" feature entirely. Hardware SHA-1 acceleration
+# (ARM crypto extensions, x86 SHA-NI) is automatic via core::arch intrinsics.
+# The old sha1-asm crate (used by 0.10 + features=["asm"]) had a bug on Apple
+# Silicon: Mach-O relocation syntax error caused all K constants to load from
+# offset 0 (see tools/sha1-asm-bug for the full analysis).
+
+[[bin]]
+name = "git-vanity"
+path = "src/main.rs"
+
+[[bin]]
+name = "bench_batch"
+path = "src/bench_batch.rs"

@@ -6,6 +6,10 @@ members = [
     "crates/chlodwig-tools",
     "crates/chlodwig-tui",
     "crates/chlodwig-cli",
+    "tools/git-vanity",
+]
+exclude = [
+    "tools/sha1-asm-bug",  # standalone — uses sha1 with "asm" feature to reproduce bug
 ]
 
 [workspace.dependencies]
@@ -26,3 +30,10 @@ strip = false      # Don't strip symbols — needed for crash backtraces
 lto = true
 codegen-units = 1
 opt-level = "z"
+
+# Maximum speed for git-vanity (SHA-1 brute-force needs inlining + vectorization)
+[profile.release.package.git-vanity]
+opt-level = 3
+
+[profile.release.package.sha1]
+opt-level = 3
