@@ -1,0 +1,22 @@
+# GitHub Linguist overrides — repo soll als Rust erkannt werden
+# https://github.com/github-linguist/linguist/blob/master/docs/overrides.md
+
+# Research/Reverse-Engineering JS-Code ausschließen
+cli_bundle.js linguist-vendored
+src/** linguist-vendored
+scripts/** linguist-vendored
+2.1.88/** linguist-vendored
+tests/** linguist-vendored
+native-binaries/** linguist-vendored
+native-modules/** linguist-vendored
+
+# Sonstige Nicht-Rust-Dateien
+*.js linguist-vendored
+*.ts linguist-vendored
+*.map linguist-vendored
+*.node linguist-vendored
+*.sh linguist-vendored
+*.json linguist-vendored
+*.html linguist-vendored
+*.txt linguist-vendored
+*.md linguist-documentation
