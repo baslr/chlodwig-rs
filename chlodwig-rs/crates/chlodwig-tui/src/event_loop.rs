@@ -199,6 +199,10 @@ fn install_panic_hook() {
         let _ = disable_raw_mode();
         let _ = crossterm::execute!(
             std::io::stdout(),
+            crossterm::event::PopKeyboardEnhancementFlags
+        );
+        let _ = crossterm::execute!(
+            std::io::stdout(),
             LeaveAlternateScreen,
             crossterm::event::DisableMouseCapture
         );
@@ -285,6 +289,10 @@ pub(crate) fn install_signal_handlers() {
 extern "C" fn signal_handler(sig: libc::c_int) {
     // 1. Restore terminal — use raw write() syscall for safety
     let _ = disable_raw_mode();
+    let _ = crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::PopKeyboardEnhancementFlags
+    );
     let _ = crossterm::execute!(
         std::io::stdout(),
         LeaveAlternateScreen,
@@ -549,6 +557,21 @@ pub async fn run_tui_with_permissions(
     install_signal_handlers();
 
     enable_raw_mode()?;
+
+    // Try to enable the Kitty keyboard protocol so the terminal sends
+    // distinct codes for Shift+Enter, Ctrl+Enter, etc. This is a progressive
+    // enhancement — terminals that don't support it silently ignore the
+    // escape sequence. macOS Terminal doesn't support it, but Kitty, WezTerm,
+    // foot, Ghostty, and others do.
+    let kitty_enabled = crossterm::execute!(
+        std::io::stdout(),
+        crossterm::event::PushKeyboardEnhancementFlags(
+            crossterm::event::KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | crossterm::event::KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+        )
+    )
+    .is_ok();
+
     crossterm::execute!(
         std::io::stdout(),
         EnterAlternateScreen,
@@ -558,10 +581,18 @@ pub async fn run_tui_with_permissions(
     // TerminalGuard ensures cleanup happens even if `?` bails out of the loop.
     // Without this, any `terminal.draw()?` or `event::read()?` error would
     // skip disable_raw_mode() and leave the terminal in a broken state.
-    struct TerminalGuard;
+    struct TerminalGuard {
+        kitty_enabled: bool,
+    }
     impl Drop for TerminalGuard {
         fn drop(&mut self) {
             let _ = disable_raw_mode();
+            if self.kitty_enabled {
+                let _ = crossterm::execute!(
+                    std::io::stdout(),
+                    crossterm::event::PopKeyboardEnhancementFlags
+                );
+            }
             let _ = crossterm::execute!(
                 std::io::stdout(),
                 LeaveAlternateScreen,
@@ -569,7 +600,7 @@ pub async fn run_tui_with_permissions(
             );
         }
     }
-    let _terminal_guard = TerminalGuard;
+    let _terminal_guard = TerminalGuard { kitty_enabled };
 
     let backend = CrosstermBackend::new(std::io::stdout());
     let mut terminal = Terminal::new(backend)?;
@@ -642,20 +673,25 @@ pub async fn run_tui_with_permissions(
                 app.mark_dirty(); // re-wrap all lines
             }
             app.rebuild_lines();
+            tracing::trace!("loop: rebuild_lines done");
             // Lazy rebuild of requests lines — only when the tab is visible.
             // This avoids O(n²) CPU burn from re-rendering all SSE chunks
             // (JSON pretty-print + syntect highlighting) on every incoming event.
             if app.requests_dirty && app.active_tab == 2 {
                 app.rebuild_requests_lines();
+                tracing::trace!("loop: rebuild_requests_lines done");
             }
             // Rebuild constants lines when the tab is visible.
             if app.active_tab == 3 {
                 app.rebuild_constants_lines();
+                tracing::trace!("loop: rebuild_constants_lines done");
             }
             // Update crash state snapshot (for panic hook)
+            tracing::trace!("loop: crash_dump start");
             if let Ok(mut guard) = crash_state().lock() {
                 *guard = app.crash_dump();
             }
+            tracing::trace!("loop: crash_dump done");
             tracing::debug!(
                 redraw = redraw_count,
                 rendered_lines = app.rendered_lines.len(),
@@ -740,6 +776,26 @@ pub async fn run_tui_with_permissions(
                     // Quit
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         app.should_quit = true;
+                    }
+
+                    // Insert newline (Ctrl+J, Shift+Enter, or Alt+Enter)
+                    // Ctrl+J = ASCII linefeed (0x0a) — works in ALL terminals.
+                    // Most terminals can't distinguish Shift+Enter from Enter
+                    // (both send CR/0x0d). Alt+Enter may also be swallowed.
+                    // Shift+Enter works in terminals with Kitty keyboard protocol.
+                    KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL)
+                        && !app.is_loading
+                        && app.pending_permission.is_none() =>
+                    {
+                        app.insert_newline();
+                    }
+                    KeyCode::Enter
+                        if (key.modifiers.contains(KeyModifiers::SHIFT)
+                            || key.modifiers.contains(KeyModifiers::ALT))
+                            && !app.is_loading
+                            && app.pending_permission.is_none() =>
+                    {
+                        app.insert_newline();
                     }
 
                     // Submit input

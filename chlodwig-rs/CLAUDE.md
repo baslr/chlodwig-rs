@@ -100,6 +100,8 @@ These were discovered during development. **Never regress on these:**
 
 23. **macOS German keyboard: Fn+Option+Backspace sends `Char('(')` + ALT**: On German macOS keyboard layout, `Fn+Option+Backspace` (intended as "delete word forward") does NOT send `KeyCode::Delete` + ALT. Instead, macOS merges `Fn` (remaps Backspace→Delete) with `Option` (dead-key layer) and the terminal receives the character `(` (from `Option+8` on German layout) with ALT modifier. crossterm decodes this as `Char('(')` + `KeyModifiers::ALT`. Without explicit handling, the general `Char(c)` arm inserts a literal `(` into the input. **Fix**: Added a dedicated match arm for `Char('(')` + ALT → `delete_word_forward()`, placed before the general `Char(c)` arm. Normal `(` input (via `Shift+8`) arrives as `Char('(')` + SHIFT (no ALT), so it's not affected. **Workaround if other layouts have similar issues**: `Alt+d` (Emacs binding) always works for delete-word-forward. Tested by `test_event_loop_has_fn_option_backspace_german_binding`, `test_fn_option_backspace_does_not_insert_paren`.
 
+24. **Shift+Enter and Alt+Enter are indistinguishable from Enter in most terminals**: Most terminals (macOS Terminal, iTerm2, GNOME Terminal) send the same escape code (CR / `0x0d`) for Enter, Shift+Enter, and swallow Alt+Enter entirely. Only terminals supporting the **Kitty keyboard protocol** (Kitty, WezTerm, foot, Ghostty) send distinct codes for modified Enter. **Fix**: (1) **Ctrl+J** (ASCII linefeed `0x0a`) is the primary newline shortcut — it works in **every** terminal because it's a completely different character code. (2) Shift+Enter and Alt+Enter are kept as additional bindings for Kitty-protocol terminals. (3) Kitty keyboard protocol enabled via `PushKeyboardEnhancementFlags(REPORT_EVENT_TYPES | DISAMBIGUATE_ESCAPE_CODES)` at startup — terminals that don't support it silently ignore the sequence. (4) `TerminalGuard::drop()` sends `PopKeyboardEnhancementFlags` to restore the terminal. Tested by `test_shift_enter_inserts_newline`, `test_shift_enter_inserts_newline_mid_text`, `test_shift_enter_multiple_newlines`, `test_event_loop_has_shift_enter_newline_binding`, `test_event_loop_has_alt_enter_newline_binding`, `test_event_loop_has_ctrl_j_newline_binding`, `test_ctrl_j_does_not_insert_j`.
+
 ## Compact Instructions
 
 When summarizing the conversation, focus on:
@@ -128,6 +130,17 @@ cargo run --release -- --print "prompt"  # Headless mode
 | `/resume` | Load the last saved session from disk |
 | `! <cmd>` | Execute shell command |
 | `exit`, `quit`, `/exit`, `/quit` | Exit |
+
+### TUI Key Bindings
+
+| Key | Effect |
+|-----|--------|
+| `Enter` | Submit input |
+| `Ctrl+J` | Insert newline (works in ALL terminals) |
+| `Shift+Enter` or `Alt+Enter` | Insert newline (Kitty protocol terminals only) |
+| `Alt+b` / `Alt+f` | Move cursor word left / right |
+| `Alt+d` | Delete word forward |
+| `Ctrl+c` | Quit |
 
 ## Session Persistence
 

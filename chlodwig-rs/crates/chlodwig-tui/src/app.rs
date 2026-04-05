@@ -1148,6 +1148,13 @@ impl App {
             .unwrap_or(self.input.len())
     }
 
+    /// Insert a newline character at the current cursor position (Shift+Enter).
+    pub(crate) fn insert_newline(&mut self) {
+        let byte_pos = self.cursor_byte_pos();
+        self.input.insert(byte_pos, '\n');
+        self.cursor += 1;
+    }
+
     /// Number of chars in the input string.
     pub(crate) fn input_char_count(&self) -> usize {
         self.input.chars().count()
@@ -2098,7 +2105,15 @@ impl App {
             match last {
                 DisplayBlock::AssistantText(t) => {
                     let _ = writeln!(out, "  len={}", t.len());
-                    let tail = if t.len() > 200 { &t[t.len()-200..] } else { t };
+                    let tail = if t.len() > 200 {
+                        let mut start = t.len() - 200;
+                        while start < t.len() && !t.is_char_boundary(start) {
+                            start += 1;
+                        }
+                        &t[start..]
+                    } else {
+                        t
+                    };
                     let _ = writeln!(out, "  tail: {tail}");
                 }
                 DisplayBlock::UserMessage(t) => {

@@ -237,3 +237,103 @@ fn test_input_cursor_visual_pos_word_wrap_start_of_wrapped_word() {
     assert_eq!(row, 1, "'w' should be at start of line 1");
     assert_eq!(col, 0, "'w' should be at col 0 on the wrapped line");
 }
+
+/// Shift+Enter should insert a newline into the input, not submit it.
+#[test]
+fn test_shift_enter_inserts_newline() {
+    let mut app = App::new("test".into());
+    app.input = "hello".to_string();
+    app.cursor = 5;
+
+    // Simulate Shift+Enter → should insert '\n' at cursor
+    app.insert_newline();
+
+    assert_eq!(app.input, "hello\n");
+    assert_eq!(app.cursor, 6);
+}
+
+/// Shift+Enter in the middle of text should split the line.
+#[test]
+fn test_shift_enter_inserts_newline_mid_text() {
+    let mut app = App::new("test".into());
+    app.input = "helloworld".to_string();
+    app.cursor = 5;
+
+    app.insert_newline();
+
+    assert_eq!(app.input, "hello\nworld");
+    assert_eq!(app.cursor, 6);
+}
+
+/// Multiple Shift+Enter presses should insert multiple newlines.
+#[test]
+fn test_shift_enter_multiple_newlines() {
+    let mut app = App::new("test".into());
+    app.input = "abc".to_string();
+    app.cursor = 3;
+
+    app.insert_newline();
+    app.insert_newline();
+
+    assert_eq!(app.input, "abc\n\n");
+    assert_eq!(app.cursor, 5);
+}
+
+/// Verify the event loop source has a Shift+Enter handler for insert_newline.
+#[test]
+fn test_event_loop_has_shift_enter_newline_binding() {
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("insert_newline"),
+        "Event loop must call insert_newline() for Shift+Enter"
+    );
+    // Shift+Enter must come BEFORE the submit-Enter arm
+    let shift_enter_pos = src.find("insert_newline").unwrap();
+    let submit_pos = src.find("// Submit input").unwrap();
+    assert!(
+        shift_enter_pos < submit_pos,
+        "Shift+Enter handler must come before submit handler"
+    );
+}
+
+/// Alt+Enter should also insert a newline (fallback for terminals that
+/// don't distinguish Shift+Enter from Enter, e.g. macOS Terminal).
+#[test]
+fn test_event_loop_has_alt_enter_newline_binding() {
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("ALT") && src.contains("insert_newline"),
+        "Event loop must handle Alt+Enter as newline fallback"
+    );
+}
+
+/// Ctrl+J (ASCII linefeed) should insert a newline — works in ALL terminals,
+/// unlike Shift+Enter/Alt+Enter which many terminals can't distinguish from Enter.
+#[test]
+fn test_event_loop_has_ctrl_j_newline_binding() {
+    let src = include_str!("../event_loop.rs");
+    // Must have Char('j') + CONTROL → insert_newline
+    assert!(
+        src.contains("Char('j')") && src.contains("CONTROL"),
+        "Event loop must handle Ctrl+J as newline insertion"
+    );
+    // Ctrl+J must come BEFORE the submit-Enter arm
+    let ctrl_j_pos = src.find("Char('j')").unwrap();
+    let submit_pos = src.find("// Submit input").unwrap();
+    assert!(
+        ctrl_j_pos < submit_pos,
+        "Ctrl+J handler must come before submit handler"
+    );
+}
+
+/// Ctrl+J should not insert 'j' — it should insert a newline instead.
+#[test]
+fn test_ctrl_j_does_not_insert_j() {
+    let mut app = App::new("test".into());
+    app.input = "hello".to_string();
+    app.cursor = 5;
+    // Ctrl+J calls insert_newline(), not insert_char('j')
+    app.insert_newline();
+    assert_eq!(app.input, "hello\n");
+    assert!(!app.input.contains('j'));
+}
