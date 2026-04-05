@@ -88,3 +88,4 @@ mod constants_tab;
 mod edit_diff;
 mod read_output;
 mod write_output;
+mod input_title;

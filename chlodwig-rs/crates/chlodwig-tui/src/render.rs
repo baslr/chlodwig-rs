@@ -149,13 +149,23 @@ pub(crate) fn render_output(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// Build the input box title with live character and byte counts.
+pub(crate) fn input_title(input: &str) -> String {
+    let chars = input.chars().count();
+    let bytes = input.len();
+    let char_label = if chars == 1 { "char" } else { "chars" };
+    let byte_label = if bytes == 1 { "byte" } else { "bytes" };
+    format!(" Input (Enter to send, Ctrl+C to quit) — {chars} {char_label}, {bytes} {byte_label} ")
+}
+
 pub(crate) fn render_input(f: &mut Frame, app: &App, area: Rect) {
+    let title = input_title(&app.input);
     let input = Paragraph::new(app.input.as_str())
         .wrap(Wrap { trim: false })
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(" Input (Enter to send, Ctrl+C to quit) "),
+                .title(title),
         );
 
     f.render_widget(input, area);
