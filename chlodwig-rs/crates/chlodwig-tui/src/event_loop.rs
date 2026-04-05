@@ -1378,6 +1378,26 @@ pub async fn run_tui_with_permissions(
                                 continue;
                             }
                         }
+                        // Write → WriteOutput (syntax highlighting)
+                        if tool_name == "Write" && !is_error {
+                            if let ToolResultContent::Text(ref summary) = output {
+                                let file_path = tool_input["file_path"]
+                                    .as_str()
+                                    .unwrap_or("(unknown)")
+                                    .to_string();
+                                let content = tool_input["content"]
+                                    .as_str()
+                                    .unwrap_or("")
+                                    .to_string();
+                                app.display_blocks.push(DisplayBlock::WriteOutput {
+                                    file_path,
+                                    content,
+                                    summary: summary.clone(),
+                                });
+                                app.scroll_to_bottom_if_auto();
+                                continue;
+                            }
+                        }
                     }
 
                     // Fallback: generic ToolResult display

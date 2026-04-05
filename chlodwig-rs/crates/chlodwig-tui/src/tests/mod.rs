@@ -87,3 +87,4 @@ mod multiline_input;
 mod constants_tab;
 mod edit_diff;
 mod read_output;
+mod write_output;

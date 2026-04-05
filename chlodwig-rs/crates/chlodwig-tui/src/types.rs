@@ -37,6 +37,14 @@ pub(crate) enum DisplayBlock {
         file_path: String,
         content: String,
     },
+    /// Write tool output with syntax highlighting based on file extension.
+    /// `content` is the raw file content (no line numbers), `summary` is the
+    /// status line (e.g. "Wrote 13 lines (298 bytes) to Demo.java").
+    WriteOutput {
+        file_path: String,
+        content: String,
+        summary: String,
+    },
 }
 
 /// A single line in an Edit diff display.

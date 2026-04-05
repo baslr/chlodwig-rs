@@ -847,6 +847,56 @@ impl App {
                     }
                     logical_lines.push(RenderedLine::plain(""));
                 }
+                DisplayBlock::WriteOutput { file_path, content, summary } => {
+                    // Header line with file path
+                    logical_lines.push(RenderedLine::styled(
+                        &format!("── Write: {file_path} ──"),
+                        Style::default().fg(Color::Magenta),
+                    ));
+
+                    // Summary line (e.g. "Wrote 13 lines (298 bytes) to ...")
+                    logical_lines.push(RenderedLine::styled(
+                        &format!("  {summary}"),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+
+                    // Determine language from file extension for syntax highlighting
+                    let lang = markdown::lang_from_path(file_path);
+
+                    // Render each line with line numbers + syntax highlighting
+                    let line_count = content.lines().count();
+                    let num_width = if line_count == 0 { 1 } else {
+                        (line_count as f64).log10().floor() as usize + 1
+                    };
+
+                    for (i, code_line) in content.lines().enumerate() {
+                        let line_num = i + 1;
+
+                        // Syntax-highlight the code portion
+                        let highlighted = markdown::highlight_code(lang, code_line);
+                        let code_spans = if let Some(rl) = highlighted.first() {
+                            rl.spans.clone()
+                        } else {
+                            vec![(code_line.to_string(), Style::default())]
+                        };
+
+                        // Build: " {num} │ {highlighted_code}"
+                        let gutter = format!(
+                            " {:>width$} │ ",
+                            line_num,
+                            width = num_width,
+                        );
+                        let mut spans = Vec::with_capacity(1 + code_spans.len());
+                        spans.push((gutter, Style::default().fg(Color::DarkGray)));
+                        for (text, mut style) in code_spans {
+                            // Remove CODE_BG — we use the terminal default bg
+                            style.bg = None;
+                            spans.push((text, style));
+                        }
+                        logical_lines.push(RenderedLine { spans, wrap_prefix: None });
+                    }
+                    logical_lines.push(RenderedLine::plain(""));
+                }
             }
         }
 
@@ -1410,18 +1460,14 @@ impl App {
         self.focus = Focus::Input;
     }
 
-    /// Handle Right key when focus is on TabBar: switch to next tab.
+    /// Handle Right key when focus is on TabBar: switch to next tab (wraps around).
     pub(crate) fn handle_tab_bar_right(&mut self) {
-        if self.active_tab < 3 {
-            self.active_tab += 1;
-        }
+        self.active_tab = (self.active_tab + 1) % 4;
     }
 
-    /// Handle Left key when focus is on TabBar: switch to previous tab.
+    /// Handle Left key when focus is on TabBar: switch to previous tab (wraps around).
     pub(crate) fn handle_tab_bar_left(&mut self) {
-        if self.active_tab > 0 {
-            self.active_tab -= 1;
-        }
+        self.active_tab = (self.active_tab + 3) % 4;
     }
 
     /// Clear the entire conversation — reset display, tokens, scroll, streaming.
@@ -1468,7 +1514,7 @@ impl App {
     /// live streaming.
     pub(crate) fn restore_messages_to_display(&mut self, messages: &[Message]) {
         // Build a map of tool_use_id → (tool_name, input) from assistant ToolUse blocks
-        // so we can identify Read tool results during restore.
+        // so we can identify Read/Write tool results during restore.
         let mut tool_id_map: std::collections::HashMap<&str, (&str, &serde_json::Value)> =
             std::collections::HashMap::new();
         for msg in messages {
@@ -1509,6 +1555,37 @@ impl App {
                                         self.display_blocks.push(DisplayBlock::ReadOutput {
                                             file_path,
                                             content: t.clone(),
+                                        });
+                                        continue;
+                                    }
+                                }
+
+                                // Check if this was a Write tool result
+                                let is_write = tool_id_map
+                                    .get(tool_use_id.as_str())
+                                    .map(|(name, _)| *name == "Write")
+                                    .unwrap_or(false);
+
+                                if is_write && !is_error.unwrap_or(false) {
+                                    if let ToolResultContent::Text(summary) = content {
+                                        let (file_path, file_content) = tool_id_map
+                                            .get(tool_use_id.as_str())
+                                            .map(|(_, input)| {
+                                                let fp = input["file_path"]
+                                                    .as_str()
+                                                    .unwrap_or("(unknown)")
+                                                    .to_string();
+                                                let fc = input["content"]
+                                                    .as_str()
+                                                    .unwrap_or("")
+                                                    .to_string();
+                                                (fp, fc)
+                                            })
+                                            .unwrap_or_else(|| ("(unknown)".into(), String::new()));
+                                        self.display_blocks.push(DisplayBlock::WriteOutput {
+                                            file_path,
+                                            content: file_content,
+                                            summary: summary.clone(),
                                         });
                                         continue;
                                     }
@@ -2057,6 +2134,7 @@ impl App {
                 DisplayBlock::SystemMessage(_) => "SystemMessage",
                 DisplayBlock::BashOutput { .. } => "BashOutput",
                 DisplayBlock::ReadOutput { .. } => "ReadOutput",
+                DisplayBlock::WriteOutput { .. } => "WriteOutput",
             };
             *counts.entry(name).or_insert(0) += 1;
         }

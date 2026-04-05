@@ -47,21 +47,47 @@ fn test_left_in_tabbar_switches_to_prompt() {
 }
 
 #[test]
-fn test_left_in_tabbar_clamps_at_zero() {
+fn test_left_in_tabbar_wraps_to_last() {
     let mut app = App::new("test".into());
     app.focus = Focus::TabBar;
     app.active_tab = 0;
     app.handle_tab_bar_left();
-    assert_eq!(app.active_tab, 0, "Should not go below 0");
+    assert_eq!(app.active_tab, 3, "Left from first tab should wrap to last tab");
 }
 
 #[test]
-fn test_right_in_tabbar_clamps_at_max() {
+fn test_right_in_tabbar_wraps_to_first() {
     let mut app = App::new("test".into());
     app.focus = Focus::TabBar;
     app.active_tab = 3;
     app.handle_tab_bar_right();
-    assert_eq!(app.active_tab, 3, "Should not go above 3");
+    assert_eq!(app.active_tab, 0, "Right from last tab should wrap to first tab");
+}
+
+#[test]
+fn test_tab_wrap_full_cycle_right() {
+    let mut app = App::new("test".into());
+    app.focus = Focus::TabBar;
+    app.active_tab = 0;
+    // Cycle through all 4 tabs and back to start
+    app.handle_tab_bar_right(); // 0 -> 1
+    app.handle_tab_bar_right(); // 1 -> 2
+    app.handle_tab_bar_right(); // 2 -> 3
+    app.handle_tab_bar_right(); // 3 -> 0
+    assert_eq!(app.active_tab, 0, "Full right cycle should return to first tab");
+}
+
+#[test]
+fn test_tab_wrap_full_cycle_left() {
+    let mut app = App::new("test".into());
+    app.focus = Focus::TabBar;
+    app.active_tab = 0;
+    // Cycle backwards through all 4 tabs and back to start
+    app.handle_tab_bar_left(); // 0 -> 3
+    app.handle_tab_bar_left(); // 3 -> 2
+    app.handle_tab_bar_left(); // 2 -> 1
+    app.handle_tab_bar_left(); // 1 -> 0
+    assert_eq!(app.active_tab, 0, "Full left cycle should return to first tab");
 }
 
 #[test]

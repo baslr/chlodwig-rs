@@ -10,12 +10,12 @@ fn test_constants_tab_exists_at_index_3() {
 }
 
 #[test]
-fn test_constants_tab_clamps_at_3() {
+fn test_constants_tab_wraps_to_first() {
     let mut app = App::new("test".into());
     app.focus = Focus::TabBar;
     app.active_tab = 3;
     app.handle_tab_bar_right();
-    assert_eq!(app.active_tab, 3, "Should not go above 3");
+    assert_eq!(app.active_tab, 0, "Right from constants tab should wrap to first tab");
 }
 
 #[test]
