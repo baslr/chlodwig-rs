@@ -1344,23 +1344,38 @@ pub async fn run_tui_with_permissions(
                 ConversationEvent::ToolResult {
                     id, output, is_error,
                 } => {
-                    // Check if this was a Read tool call — render with syntax highlighting
+                    // Check if this was a Bash or Read tool call — render with
+                    // special display blocks instead of generic ToolResult.
                     let tool_info = tool_id_to_info.remove(&id);
-                    if !is_error {
-                        if let Some((ref tool_name, ref tool_input)) = tool_info {
-                            if tool_name == "Read" {
-                                if let ToolResultContent::Text(ref t) = output {
-                                    let file_path = tool_input["file_path"]
-                                        .as_str()
-                                        .unwrap_or("(unknown)")
-                                        .to_string();
-                                    app.display_blocks.push(DisplayBlock::ReadOutput {
-                                        file_path,
-                                        content: t.clone(),
-                                    });
-                                    app.scroll_to_bottom_if_auto();
-                                    continue;
-                                }
+                    if let Some((ref tool_name, ref tool_input)) = tool_info {
+                        // Bash → BashOutput (pseudo-shell with ANSI color parsing)
+                        if tool_name == "Bash" {
+                            if let ToolResultContent::Text(ref t) = output {
+                                let command = tool_input["command"]
+                                    .as_str()
+                                    .unwrap_or("(unknown)")
+                                    .to_string();
+                                app.display_blocks.push(DisplayBlock::BashOutput {
+                                    command,
+                                    raw_output: t.clone(),
+                                });
+                                app.scroll_to_bottom_if_auto();
+                                continue;
+                            }
+                        }
+                        // Read → ReadOutput (syntax highlighting)
+                        if tool_name == "Read" && !is_error {
+                            if let ToolResultContent::Text(ref t) = output {
+                                let file_path = tool_input["file_path"]
+                                    .as_str()
+                                    .unwrap_or("(unknown)")
+                                    .to_string();
+                                app.display_blocks.push(DisplayBlock::ReadOutput {
+                                    file_path,
+                                    content: t.clone(),
+                                });
+                                app.scroll_to_bottom_if_auto();
+                                continue;
                             }
                         }
                     }
