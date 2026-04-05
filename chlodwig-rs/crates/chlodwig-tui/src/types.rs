@@ -32,6 +32,11 @@ pub(crate) enum DisplayBlock {
         command: String,
         raw_output: String,
     },
+    /// Read tool output with syntax highlighting based on file extension.
+    ReadOutput {
+        file_path: String,
+        content: String,
+    },
 }
 
 /// A single line in an Edit diff display.

@@ -86,3 +86,4 @@ mod session_restore_display;
 mod multiline_input;
 mod constants_tab;
 mod edit_diff;
+mod read_output;

@@ -50,6 +50,70 @@ pub(crate) fn syntect_to_ratatui(style: syntect::highlighting::Style) -> Style {
 /// Background style for code blocks.
 const CODE_BG: Color = Color::Rgb(45, 45, 45);
 
+/// Derive a syntax-highlighting language token from a file path's extension.
+///
+/// Uses syntect's `find_syntax_by_extension()` when possible, then falls back
+/// to manual aliases for extensions syntect doesn't know natively (e.g. `.ts`).
+/// Returns `""` for unknown or missing extensions.
+pub(crate) fn lang_from_path(path: &str) -> &'static str {
+    let ext = match std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+        Some(e) => e,
+        None => return "",
+    };
+
+    let ss = syntax_set();
+
+    // First try syntect's built-in extension mapping
+    if let Some(syn) = ss.find_syntax_by_extension(ext) {
+        // Return the lowercased name as a token
+        // syntect names: "Rust", "Python", "JavaScript", etc.
+        // We need a &'static str, so map known names explicitly
+        return match syn.name.as_str() {
+            "Rust" => "rust",
+            "Python" => "python",
+            "JavaScript" | "JavaScript (Babel)" => "javascript",
+            "JSON" => "json",
+            "YAML" => "yaml",
+            "HTML" => "html",
+            "CSS" => "css",
+            "C" => "c",
+            "C++" => "c++",
+            "C#" => "c#",
+            "Java" => "java",
+            "Go" => "go",
+            "Ruby" => "ruby",
+            "Shell-Unix-Generic" | "Bourne Again Shell (bash)" => "bash",
+            "SQL" => "sql",
+            "Markdown" => "markdown",
+            "XML" => "xml",
+            "Perl" => "perl",
+            "PHP" => "php",
+            "Lua" => "lua",
+            "Scala" => "scala",
+            "Haskell" => "haskell",
+            "Erlang" => "erlang",
+            "Clojure" => "clojure",
+            "R" => "r",
+            "Makefile" => "makefile",
+            "Objective-C" => "objective-c",
+            _ => "plain",
+        };
+    }
+
+    // Manual aliases for extensions syntect doesn't know
+    match ext {
+        "ts" | "tsx" | "jsx" => "javascript",
+        "toml" => "yaml",
+        "dockerfile" | "zsh" | "fish" => "bash",
+        "kt" | "kotlin" => "java",
+        "swift" => "objective-c",
+        "jsonc" => "json",
+        "cxx" | "cc" | "hpp" => "c++",
+        "cs" | "csharp" => "c#",
+        _ => "",
+    }
+}
+
 /// Map common language aliases to tokens that syntect's default bundle knows.
 fn resolve_lang_alias(lang: &str) -> &str {
     match lang {

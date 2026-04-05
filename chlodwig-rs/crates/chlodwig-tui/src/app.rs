@@ -803,6 +803,50 @@ impl App {
                     }
                     logical_lines.push(RenderedLine::plain(""));
                 }
+                DisplayBlock::ReadOutput { file_path, content } => {
+                    // Header line with file path
+                    logical_lines.push(RenderedLine::styled(
+                        &format!("── Read: {file_path} ──"),
+                        Style::default().fg(Color::Green),
+                    ));
+
+                    // Determine language from file extension for syntax highlighting
+                    let lang = markdown::lang_from_path(file_path);
+
+                    // Parse each line: split "     1\tcontent" into line_num + code
+                    for line in content.lines() {
+                        if let Some(tab_pos) = line.find('\t') {
+                            let num_part = &line[..tab_pos];
+                            let code_part = &line[tab_pos + 1..];
+
+                            // Syntax-highlight the code portion
+                            let highlighted = markdown::highlight_code(lang, code_part);
+                            let code_spans = if let Some(rl) = highlighted.first() {
+                                rl.spans.clone()
+                            } else {
+                                vec![(code_part.to_string(), Style::default())]
+                            };
+
+                            // Build: " {num} │ {highlighted_code}"
+                            let gutter = format!(" {} │ ", num_part.trim_start());
+                            let mut spans = Vec::with_capacity(1 + code_spans.len());
+                            spans.push((gutter, Style::default().fg(Color::DarkGray)));
+                            for (text, mut style) in code_spans {
+                                // Remove CODE_BG — we use the terminal default bg
+                                style.bg = None;
+                                spans.push((text, style));
+                            }
+                            logical_lines.push(RenderedLine { spans, wrap_prefix: None });
+                        } else {
+                            // Lines without tab (e.g. "(empty file)", "(no lines in range)")
+                            logical_lines.push(RenderedLine::styled(
+                                &format!("  {line}"),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
+                    }
+                    logical_lines.push(RenderedLine::plain(""));
+                }
             }
         }
 
@@ -1423,6 +1467,20 @@ impl App {
     /// `DisplayBlock` variant, matching what the event loop produces during
     /// live streaming.
     pub(crate) fn restore_messages_to_display(&mut self, messages: &[Message]) {
+        // Build a map of tool_use_id → (tool_name, input) from assistant ToolUse blocks
+        // so we can identify Read tool results during restore.
+        let mut tool_id_map: std::collections::HashMap<&str, (&str, &serde_json::Value)> =
+            std::collections::HashMap::new();
+        for msg in messages {
+            if msg.role == Role::Assistant {
+                for block in &msg.content {
+                    if let ContentBlock::ToolUse { id, name, input } = block {
+                        tool_id_map.insert(id.as_str(), (name.as_str(), input));
+                    }
+                }
+            }
+        }
+
         for msg in messages {
             match msg.role {
                 Role::User => {
@@ -1433,8 +1491,30 @@ impl App {
                                     .push(DisplayBlock::UserMessage(text.clone()));
                             }
                             ContentBlock::ToolResult {
-                                content, is_error, ..
+                                tool_use_id, content, is_error,
                             } => {
+                                // Check if this was a Read tool result
+                                let is_read = tool_id_map
+                                    .get(tool_use_id.as_str())
+                                    .map(|(name, _)| *name == "Read")
+                                    .unwrap_or(false);
+
+                                if is_read && !is_error.unwrap_or(false) {
+                                    if let ToolResultContent::Text(t) = content {
+                                        let file_path = tool_id_map
+                                            .get(tool_use_id.as_str())
+                                            .and_then(|(_, input)| input["file_path"].as_str())
+                                            .unwrap_or("(unknown)")
+                                            .to_string();
+                                        self.display_blocks.push(DisplayBlock::ReadOutput {
+                                            file_path,
+                                            content: t.clone(),
+                                        });
+                                        continue;
+                                    }
+                                }
+
+                                // Fallback: generic ToolResult display
                                 let preview = match content {
                                     ToolResultContent::Text(t) => {
                                         Self::truncate_preview(t, 500)
@@ -1976,6 +2056,7 @@ impl App {
                 DisplayBlock::Error(_) => "Error",
                 DisplayBlock::SystemMessage(_) => "SystemMessage",
                 DisplayBlock::BashOutput { .. } => "BashOutput",
+                DisplayBlock::ReadOutput { .. } => "ReadOutput",
             };
             *counts.entry(name).or_insert(0) += 1;
         }

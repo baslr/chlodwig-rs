@@ -476,3 +476,35 @@ fn test_delete_word_forward_with_punctuation() {
     assert_eq!(app.input, "hello world");
     assert_eq!(app.cursor, 5);
 }
+
+// ── Fn+Option+Backspace on macOS German keyboard (Gotcha #23) ──
+
+/// macOS German keyboard sends Char('(') + ALT for Fn+Option+Backspace.
+/// This must trigger delete_word_forward(), NOT insert '(' into the input.
+/// Verify event_loop.rs has the binding.
+#[test]
+fn test_event_loop_has_fn_option_backspace_german_binding() {
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("Char('(')") && src.contains("delete_word_forward"),
+        "event_loop.rs must handle Char('(') + ALT as delete_word_forward() \
+         (macOS German keyboard: Fn+Option+Backspace)"
+    );
+}
+
+/// Fn+Option+Backspace must not insert '(' — it must delete the word forward.
+#[test]
+fn test_fn_option_backspace_does_not_insert_paren() {
+    let mut app = App::new("test".into());
+    app.input = "hello world".to_string();
+    app.cursor = 0;
+
+    // Simulate what would happen if Fn+Option+Backspace is correctly handled:
+    // delete_word_forward() should remove "hello", NOT insert '('
+    app.delete_word_forward();
+
+    assert_eq!(app.input, " world");
+    assert_eq!(app.cursor, 0);
+    // Crucially: no '(' in the input
+    assert!(!app.input.contains('('));
+}

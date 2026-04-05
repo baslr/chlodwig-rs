@@ -620,6 +620,10 @@ pub async fn run_tui_with_permissions(
     let mut last_resize = std::time::Instant::now();
     let mut conversation_handle: Option<tokio::task::JoinHandle<()>> = None;
 
+    // Track tool_use_id → (tool_name, input) so ToolResult can identify Read calls
+    let mut tool_id_to_info: std::collections::HashMap<String, (String, serde_json::Value)> =
+        std::collections::HashMap::new();
+
     tracing::info!(
         model = app.model.as_str(),
         wrap_width = app.wrap_width,
@@ -727,6 +731,11 @@ pub async fn run_tui_with_permissions(
                 }
                 Event::Key(key) if key.kind == KeyEventKind::Press => {
                     needs_redraw = true;
+                    tracing::trace!(
+                        code = ?key.code,
+                        modifiers = ?key.modifiers,
+                        "Key press event"
+                    );
                     match key.code {
                     // Quit
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1100,11 +1109,35 @@ pub async fn run_tui_with_permissions(
                     {
                         app.delete_word_forward();
                     }
+                    // Delete word forwards: Fn+Option+Backspace on macOS German keyboard
+                    // sends Char('(') + ALT (Option+8 = '(' on German layout, but
+                    // Fn remaps Backspace→Delete, and the terminal merges it into '('+ALT).
+                    KeyCode::Char('(')
+                        if !app.is_loading
+                            && app.pending_permission.is_none()
+                            && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.delete_word_forward();
+                    }
+                    // Delete single char forward: Delete / fn+Backspace on macOS
+                    KeyCode::Delete
+                        if !app.is_loading
+                            && app.pending_permission.is_none()
+                            && !key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.delete_char_forward();
+                    }
 
                     // Text input
                     KeyCode::Char(c)
                         if !app.is_loading && app.pending_permission.is_none() =>
                     {
+                        tracing::debug!(
+                            char = %c,
+                            modifiers = ?key.modifiers,
+                            key_code = ?key.code,
+                            "Text input char event"
+                        );
                         let byte_pos = app.cursor_byte_pos();
                         app.input.insert(byte_pos, c);
                         app.cursor += 1;
@@ -1284,7 +1317,10 @@ pub async fn run_tui_with_permissions(
                     app.display_blocks.push(DisplayBlock::Timestamp(now));
                     app.display_blocks.push(DisplayBlock::AssistantText(text));
                 }
-                ConversationEvent::ToolUseStart { name, input, .. } => {
+                ConversationEvent::ToolUseStart { id, name, input } => {
+                    // Track tool id → (name, input) for ToolResult matching
+                    tool_id_to_info.insert(id, (name.clone(), input.clone()));
+
                     if name == "Edit" {
                         if let Some(diff_block) = build_edit_diff(&input) {
                             app.display_blocks.push(diff_block);
@@ -1306,8 +1342,30 @@ pub async fn run_tui_with_permissions(
                     app.scroll_to_bottom_if_auto();
                 }
                 ConversationEvent::ToolResult {
-                    output, is_error, ..
+                    id, output, is_error,
                 } => {
+                    // Check if this was a Read tool call — render with syntax highlighting
+                    let tool_info = tool_id_to_info.remove(&id);
+                    if !is_error {
+                        if let Some((ref tool_name, ref tool_input)) = tool_info {
+                            if tool_name == "Read" {
+                                if let ToolResultContent::Text(ref t) = output {
+                                    let file_path = tool_input["file_path"]
+                                        .as_str()
+                                        .unwrap_or("(unknown)")
+                                        .to_string();
+                                    app.display_blocks.push(DisplayBlock::ReadOutput {
+                                        file_path,
+                                        content: t.clone(),
+                                    });
+                                    app.scroll_to_bottom_if_auto();
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
+                    // Fallback: generic ToolResult display
                     let preview = match &output {
                         ToolResultContent::Text(t) => {
                             if t.len() > 500 {

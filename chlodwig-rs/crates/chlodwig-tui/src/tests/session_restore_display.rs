@@ -106,19 +106,20 @@ fn test_restore_tool_use_and_result() {
     app.restore_messages_to_display(&messages);
 
     let tool_calls: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolCall { .. })).collect();
-    let tool_results: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolResult { .. })).collect();
+    // Read tool results are now displayed as ReadOutput, not ToolResult
+    let read_outputs: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::ReadOutput { .. })).collect();
 
     assert_eq!(tool_calls.len(), 1, "Should have 1 tool call block");
-    assert_eq!(tool_results.len(), 1, "Should have 1 tool result block");
+    assert_eq!(read_outputs.len(), 1, "Should have 1 read output block");
 
     match &tool_calls[0] {
         DisplayBlock::ToolCall { name, .. } => assert_eq!(name, "Read"),
         _ => unreachable!(),
     }
-    match &tool_results[0] {
-        DisplayBlock::ToolResult { is_error, preview } => {
-            assert!(!is_error);
-            assert!(preview.contains("file contents here"));
+    match &read_outputs[0] {
+        DisplayBlock::ReadOutput { file_path, content } => {
+            assert_eq!(file_path, "/tmp/test.txt");
+            assert!(content.contains("file contents here"));
         }
         _ => unreachable!(),
     }
@@ -171,6 +172,8 @@ fn test_restore_thinking_block() {
 #[test]
 fn test_restore_tool_result_truncated_at_utf8_boundary() {
     // Gotcha #16: tool result preview must truncate safely at UTF-8 boundaries
+    // For Read tool results, full content is stored in ReadOutput (no truncation).
+    // This test verifies no panic occurs with multi-byte UTF-8 content.
     let mut long_text = "x".repeat(498);
     long_text.push('├'); // 3 bytes, bytes 498..501
     long_text.push_str(&"y".repeat(100));
@@ -179,6 +182,34 @@ fn test_restore_tool_result_truncated_at_utf8_boundary() {
         user_msg("Read big file"),
         assistant_tool_use("Read", "toolu_03", serde_json::json!({"file_path": "/big"})),
         tool_result("toolu_03", &long_text, false),
+    ];
+    let mut app = App::new("test-model".into());
+    // This must NOT panic
+    app.restore_messages_to_display(&messages);
+
+    // Read tool result → ReadOutput with full content
+    let results: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::ReadOutput { .. })).collect();
+    assert_eq!(results.len(), 1);
+    match &results[0] {
+        DisplayBlock::ReadOutput { content, .. } => {
+            assert_eq!(content, &long_text, "ReadOutput should store full content");
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn test_restore_non_read_tool_result_truncated_at_utf8_boundary() {
+    // Gotcha #16 still applies for non-Read tools (e.g. Bash, Grep).
+    // Their results are still shown as ToolResult with truncated preview.
+    let mut long_text = "x".repeat(498);
+    long_text.push('├'); // 3 bytes, bytes 498..501
+    long_text.push_str(&"y".repeat(100));
+
+    let messages = vec![
+        user_msg("Run command"),
+        assistant_tool_use("Bash", "toolu_06", serde_json::json!({"command": "cat big"})),
+        tool_result("toolu_06", &long_text, false),
     ];
     let mut app = App::new("test-model".into());
     // This must NOT panic
@@ -239,7 +270,7 @@ fn test_restore_mixed_content_in_single_assistant_message() {
 
 #[test]
 fn test_restore_skips_tool_result_only_user_messages() {
-    // User messages that only contain ToolResult should produce ToolResult blocks,
+    // User messages that only contain ToolResult should produce ReadOutput/ToolResult blocks,
     // NOT UserMessage blocks (they are tool results, not user prompts).
     let messages = vec![
         user_msg("Read file"),

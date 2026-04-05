@@ -460,3 +460,92 @@ fn test_mixed_cjk_and_ascii() {
     assert_eq!(app.input, "日本語x");
     assert_eq!(app.input_char_count(), 4);
 }
+
+// ── Delete (fn+Backspace) — delete char right of cursor ─────────
+
+/// Delete at the beginning removes the first character.
+#[test]
+fn test_delete_char_forward_at_start() {
+    let mut app = App::new("test".into());
+    app.input = "hello".to_string();
+    app.cursor = 0;
+    app.delete_char_forward();
+    assert_eq!(app.input, "ello");
+    assert_eq!(app.cursor, 0);
+}
+
+/// Delete in the middle removes the character right of the cursor.
+#[test]
+fn test_delete_char_forward_in_middle() {
+    let mut app = App::new("test".into());
+    app.input = "hello".to_string();
+    app.cursor = 2; // between 'l' and 'l'
+    app.delete_char_forward();
+    assert_eq!(app.input, "helo");
+    assert_eq!(app.cursor, 2);
+}
+
+/// Delete at end of input is a no-op.
+#[test]
+fn test_delete_char_forward_at_end_is_noop() {
+    let mut app = App::new("test".into());
+    app.input = "hello".to_string();
+    app.cursor = 5;
+    app.delete_char_forward();
+    assert_eq!(app.input, "hello");
+    assert_eq!(app.cursor, 5);
+}
+
+/// Delete on empty input is a no-op.
+#[test]
+fn test_delete_char_forward_empty_input() {
+    let mut app = App::new("test".into());
+    app.input = String::new();
+    app.cursor = 0;
+    app.delete_char_forward();
+    assert_eq!(app.input, "");
+    assert_eq!(app.cursor, 0);
+}
+
+/// Delete correctly handles multibyte UTF-8 characters (e.g. 'ö' = 2 bytes).
+#[test]
+fn test_delete_char_forward_multibyte() {
+    let mut app = App::new("test".into());
+    app.input = "aöb".to_string();
+    app.cursor = 1; // between 'a' and 'ö'
+    app.delete_char_forward();
+    assert_eq!(app.input, "ab");
+    assert_eq!(app.cursor, 1);
+}
+
+/// Delete correctly handles emoji (4-byte chars).
+#[test]
+fn test_delete_char_forward_emoji() {
+    let mut app = App::new("test".into());
+    app.input = "a🦀b".to_string();
+    app.cursor = 1; // between 'a' and '🦀'
+    app.delete_char_forward();
+    assert_eq!(app.input, "ab");
+    assert_eq!(app.cursor, 1);
+}
+
+/// Delete correctly handles CJK characters (3-byte chars).
+#[test]
+fn test_delete_char_forward_cjk() {
+    let mut app = App::new("test".into());
+    app.input = "日本語".to_string();
+    app.cursor = 1; // between '日' and '本'
+    app.delete_char_forward();
+    assert_eq!(app.input, "日語");
+    assert_eq!(app.cursor, 1);
+}
+
+/// Verify event_loop.rs wires KeyCode::Delete to delete_char_forward().
+#[test]
+fn test_event_loop_has_delete_key_binding() {
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("delete_char_forward"),
+        "event_loop.rs must call delete_char_forward() for KeyCode::Delete"
+    );
+}
