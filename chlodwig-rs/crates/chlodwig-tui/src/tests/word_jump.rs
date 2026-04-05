@@ -508,3 +508,56 @@ fn test_fn_option_backspace_does_not_insert_paren() {
     // Crucially: no '(' in the input
     assert!(!app.input.contains('('));
 }
+
+// ── Ctrl+K / Ctrl+L: delete word back / forward (right-hand home row) ──
+
+#[test]
+fn test_event_loop_has_ctrl_k_delete_word_back_binding() {
+    // Ctrl+K must be wired to delete_word_back() in the event loop.
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("Char('k')") && src.contains("delete_word_back"),
+        "event_loop.rs must handle Ctrl+K as delete_word_back()"
+    );
+}
+
+#[test]
+fn test_event_loop_has_ctrl_l_delete_word_forward_binding() {
+    // Ctrl+L must be wired to delete_word_forward() in the event loop.
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("Char('l')") && src.contains("delete_word_forward"),
+        "event_loop.rs must handle Ctrl+L as delete_word_forward()"
+    );
+}
+
+/// Ctrl+K must not insert 'k' — it must delete the word backwards.
+#[test]
+fn test_ctrl_k_does_not_insert_k() {
+    let mut app = App::new("test".into());
+    app.input = "hello world".to_string();
+    app.cursor = 5; // after "hello"
+
+    // Simulate what the event loop does for Ctrl+K: delete_word_back()
+    app.delete_word_back();
+
+    assert_eq!(app.input, " world");
+    assert_eq!(app.cursor, 0);
+    assert!(!app.input.contains('k'));
+}
+
+/// Ctrl+L must not insert 'l' — it must delete the word forwards.
+#[test]
+fn test_ctrl_l_does_not_insert_l() {
+    let mut app = App::new("test".into());
+    app.input = "abc xyz".to_string();
+    app.cursor = 3; // after "abc"
+
+    // Simulate what the event loop does for Ctrl+L: delete_word_forward()
+    app.delete_word_forward();
+
+    assert_eq!(app.input, "abc");
+    assert_eq!(app.cursor, 3);
+    // No 'l' should have been inserted
+    assert!(!app.input.contains('l'));
+}

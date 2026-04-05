@@ -140,6 +140,8 @@ cargo run --release -- --print "prompt"  # Headless mode
 | `Shift+Enter` or `Alt+Enter` | Insert newline (Kitty protocol terminals only) |
 | `Alt+b` / `Alt+f` | Move cursor word left / right |
 | `Alt+d` | Delete word forward |
+| `Ctrl+K` | Delete word backward (right-hand home row) |
+| `Ctrl+L` | Delete word forward (right-hand home row) |
 | `Ctrl+c` | Quit |
 
 ## Session Persistence

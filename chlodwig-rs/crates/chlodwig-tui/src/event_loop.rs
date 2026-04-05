@@ -1149,6 +1149,14 @@ pub async fn run_tui_with_permissions(
                     {
                         app.delete_word_back();
                     }
+                    // Delete word backwards: Ctrl+K (right-hand home row shortcut)
+                    KeyCode::Char('k')
+                        if !app.is_loading
+                            && app.pending_permission.is_none()
+                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        app.delete_word_back();
+                    }
                     // Delete word forwards: Alt+Delete / fn+Option+Backspace on macOS
                     KeyCode::Delete
                         if !app.is_loading
@@ -1162,6 +1170,14 @@ pub async fn run_tui_with_permissions(
                         if !app.is_loading
                             && app.pending_permission.is_none()
                             && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.delete_word_forward();
+                    }
+                    // Delete word forwards: Ctrl+L (right-hand home row shortcut)
+                    KeyCode::Char('l')
+                        if !app.is_loading
+                            && app.pending_permission.is_none()
+                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
                     {
                         app.delete_word_forward();
                     }
