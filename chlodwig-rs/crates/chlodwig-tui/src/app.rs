@@ -1155,6 +1155,19 @@ impl App {
         self.cursor += 1;
     }
 
+    /// Insert pasted text at the current cursor position.
+    ///
+    /// Newlines in the pasted text are preserved as `\n` (not treated as submit).
+    /// Windows-style `\r\n` is normalized to `\n`.
+    /// This is the handler for `Event::Paste` (bracketed paste mode).
+    pub(crate) fn insert_paste(&mut self, text: &str) {
+        // Normalize \r\n → \n, also strip lone \r
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        let byte_pos = self.cursor_byte_pos();
+        self.input.insert_str(byte_pos, &normalized);
+        self.cursor += normalized.chars().count();
+    }
+
     /// Number of chars in the input string.
     pub(crate) fn input_char_count(&self) -> usize {
         self.input.chars().count()

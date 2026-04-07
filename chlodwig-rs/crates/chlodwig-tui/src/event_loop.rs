@@ -204,7 +204,8 @@ fn install_panic_hook() {
         let _ = crossterm::execute!(
             std::io::stdout(),
             LeaveAlternateScreen,
-            crossterm::event::DisableMouseCapture
+            crossterm::event::DisableMouseCapture,
+            crossterm::event::DisableBracketedPaste
         );
 
         // 2. Capture backtrace
@@ -296,7 +297,8 @@ extern "C" fn signal_handler(sig: libc::c_int) {
     let _ = crossterm::execute!(
         std::io::stdout(),
         LeaveAlternateScreen,
-        crossterm::event::DisableMouseCapture
+        crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableBracketedPaste
     );
 
     // 2. Map signal number to name
@@ -343,7 +345,8 @@ extern "C" fn sigint_handler(_sig: libc::c_int) {
     let _ = crossterm::execute!(
         std::io::stdout(),
         LeaveAlternateScreen,
-        crossterm::event::DisableMouseCapture
+        crossterm::event::DisableMouseCapture,
+        crossterm::event::DisableBracketedPaste
     );
 
     // Re-raise with default handler → exit code 130 (128 + SIGINT=2)
@@ -575,7 +578,8 @@ pub async fn run_tui_with_permissions(
     crossterm::execute!(
         std::io::stdout(),
         EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableBracketedPaste
     )?;
 
     // TerminalGuard ensures cleanup happens even if `?` bails out of the loop.
@@ -596,7 +600,8 @@ pub async fn run_tui_with_permissions(
             let _ = crossterm::execute!(
                 std::io::stdout(),
                 LeaveAlternateScreen,
-                crossterm::event::DisableMouseCapture
+                crossterm::event::DisableMouseCapture,
+                crossterm::event::DisableBracketedPaste
             );
         }
     }
@@ -1344,7 +1349,12 @@ pub async fn run_tui_with_permissions(
                 // while dragging the window edge).
                 last_resize = std::time::Instant::now();
             }
-            _ => {} // Focus, Paste — don't redraw
+            Event::Paste(text) if !app.is_loading && app.pending_permission.is_none() => {
+                // Bracketed paste: insert all text (including newlines) without submit.
+                app.insert_paste(&text);
+                needs_redraw = true;
+            }
+            _ => {} // Focus, etc. — don't redraw
             }
 
                 // Break if no more events are pending
