@@ -1387,6 +1387,225 @@ impl App {
         (total_lines, cursor_row, cursor_col, char_count)
     }
 
+    // ── Vertical cursor movement (Up/Down in multiline input) ───────
+
+    /// Move the cursor one visual line up, keeping the same display column
+    /// where possible (clamps to end of line if target line is shorter).
+    /// Returns `true` if the cursor actually moved, `false` if it was already
+    /// on the first visual line (caller should fall through to history/scroll).
+    pub(crate) fn move_cursor_up(&mut self, width: usize) -> bool {
+        if width == 0 || self.input.is_empty() {
+            return false;
+        }
+        let (cur_row, cur_col) = Self::word_wrap_cursor_pos(&self.input, self.cursor, width);
+        if cur_row == 0 {
+            return false; // already on first visual line
+        }
+        let target_row = cur_row - 1;
+        self.cursor = Self::char_index_at_visual_pos(&self.input, target_row, cur_col, width);
+        true
+    }
+
+    /// Move the cursor one visual line down, keeping the same display column
+    /// where possible (clamps to end of line if target line is shorter).
+    /// Returns `true` if the cursor actually moved, `false` if it was already
+    /// on the last visual line (caller should fall through to history/tab bar).
+    pub(crate) fn move_cursor_down(&mut self, width: usize) -> bool {
+        if width == 0 || self.input.is_empty() {
+            return false;
+        }
+        let (cur_row, cur_col) = Self::word_wrap_cursor_pos(&self.input, self.cursor, width);
+        let total_visual_lines = self.input_total_visual_lines(width);
+        if cur_row + 1 >= total_visual_lines {
+            return false; // already on last visual line
+        }
+        let target_row = cur_row + 1;
+        self.cursor = Self::char_index_at_visual_pos(&self.input, target_row, cur_col, width);
+        true
+    }
+
+    /// Total number of visual lines in the input (uncapped — unlike
+    /// `input_visual_line_count` which caps at `input_max_visual_lines`).
+    fn input_total_visual_lines(&self, width: usize) -> usize {
+        if self.input.is_empty() || width == 0 {
+            return 1;
+        }
+        let mut total = 0usize;
+        for logical_line in self.input.split('\n') {
+            total += Self::word_wrap_line_count(logical_line, width);
+        }
+        total.max(1)
+    }
+
+    /// Find the char index in `input` that corresponds to the given visual
+    /// `target_row` and `target_col` (display width). If `target_col` exceeds
+    /// the width of the target row, clamps to the end of that row.
+    ///
+    /// This is the inverse of `word_wrap_cursor_pos`.
+    fn char_index_at_visual_pos(
+        input: &str,
+        target_row: usize,
+        target_col: usize,
+        width: usize,
+    ) -> usize {
+        let mut global_row = 0usize;
+        let mut char_offset = 0usize; // char index at start of current logical line
+
+        for logical_line in input.split('\n') {
+            let chars_in_line = logical_line.chars().count();
+            let (visual_lines, _, _, _) =
+                Self::word_wrap_line_with_cursor(logical_line, width, usize::MAX);
+
+            if target_row < global_row + visual_lines {
+                // Target row is within this logical line
+                let local_row = target_row - global_row;
+                let local_char = Self::char_index_in_wrapped_line(
+                    logical_line, local_row, target_col, width,
+                );
+                return char_offset + local_char;
+            }
+
+            global_row += visual_lines;
+            char_offset += chars_in_line + 1; // +1 for the '\n'
+        }
+
+        // Fallback: end of input
+        input.chars().count()
+    }
+
+    /// Within a single logical line (no `\n`), find the char index that
+    /// corresponds to visual `target_row` and `target_col` (display width)
+    /// after word-wrapping at `width`.
+    fn char_index_in_wrapped_line(
+        line: &str,
+        target_row: usize,
+        target_col: usize,
+        width: usize,
+    ) -> usize {
+        if line.is_empty() {
+            return 0;
+        }
+
+        // Re-run the word-wrap algorithm to build wrapped lines,
+        // then scan the target row for the char at the target column.
+        let chars_vec: Vec<char> = line.chars().collect();
+        let chars_with_width: Vec<(usize, usize)> = chars_vec
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, c.width().unwrap_or(0)))
+            .collect();
+
+        // Build wrapped lines using the same algorithm as word_wrap_line_with_cursor
+        let mut wrapped_lines: Vec<Vec<(usize, usize)>> = Vec::new();
+        let mut pending_line: Vec<(usize, usize)> = Vec::new();
+        let mut pending_ws: Vec<(usize, usize)> = Vec::new();
+        let mut pending_word: Vec<(usize, usize)> = Vec::new();
+        let mut line_w: usize = 0;
+        let mut ws_w: usize = 0;
+        let mut word_w: usize = 0;
+        let mut prev_non_ws = false;
+
+        for &(ci, cw) in &chars_with_width {
+            let ch = chars_vec[ci];
+            let is_ws = ch.is_whitespace();
+
+            let word_found = prev_non_ws && is_ws;
+            let untrimmed_overflow =
+                pending_line.is_empty() && (word_w + ws_w + cw) > width;
+
+            if word_found || untrimmed_overflow {
+                pending_line.extend(pending_ws.drain(..));
+                line_w += ws_w;
+                pending_line.extend(pending_word.drain(..));
+                line_w += word_w;
+                ws_w = 0;
+                word_w = 0;
+            }
+
+            let line_full = line_w >= width;
+            let pending_word_overflow =
+                cw > 0 && (line_w + ws_w + word_w) >= width;
+
+            if line_full || pending_word_overflow {
+                wrapped_lines.push(std::mem::take(&mut pending_line));
+                let remaining = width.saturating_sub(line_w);
+                line_w = 0;
+
+                let mut rem = remaining;
+                while let Some(&(_, ww)) = pending_ws.first() {
+                    if ww > rem {
+                        break;
+                    }
+                    ws_w -= ww;
+                    rem -= ww;
+                    pending_ws.remove(0);
+                }
+
+                if is_ws && pending_ws.is_empty() && pending_word.is_empty() {
+                    prev_non_ws = false;
+                    continue;
+                }
+            }
+
+            if is_ws {
+                ws_w += cw;
+                pending_ws.push((ci, cw));
+            } else {
+                word_w += cw;
+                pending_word.push((ci, cw));
+            }
+
+            prev_non_ws = !is_ws;
+        }
+
+        // Flush remaining
+        pending_line.extend(pending_ws.drain(..));
+        pending_line.extend(pending_word.drain(..));
+        if !pending_line.is_empty() {
+            wrapped_lines.push(pending_line);
+        }
+        if wrapped_lines.is_empty() {
+            wrapped_lines.push(Vec::new());
+        }
+
+        // Now look up the target_row
+        if target_row >= wrapped_lines.len() {
+            // Past last line → end of this logical line
+            return chars_vec.len();
+        }
+
+        let wline = &wrapped_lines[target_row];
+        if wline.is_empty() {
+            // Empty wrapped line — return char index of first char on this row
+            // (or end of previous row)
+            if target_row > 0 {
+                // Char after the last char of the previous row
+                if let Some(&(last_ci, _)) = wrapped_lines[target_row - 1].last() {
+                    return (last_ci + 1).min(chars_vec.len());
+                }
+            }
+            return 0;
+        }
+
+        // Walk the wrapped line accumulating display width to find target_col
+        let mut col = 0usize;
+        for &(ci, cw) in wline {
+            if col + cw > target_col {
+                // This char straddles or passes the target column
+                return ci;
+            }
+            col += cw;
+        }
+
+        // target_col is past the end of this wrapped line — clamp to end
+        // Return the char index AFTER the last char on this line
+        if let Some(&(last_ci, _)) = wline.last() {
+            (last_ci + 1).min(chars_vec.len())
+        } else {
+            chars_vec.len()
+        }
+    }
+
     /// Scroll up by `n` lines. Leaves auto_scroll mode, anchors from current position.
     pub(crate) fn scroll_up(&mut self, n: usize) {
         if self.auto_scroll {

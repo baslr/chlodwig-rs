@@ -102,6 +102,8 @@ These were discovered during development. **Never regress on these:**
 
 24. **Shift+Enter and Alt+Enter are indistinguishable from Enter in most terminals**: Most terminals (macOS Terminal, iTerm2, GNOME Terminal) send the same escape code (CR / `0x0d`) for Enter, Shift+Enter, and swallow Alt+Enter entirely. Only terminals supporting the **Kitty keyboard protocol** (Kitty, WezTerm, foot, Ghostty) send distinct codes for modified Enter. **Fix**: (1) **Ctrl+J** (ASCII linefeed `0x0a`) is the primary newline shortcut — it works in **every** terminal because it's a completely different character code. (2) Shift+Enter and Alt+Enter are kept as additional bindings for Kitty-protocol terminals. (3) Kitty keyboard protocol enabled via `PushKeyboardEnhancementFlags(REPORT_EVENT_TYPES | DISAMBIGUATE_ESCAPE_CODES)` at startup — terminals that don't support it silently ignore the sequence. (4) `TerminalGuard::drop()` sends `PopKeyboardEnhancementFlags` to restore the terminal. Tested by `test_shift_enter_inserts_newline`, `test_shift_enter_inserts_newline_mid_text`, `test_shift_enter_multiple_newlines`, `test_event_loop_has_shift_enter_newline_binding`, `test_event_loop_has_alt_enter_newline_binding`, `test_event_loop_has_ctrl_j_newline_binding`, `test_ctrl_j_does_not_insert_j`.
 
+25. **Up/Down arrows must move cursor vertically in multiline input**: When the input contains `\n` newlines or is soft-wrapped across multiple visual lines, Up/Down should move the cursor one visual line up/down (preserving display column where possible, clamping to end-of-line if the target line is shorter). **Only when the cursor is already on the first/last visual line** should Up/Down fall through to prompt history browsing (Up) or tab-bar navigation (Down). If the user is already browsing history (`history_index.is_some()`), Up/Down continue navigating history without attempting vertical cursor movement. **Implementation**: `move_cursor_up(width)` / `move_cursor_down(width)` return `bool` (true = moved, false = first/last line, caller should fall through). Uses `char_index_at_visual_pos()` — the inverse of `word_wrap_cursor_pos()` — to find the char index at a given visual (row, col). The word-wrap algorithm is duplicated from `word_wrap_line_with_cursor` to build wrapped lines and scan for the target position. Tested by `test_cursor_up_simple_newline`, `test_cursor_down_simple_newline`, `test_cursor_up_soft_wrap`, `test_cursor_down_soft_wrap`, `test_cursor_up_clamps_to_shorter_line`, `test_cursor_down_clamps_to_shorter_line`, `test_cursor_up_cjk_display_width`, `test_cursor_up_down_three_lines`, `test_event_loop_has_cursor_up_for_multiline`, `test_event_loop_has_cursor_down_for_multiline`.
+
 ## Compact Instructions
 
 When summarizing the conversation, focus on:
@@ -140,6 +142,7 @@ cargo run --release -- --print "prompt"  # Headless mode
 | `Shift+Enter` or `Alt+Enter` | Insert newline (Kitty protocol terminals only) |
 | `Alt+b` / `Alt+f` | Move cursor word left / right |
 | `Alt+d` | Delete word forward |
+| `Up` / `Down` | Move cursor vertically in multiline input (falls through to history/tab bar on first/last line) |
 | `Ctrl+K` | Delete word backward (right-hand home row) |
 | `Ctrl+L` | Delete word forward (right-hand home row) |
 | `Ctrl+c` | Quit |

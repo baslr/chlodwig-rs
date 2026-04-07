@@ -1253,6 +1253,10 @@ pub async fn run_tui_with_permissions(
                     }
 
                     // Prompt history navigation (plain Up/Down) — focus-dependent
+                    // When the input has multiple visual lines, Up/Down first try
+                    // to move the cursor vertically. Only when the cursor is already
+                    // on the first/last visual line does it fall through to history
+                    // browsing or tab-bar navigation.
                     KeyCode::Up
                         if !app.is_loading && app.pending_permission.is_none() =>
                     {
@@ -1261,21 +1265,25 @@ pub async fn run_tui_with_permissions(
                                 app.handle_tab_bar_up();
                             }
                             Focus::Input => {
-                                if !app.prompt_history.is_empty() {
-                                    match app.history_index {
-                                        None => {
-                                            app.saved_input = app.input.clone();
-                                            app.history_index = Some(0);
-                                            app.input = app.prompt_history[app.prompt_history.len() - 1].clone();
-                                        }
-                                        Some(idx) if idx + 1 < app.prompt_history.len() => {
+                                // If already browsing history, continue history nav
+                                if app.history_index.is_some() {
+                                    if let Some(idx) = app.history_index {
+                                        if idx + 1 < app.prompt_history.len() {
                                             app.history_index = Some(idx + 1);
                                             app.input = app.prompt_history[app.prompt_history.len() - 1 - idx - 1].clone();
+                                            app.cursor = app.input_char_count();
+                                            app.mark_dirty();
                                         }
-                                        _ => {}
                                     }
-                                    app.cursor = app.input_char_count();
-                                    app.mark_dirty();
+                                } else if !app.move_cursor_up(app.wrap_width) {
+                                    // Cursor was on first visual line — fall through to history
+                                    if !app.prompt_history.is_empty() {
+                                        app.saved_input = app.input.clone();
+                                        app.history_index = Some(0);
+                                        app.input = app.prompt_history[app.prompt_history.len() - 1].clone();
+                                        app.cursor = app.input_char_count();
+                                        app.mark_dirty();
+                                    }
                                 }
                             }
                         }
@@ -1300,8 +1308,11 @@ pub async fn run_tui_with_permissions(
                                         app.mark_dirty();
                                     }
                                     None => {
-                                        // Not in history → go to tab bar
-                                        app.handle_down_key();
+                                        // Try vertical cursor movement first
+                                        if !app.move_cursor_down(app.wrap_width) {
+                                            // Cursor on last line → go to tab bar
+                                            app.handle_down_key();
+                                        }
                                     }
                                 }
                             }
