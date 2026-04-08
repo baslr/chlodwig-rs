@@ -106,6 +106,8 @@ These were discovered during development. **Never regress on these:**
 
 26. **Bracketed paste: multiline paste must not trigger submit**: Without bracketed paste mode, pasting multiline text via Cmd+V sends each character individually, and `\n` is treated as Enter (submit). This truncates the paste at the first newline. **Fix**: Enable `EnableBracketedPaste` at terminal startup. The terminal wraps pasted text in escape sequences (`\e[200~` ... `\e[201~`), and crossterm delivers the entire paste as a single `Event::Paste(String)`. The `insert_paste()` method inserts the full text at the cursor position, preserving `\n` as literal newlines. Windows-style `\r\n` is normalized to `\n`. `DisableBracketedPaste` is sent on cleanup (TerminalGuard, panic hook, signal handlers). Tested by `test_insert_paste_multiline`, `test_insert_paste_at_cursor`, `test_insert_paste_empty`, `test_insert_paste_single_line`, `test_insert_paste_trailing_newline`, `test_insert_paste_utf8`, `test_insert_paste_crlf_normalized`, `test_insert_paste_into_multiline_input`, `test_event_loop_has_paste_handler`, `test_event_loop_enables_bracketed_paste`, `test_event_loop_disables_bracketed_paste`.
 
+27. **UserQuestion tool: LLM asks the user questions via a TUI dialog**: The model can call `UserQuestion` with a `question` string and optional `options` array. The tool sends a `UserQuestionRequest` through an `mpsc::UnboundedSender` to the TUI, which displays a modal dialog. The user can navigate options with ↑↓, switch to free-text input with Tab, quick-select with number keys 1-9, submit with Enter, or cancel with Esc. Architecture mirrors the `PermissionPrompter` pattern (oneshot channel for the response). `has_modal()` helper on `App` returns `true` when either `pending_permission` or `pending_user_question` is active — used as a guard to suppress normal input handling during any modal dialog. The tool is injected into `ConversationState.tools` at TUI startup, not in `builtin_tools()`, because it needs the channel sender. Tested by `test_definition_name_is_user_question`, `test_call_sends_question_and_returns_answer`, `test_call_with_no_options`, `test_call_freetext_answer_with_options`, `test_call_fails_when_channel_dropped`, `test_call_with_utf8_question_and_answer`, `test_has_modal_true_with_user_question`, `test_user_question_nav_down_through_options`, `test_user_question_tab_switches_to_text`, `test_user_question_submit_option`, `test_user_question_text_input_utf8`, `test_event_loop_has_user_question_tool`, `test_event_loop_blocks_input_during_user_question`, `test_render_has_user_question_dialog`.
+
 ## Compact Instructions
 
 When summarizing the conversation, focus on:
@@ -148,6 +150,16 @@ cargo run --release -- --print "prompt"  # Headless mode
 | `Ctrl+K` | Delete word backward (right-hand home row) |
 | `Ctrl+L` | Delete word forward (right-hand home row) |
 | `Ctrl+c` | Quit |
+
+### UserQuestion Dialog Keys
+
+| Key | Effect |
+|-----|--------|
+| `↑` / `↓` | Navigate options |
+| `Tab` | Toggle between options and free-text input |
+| `1`-`9` | Quick-select option by number |
+| `Enter` | Submit selected option or typed text |
+| `Esc` | Cancel (sends empty string) |
 
 ## Session Persistence
 

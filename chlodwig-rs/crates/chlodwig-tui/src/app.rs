@@ -423,6 +423,7 @@ pub(crate) struct App {
     pub(crate) is_loading: bool,
     pub(crate) streaming_buffer: String,
     pub(crate) pending_permission: Option<PendingPermission>,
+    pub(crate) pending_user_question: Option<PendingUserQuestion>,
     pub(crate) should_quit: bool,
     // Token usage tracking
     pub(crate) total_input_tokens: u64,
@@ -476,6 +477,7 @@ impl App {
             is_loading: false,
             streaming_buffer: String::new(),
             pending_permission: None,
+            pending_user_question: None,
             should_quit: false,
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -1685,6 +1687,13 @@ impl App {
         self.lines_dirty = true;
     }
 
+    /// Returns true if any modal dialog is open (permission or user question).
+    /// When a modal is open, normal input handling (text entry, submit, etc.)
+    /// must be suppressed.
+    pub(crate) fn has_modal(&self) -> bool {
+        self.pending_permission.is_some() || self.pending_user_question.is_some()
+    }
+
     // ── Tab bar navigation ───────────────────────────────────────────
 
     /// Handle Down key from Input: if not navigating history, move focus to TabBar.
@@ -2304,6 +2313,7 @@ impl App {
         let _ = writeln!(out, "history_index:       {:?}", self.history_index);
         let _ = writeln!(out, "spinner_frame:       {}", self.spinner_frame);
         let _ = writeln!(out, "pending_permission:  {}", self.pending_permission.is_some());
+        let _ = writeln!(out, "pending_user_question: {}", self.pending_user_question.is_some());
         let _ = writeln!(out, "model:               {}", self.model);
 
         let _ = writeln!(out);

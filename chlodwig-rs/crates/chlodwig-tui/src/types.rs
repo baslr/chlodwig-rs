@@ -72,6 +72,21 @@ pub(crate) struct PendingPermission {
     pub(crate) respond: oneshot::Sender<PermissionDecision>,
 }
 
+/// A pending user question dialog — the LLM asked a question and is waiting
+/// for the user's answer.
+pub(crate) struct PendingUserQuestion {
+    pub(crate) question: String,
+    pub(crate) options: Vec<String>,
+    /// Currently selected option index (0..options.len()), or `None` when
+    /// the free-text input is focused.
+    pub(crate) selected: Option<usize>,
+    /// Free-text input buffer (user can type instead of picking an option).
+    pub(crate) text_input: String,
+    /// Cursor position (char index) in `text_input`.
+    pub(crate) text_cursor: usize,
+    pub(crate) respond: oneshot::Sender<String>,
+}
+
 /// Which area of the UI has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Focus {

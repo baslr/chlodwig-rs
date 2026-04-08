@@ -8,6 +8,7 @@ mod listdir;
 mod read;
 mod webfetch;
 mod websearch;
+mod user_question;
 mod write;
 
 pub use bash::BashTool;
@@ -16,6 +17,7 @@ pub use glob::GlobTool;
 pub use grep::GrepTool;
 pub use listdir::ListDirTool;
 pub use read::ReadTool;
+pub use user_question::{UserQuestionRequest, UserQuestionTool};
 pub use webfetch::WebFetchTool;
 pub use websearch::WebSearchTool;
 pub use write::WriteTool;

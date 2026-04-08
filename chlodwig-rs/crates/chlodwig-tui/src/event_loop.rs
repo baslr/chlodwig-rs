@@ -546,7 +546,7 @@ pub async fn run_tui(
 }
 
 pub async fn run_tui_with_permissions(
-    initial_state: ConversationState,
+    mut initial_state: ConversationState,
     api_client: Arc<dyn ApiClient>,
     bypass_permissions: bool,
     initial_constants: Option<chlodwig_core::ConstantsSnapshot>,
@@ -642,6 +642,13 @@ pub async fn run_tui_with_permissions(
     // Channels
     let (event_tx, mut event_rx) = mpsc::unbounded_channel::<ConversationEvent>();
     let (perm_tx, mut perm_rx) = mpsc::unbounded_channel::<PermissionRequest>();
+    let (uq_tx, mut uq_rx) = mpsc::unbounded_channel::<chlodwig_tools::UserQuestionRequest>();
+
+    // Inject the UserQuestion tool into the conversation state so the model
+    // can call it to ask the user questions (like Claude Code does).
+    initial_state.tools.push(Box::new(
+        chlodwig_tools::UserQuestionTool::new(uq_tx),
+    ));
 
     // Shared state in Arc for the background task
     let state = std::sync::Arc::new(tokio::sync::Mutex::new(initial_state));
@@ -790,7 +797,7 @@ pub async fn run_tui_with_permissions(
                     // Shift+Enter works in terminals with Kitty keyboard protocol.
                     KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL)
                         && !app.is_loading
-                        && app.pending_permission.is_none() =>
+                        && !app.has_modal() =>
                     {
                         app.insert_newline();
                     }
@@ -798,7 +805,7 @@ pub async fn run_tui_with_permissions(
                         if (key.modifiers.contains(KeyModifiers::SHIFT)
                             || key.modifiers.contains(KeyModifiers::ALT))
                             && !app.is_loading
-                            && app.pending_permission.is_none() =>
+                            && !app.has_modal() =>
                     {
                         app.insert_newline();
                     }
@@ -807,7 +814,7 @@ pub async fn run_tui_with_permissions(
                     KeyCode::Enter
                         if !app.is_loading
                             && !app.input.is_empty()
-                            && app.pending_permission.is_none() =>
+                            && !app.has_modal() =>
                     {
                         let prompt: String = app.input.drain(..).collect();
                         app.cursor = 0;
@@ -1073,6 +1080,112 @@ pub async fn run_tui_with_permissions(
                         let _ = perm.respond.send(PermissionDecision::AllowAlways);
                     }
 
+                    // ── User question dialog keys ─────────────────────────
+                    // Up: move selection up (through options)
+                    KeyCode::Up if app.pending_user_question.is_some() => {
+                        let q = app.pending_user_question.as_mut().unwrap();
+                        if !q.options.is_empty() {
+                            match q.selected {
+                                Some(0) => {} // already at top
+                                Some(i) => q.selected = Some(i - 1),
+                                None => q.selected = Some(q.options.len() - 1), // from text → last option
+                            }
+                        }
+                    }
+                    // Down: move selection down (through options → text input)
+                    KeyCode::Down if app.pending_user_question.is_some() => {
+                        let q = app.pending_user_question.as_mut().unwrap();
+                        if !q.options.is_empty() {
+                            match q.selected {
+                                Some(i) if i + 1 < q.options.len() => q.selected = Some(i + 1),
+                                Some(_) => q.selected = None, // last option → text input
+                                None => {} // already in text input
+                            }
+                        }
+                    }
+                    // Tab: toggle between options and text input
+                    KeyCode::Tab if app.pending_user_question.is_some() => {
+                        let q = app.pending_user_question.as_mut().unwrap();
+                        if q.options.is_empty() {
+                            // No options, always in text mode — do nothing
+                        } else if q.selected.is_some() {
+                            q.selected = None; // switch to text input
+                        } else {
+                            q.selected = Some(0); // switch to options
+                        }
+                    }
+                    // Enter: submit selection or text
+                    KeyCode::Enter if app.pending_user_question.is_some() => {
+                        let q = app.pending_user_question.take().unwrap();
+                        let answer = if let Some(idx) = q.selected {
+                            q.options[idx].clone()
+                        } else {
+                            q.text_input
+                        };
+                        let _ = q.respond.send(answer);
+                    }
+                    // Esc: cancel (send empty string)
+                    KeyCode::Esc if app.pending_user_question.is_some() => {
+                        let q = app.pending_user_question.take().unwrap();
+                        let _ = q.respond.send(String::new());
+                    }
+                    // Text input when in text mode (no option selected)
+                    KeyCode::Char(c) if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
+                    {
+                        let q = app.pending_user_question.as_mut().unwrap();
+                        // Insert at cursor position (char-based)
+                        let byte_pos = q.text_input
+                            .char_indices()
+                            .nth(q.text_cursor)
+                            .map(|(i, _)| i)
+                            .unwrap_or(q.text_input.len());
+                        q.text_input.insert(byte_pos, c);
+                        q.text_cursor += 1;
+                    }
+                    // Backspace in text mode
+                    KeyCode::Backspace if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && app.pending_user_question.as_ref().unwrap().text_cursor > 0 =>
+                    {
+                        let q = app.pending_user_question.as_mut().unwrap();
+                        q.text_cursor -= 1;
+                        let byte_pos = q.text_input
+                            .char_indices()
+                            .nth(q.text_cursor)
+                            .map(|(i, _)| i)
+                            .unwrap_or(q.text_input.len());
+                        q.text_input.remove(byte_pos);
+                    }
+                    // Left/Right cursor in text mode
+                    KeyCode::Left if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && app.pending_user_question.as_ref().unwrap().text_cursor > 0 =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().text_cursor -= 1;
+                    }
+                    KeyCode::Right if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && app.pending_user_question.as_ref().unwrap().text_cursor
+                            < app.pending_user_question.as_ref().unwrap().text_input.chars().count() =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().text_cursor += 1;
+                    }
+                    // Number keys 1-9: quick-select option (when options exist)
+                    KeyCode::Char(c @ '1'..='9') if app.pending_user_question.is_some()
+                        && !app.pending_user_question.as_ref().unwrap().options.is_empty()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_some() =>
+                    {
+                        let idx = (c as usize) - ('1' as usize);
+                        let q = app.pending_user_question.as_ref().unwrap();
+                        if idx < q.options.len() {
+                            // Submit directly with that option
+                            let answer = q.options[idx].clone();
+                            let q = app.pending_user_question.take().unwrap();
+                            let _ = q.respond.send(answer);
+                        }
+                    }
+
                     // ── Constants tab: inline editing ─────────────────────
                     // When editing a constant value, all input goes to the edit buffer.
                     KeyCode::Char(c) if app.active_tab == 3 && app.constants.is_editing => {
@@ -1092,17 +1205,17 @@ pub async fn run_tui_with_permissions(
                     }
                     // Constants tab: field navigation (when not editing)
                     KeyCode::Up if app.active_tab == 3 && !app.constants.is_editing
-                        && app.pending_permission.is_none() =>
+                        && !app.has_modal() =>
                     {
                         app.constants.select_prev();
                     }
                     KeyCode::Down if app.active_tab == 3 && !app.constants.is_editing
-                        && app.pending_permission.is_none() =>
+                        && !app.has_modal() =>
                     {
                         app.constants.select_next();
                     }
                     KeyCode::Enter if app.active_tab == 3 && !app.constants.is_editing
-                        && !app.is_loading && app.pending_permission.is_none() =>
+                        && !app.is_loading && !app.has_modal() =>
                     {
                         if app.constants.is_reset_button_selected() {
                             app.constants.reset_to_defaults();
@@ -1149,7 +1262,7 @@ pub async fn run_tui_with_permissions(
                     // Delete word backwards: Alt+Backspace / Option+Backspace
                     KeyCode::Backspace
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && key.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         app.delete_word_back();
@@ -1157,7 +1270,7 @@ pub async fn run_tui_with_permissions(
                     // Delete word backwards: Ctrl+K (right-hand home row shortcut)
                     KeyCode::Char('k')
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && key.modifiers.contains(KeyModifiers::CONTROL) =>
                     {
                         app.delete_word_back();
@@ -1165,7 +1278,7 @@ pub async fn run_tui_with_permissions(
                     // Delete word forwards: Alt+Delete / fn+Option+Backspace on macOS
                     KeyCode::Delete
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && key.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         app.delete_word_forward();
@@ -1173,7 +1286,7 @@ pub async fn run_tui_with_permissions(
                     // Delete word forwards: Alt+d (Emacs binding, macOS Terminal sends ESC d)
                     KeyCode::Char('d')
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && key.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         app.delete_word_forward();
@@ -1181,7 +1294,7 @@ pub async fn run_tui_with_permissions(
                     // Delete word forwards: Ctrl+L (right-hand home row shortcut)
                     KeyCode::Char('l')
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && key.modifiers.contains(KeyModifiers::CONTROL) =>
                     {
                         app.delete_word_forward();
@@ -1191,7 +1304,7 @@ pub async fn run_tui_with_permissions(
                     // Fn remaps Backspace→Delete, and the terminal merges it into '('+ALT).
                     KeyCode::Char('(')
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && key.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         app.delete_word_forward();
@@ -1199,7 +1312,7 @@ pub async fn run_tui_with_permissions(
                     // Delete single char forward: Delete / fn+Backspace on macOS
                     KeyCode::Delete
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && !key.modifiers.contains(KeyModifiers::ALT) =>
                     {
                         app.delete_char_forward();
@@ -1207,7 +1320,7 @@ pub async fn run_tui_with_permissions(
 
                     // Text input
                     KeyCode::Char(c)
-                        if !app.is_loading && app.pending_permission.is_none() =>
+                        if !app.is_loading && !app.has_modal() =>
                     {
                         tracing::debug!(
                             char = %c,
@@ -1221,7 +1334,7 @@ pub async fn run_tui_with_permissions(
                     }
                     KeyCode::Backspace
                         if !app.is_loading
-                            && app.pending_permission.is_none()
+                            && !app.has_modal()
                             && app.cursor > 0 =>
                     {
                         app.cursor -= 1;
@@ -1263,7 +1376,7 @@ pub async fn run_tui_with_permissions(
                     // on the first/last visual line does it fall through to history
                     // browsing or tab-bar navigation.
                     KeyCode::Up
-                        if !app.is_loading && app.pending_permission.is_none() =>
+                        if !app.is_loading && !app.has_modal() =>
                     {
                         match app.focus {
                             Focus::TabBar => {
@@ -1294,7 +1407,7 @@ pub async fn run_tui_with_permissions(
                         }
                     }
                     KeyCode::Down
-                        if !app.is_loading && app.pending_permission.is_none() =>
+                        if !app.is_loading && !app.has_modal() =>
                     {
                         match app.focus {
                             Focus::Input => {
@@ -1349,7 +1462,7 @@ pub async fn run_tui_with_permissions(
                 // while dragging the window edge).
                 last_resize = std::time::Instant::now();
             }
-            Event::Paste(text) if !app.is_loading && app.pending_permission.is_none() => {
+            Event::Paste(text) if !app.is_loading && !app.has_modal() => {
                 // Bracketed paste: insert all text (including newlines) without submit.
                 app.insert_paste(&text);
                 needs_redraw = true;
@@ -1610,6 +1723,19 @@ pub async fn run_tui_with_permissions(
             app.pending_permission = Some(PendingPermission {
                 tool_name: req.tool_name,
                 input: req.input,
+                respond: req.respond,
+            });
+            needs_redraw = true;
+        }
+
+        // Drain user question requests
+        while let Ok(req) = uq_rx.try_recv() {
+            app.pending_user_question = Some(PendingUserQuestion {
+                question: req.question,
+                options: req.options.clone(),
+                selected: if req.options.is_empty() { None } else { Some(0) },
+                text_input: String::new(),
+                text_cursor: 0,
                 respond: req.respond,
             });
             needs_redraw = true;

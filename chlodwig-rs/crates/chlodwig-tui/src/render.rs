@@ -16,7 +16,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
-use crate::types::{Focus, PendingPermission};
+use crate::types::{Focus, PendingPermission, PendingUserQuestion};
 
 /// Compute scrollbar state from scroll position, total lines, and viewport height.
 /// Returns (position, content_length, viewport_length) for ScrollbarState.
@@ -58,6 +58,10 @@ pub(crate) fn ui(f: &mut Frame, app: &App) {
 
     if let Some(ref perm) = app.pending_permission {
         render_permission_dialog(f, perm);
+    }
+
+    if let Some(ref question) = app.pending_user_question {
+        render_user_question_dialog(f, question);
     }
 }
 
@@ -170,7 +174,7 @@ pub(crate) fn render_input(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(input, area);
 
-    if !app.is_loading && app.pending_permission.is_none() {
+    if !app.is_loading && !app.has_modal() {
         // Compute cursor position accounting for soft-wrap
         let inner_width = area.width.saturating_sub(2) as usize; // borders
         let (row, col) = app.input_cursor_visual_pos(inner_width);
@@ -550,6 +554,98 @@ pub(crate) fn render_permission_dialog(f: &mut Frame, perm: &PendingPermission) 
 
     f.render_widget(Clear, area);
     f.render_widget(paragraph, area);
+}
+
+pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion) {
+    let area = centered_rect(70, 60, f.area());
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Question text (bold, cyan)
+    lines.push(Line::from(Span::styled(
+        &q.question,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
+    // Options (if any)
+    if !q.options.is_empty() {
+        for (i, opt) in q.options.iter().enumerate() {
+            let is_selected = q.selected == Some(i);
+            let prefix = if is_selected { "▸ " } else { "  " };
+            let label = format!("{prefix}{}. {opt}", i + 1);
+            let style = if is_selected {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            lines.push(Line::from(Span::styled(label, style)));
+        }
+        lines.push(Line::from(""));
+    }
+
+    // Free-text input area
+    let input_focused = q.selected.is_none();
+    let input_style = if input_focused {
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let input_prefix = if input_focused { "▸ " } else { "  " };
+    let input_label = if q.text_input.is_empty() {
+        format!("{input_prefix}Type your answer...")
+    } else {
+        format!("{input_prefix}{}", q.text_input)
+    };
+    lines.push(Line::from(Span::styled(input_label, input_style)));
+
+    lines.push(Line::from(""));
+
+    // Help line
+    let help = if q.options.is_empty() {
+        "Enter: submit │ Esc: cancel"
+    } else {
+        "↑↓: select │ Tab: text input │ Enter: submit │ Esc: cancel"
+    };
+    lines.push(Line::from(Span::styled(
+        help,
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let block = Block::default()
+        .title(" Question ")
+        .borders(Borders::ALL)
+        .style(Style::default().bg(Color::Rgb(30, 30, 40)));
+
+    let paragraph = Paragraph::new(Text::from(lines))
+        .block(block)
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(Clear, area);
+    f.render_widget(paragraph, area);
+
+    // Show cursor in the text input when it's focused
+    if input_focused {
+        // Compute cursor position within the dialog
+        // The text input line is after: question, blank, options..., blank
+        let text_line_offset = 2 + if q.options.is_empty() { 0 } else { q.options.len() + 1 };
+        let cursor_x = area.x + 1 + 2 + q.text_input[..q.text_input
+            .char_indices()
+            .nth(q.text_cursor)
+            .map(|(i, _)| i)
+            .unwrap_or(q.text_input.len())]
+            .width() as u16;
+        let cursor_y = area.y + 1 + text_line_offset as u16;
+        if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
+    }
 }
 
 pub(crate) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
