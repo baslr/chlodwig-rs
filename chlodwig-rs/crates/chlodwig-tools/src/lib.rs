@@ -6,6 +6,7 @@ mod glob;
 mod grep;
 mod listdir;
 mod read;
+mod util;
 mod webfetch;
 mod websearch;
 mod user_question;

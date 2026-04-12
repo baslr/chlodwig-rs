@@ -107,11 +107,8 @@ impl Tool for ListDirTool {
                     text = "(empty directory)".into();
                 }
 
-                // Truncate very long output
-                if text.len() > 100_000 {
-                    text.truncate(100_000);
-                    text.push_str("\n... (output truncated)");
-                }
+                // Truncate very long output (safe for multi-byte UTF-8)
+                crate::util::safe_truncate(&mut text, 100_000, "\n... (output truncated)");
 
                 Ok(ToolOutput {
                     content: ToolResultContent::Text(text),

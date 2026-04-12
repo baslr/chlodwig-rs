@@ -33,10 +33,7 @@ fn html_to_text(html: &str) -> String {
 }
 
 fn truncate_with_notice(mut text: String, max: usize) -> String {
-    if text.len() > max {
-        text.truncate(max);
-        text.push_str("\n\n... (truncated)");
-    }
+    crate::util::safe_truncate(&mut text, max, "\n\n... (truncated)");
     text
 }
 
@@ -207,6 +204,39 @@ mod tests {
         assert!(result.len() < 200);
         assert!(result.ends_with("... (truncated)"));
         // The first 100 chars should be 'a's
+        assert!(result.starts_with(&"a".repeat(100)));
+    }
+
+    /// Regression test: truncate at a byte offset inside a multi-byte UTF-8 char
+    /// must NOT panic (was the crash bug from crash_2026-04-12_23-17-53.log).
+    #[test]
+    fn test_truncate_with_notice_utf8_boundary() {
+        // 'ä' is 2 bytes (C3 A4), '├' is 3 bytes (E2 94 9C), '🦀' is 4 bytes
+        // Build a string where byte 100 lands inside a multi-byte char
+        let text = "a".repeat(99) + "├───"; // byte 99 = 'a', bytes 99..102 = '├'
+        assert!(!text.is_char_boundary(100)); // byte 100 is mid-char
+        let result = truncate_with_notice(text, 100);
+        assert!(result.ends_with("... (truncated)"));
+        // Must be valid UTF-8 (wouldn't compile/assert otherwise)
+        assert!(result.len() <= 100 + "... (truncated)".len() + 3);
+    }
+
+    /// Regression: truncate with emoji at boundary
+    #[test]
+    fn test_truncate_with_notice_emoji_boundary() {
+        // '🦀' is 4 bytes. Put it so truncation point lands inside it.
+        let text = "a".repeat(98) + "🦀" + &"b".repeat(100); // byte 98..102 = emoji
+        let result = truncate_with_notice(text, 100); // byte 100 is inside emoji
+        assert!(result.ends_with("... (truncated)"));
+    }
+
+    /// Truncate at exact char boundary should still work
+    #[test]
+    fn test_truncate_with_notice_exact_boundary() {
+        let text = "a".repeat(100) + "ü" + &"b".repeat(100);
+        assert!(text.is_char_boundary(100));
+        let result = truncate_with_notice(text, 100);
+        assert!(result.ends_with("... (truncated)"));
         assert!(result.starts_with(&"a".repeat(100)));
     }
 
