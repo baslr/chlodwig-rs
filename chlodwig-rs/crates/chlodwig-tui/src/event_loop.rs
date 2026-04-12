@@ -615,6 +615,9 @@ pub async fn run_tui_with_permissions(
     let initial_messages = initial_state.messages.clone();
     let mut app = App::new(model_name);
 
+    // Determine project name once at startup for notification identification
+    let project_name = crate::notification::project_dir_name();
+
     // Store system prompt blocks for the Sys-Prompt tab
     app.system_prompt_blocks = system_prompt_blocks;
     app.rebuild_sys_prompt_lines();
@@ -1636,6 +1639,8 @@ pub async fn run_tui_with_permissions(
                     app.streaming_buffer.clear();
                     // Auto-save session after every completed turn
                     trigger_session_save(&state, &app.model, app.constants.to_snapshot());
+                    // Send system notification so the user notices in background
+                    crate::notification::notify_turn_complete(&project_name);
                 }
                 ConversationEvent::Error(e) => {
                     app.display_blocks.push(DisplayBlock::Error(e));

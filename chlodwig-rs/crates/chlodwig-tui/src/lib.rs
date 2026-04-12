@@ -3,6 +3,7 @@
 pub(crate) mod app;
 mod event_loop;
 mod markdown;
+mod notification;
 mod permissions;
 pub(crate) mod render;
 pub(crate) mod rendered_line;

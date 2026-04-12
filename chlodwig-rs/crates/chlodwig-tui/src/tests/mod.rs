@@ -92,3 +92,4 @@ mod input_title;
 mod vertical_cursor;
 mod bracketed_paste;
 mod user_question;
+mod notification;
