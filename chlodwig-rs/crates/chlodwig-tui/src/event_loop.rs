@@ -11,7 +11,7 @@ use crossterm::{
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 
 use crate::app::App;
@@ -663,7 +663,7 @@ pub async fn run_tui_with_permissions(
 
     let mut needs_redraw = true;
     let mut redraw_count: u64 = 0;
-    let mut last_resize = std::time::Instant::now();
+    let mut last_resize = Instant::now();
     let mut conversation_handle: Option<tokio::task::JoinHandle<()>> = None;
 
     // Track tool_use_id → (tool_name, input) so ToolResult can identify Read calls
@@ -731,9 +731,16 @@ pub async fn run_tui_with_permissions(
             break;
         }
 
-        // Poll terminal events — block up to 100ms (idle-friendly)
+        // Poll terminal events — block up to 100ms (idle-friendly).
+        // When streaming (is_loading), use a shorter timeout so SSE deltas
+        // appear promptly even when no terminal events fire.
+        let poll_timeout = if app.is_loading {
+            Duration::from_millis(16) // ~60 fps while streaming
+        } else {
+            Duration::from_millis(100)
+        };
         tracing::trace!("loop: poll start");
-        let poll_result = event::poll(Duration::from_millis(100));
+        let poll_result = event::poll(poll_timeout);
         tracing::trace!(?poll_result, "loop: poll returned");
         match poll_result {
             Err(e) => {
@@ -1510,7 +1517,7 @@ pub async fn run_tui_with_permissions(
                         chunks = app.stream_chunks,
                         "TextDelta received"
                     );
-                    app.streaming_buffer.push_str(&text);
+                    app.append_streaming_text(&text);
                     app.stream_chunks += 1;
                     app.scroll_to_bottom_if_auto();
                 }
@@ -1521,10 +1528,7 @@ pub async fn run_tui_with_permissions(
                         stream_chunks = app.stream_chunks,
                         "TextComplete received"
                     );
-                    app.streaming_buffer.clear();
-                    let now = chrono::Local::now().format("%d.%m.%Y  %H:%M:%S").to_string();
-                    app.display_blocks.push(DisplayBlock::Timestamp(now));
-                    app.display_blocks.push(DisplayBlock::AssistantText(text));
+                    app.finalize_text_complete(text);
                 }
                 ConversationEvent::ToolUseStart { id, name, input } => {
                     // Track tool id → (name, input) for ToolResult matching

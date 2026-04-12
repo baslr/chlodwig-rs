@@ -124,7 +124,6 @@ pub(crate) struct ConstantsConfig {
     pub(crate) default_head_limit: usize,
     // chlodwig-tui / app
     pub(crate) input_max_visual_lines: usize,
-
     // UI state for the Constants tab editor
     pub(crate) selected_field: usize,
     pub(crate) is_editing: bool,
@@ -422,6 +421,10 @@ pub(crate) struct App {
     pub(crate) auto_scroll: bool,
     pub(crate) is_loading: bool,
     pub(crate) streaming_buffer: String,
+    /// Timestamp shown above the streaming text, set on first TextDelta.
+    /// Prevents the text from "jumping" down when finalize inserts the
+    /// permanent Timestamp DisplayBlock.
+    pub(crate) streaming_timestamp: Option<String>,
     pub(crate) pending_permission: Option<PendingPermission>,
     pub(crate) pending_user_question: Option<PendingUserQuestion>,
     pub(crate) should_quit: bool,
@@ -464,6 +467,7 @@ pub(crate) struct App {
     pub(crate) constants: ConstantsConfig,               // Editable constants
     pub(crate) constants_lines: Vec<RenderedLine>,       // Pre-rendered constants tab lines
     pub(crate) constants_scroll: usize,                  // Scroll position in constants tab
+
 }
 
 impl App {
@@ -476,6 +480,7 @@ impl App {
             auto_scroll: true,
             is_loading: false,
             streaming_buffer: String::new(),
+            streaming_timestamp: None,
             pending_permission: None,
             pending_user_question: None,
             should_quit: false,
@@ -510,6 +515,7 @@ impl App {
             constants: ConstantsConfig::default(),
             constants_lines: Vec::new(),
             constants_scroll: 0,
+
         }
     }
 
@@ -560,6 +566,7 @@ impl App {
 
         // Update display (same logic as before, moved here for encapsulation)
         self.streaming_buffer.clear();
+        self.streaming_timestamp = None;
         self.display_blocks.clear();
         self.display_blocks.push(DisplayBlock::SystemMessage(
             format!(
@@ -902,6 +909,14 @@ impl App {
             }
         }
 
+        // Streaming timestamp — show immediately above streaming text
+        if let Some(ref ts) = self.streaming_timestamp {
+            logical_lines.push(RenderedLine::styled(
+                ts,
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
         // Streaming buffer — render as markdown for live preview
         if !self.streaming_buffer.is_empty() {
             tracing::debug!(
@@ -996,6 +1011,37 @@ impl App {
     pub(crate) fn scroll_to_bottom_if_auto(&mut self) {
         // If auto_scroll is already on, it stays on — render will follow.
         // If user has scrolled up (auto_scroll=false), do nothing.
+    }
+
+    // ── Streaming text (typewriter happens in conversation.rs, not here) ──
+
+    /// Append text to the streaming buffer. Called when a TextDelta arrives.
+    /// The typewriter char-by-char timing is handled in the streaming thread
+    /// (conversation.rs), so by the time this method is called, the text is
+    /// already paced correctly — just push it to the buffer and redraw.
+    pub(crate) fn append_streaming_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        // Set timestamp on first streaming text so it's visible immediately
+        if self.streaming_timestamp.is_none() {
+            self.streaming_timestamp = Some(
+                chrono::Local::now().format("%d.%m.%Y  %H:%M:%S").to_string(),
+            );
+        }
+        self.streaming_buffer.push_str(text);
+        self.lines_dirty = true;
+    }
+
+    /// Finalize a TextComplete event: clear the streaming buffer and
+    /// push a permanent DisplayBlock with the full assistant text.
+    pub(crate) fn finalize_text_complete(&mut self, text: String) {
+        self.streaming_buffer.clear();
+        self.streaming_timestamp = None;
+        let now = chrono::Local::now().format("%d.%m.%Y  %H:%M:%S").to_string();
+        self.display_blocks.push(DisplayBlock::Timestamp(now));
+        self.display_blocks.push(DisplayBlock::AssistantText(text));
+        self.lines_dirty = true;
     }
 
     // ── Word-wise cursor movement (Option+Arrow / Alt+Arrow) ───────
@@ -1723,6 +1769,7 @@ impl App {
     pub(crate) fn clear_conversation(&mut self) {
         self.display_blocks.clear();
         self.streaming_buffer.clear();
+        self.streaming_timestamp = None;
         self.is_loading = false;
         self.scroll = 0;
         self.auto_scroll = true;

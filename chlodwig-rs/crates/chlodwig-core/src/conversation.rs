@@ -550,139 +550,226 @@ pub async fn run_turn(
         }
         let mut blocks: HashMap<u32, BlockAcc> = HashMap::new();
 
-        while let Some(result) = stream.next().await {
-            let (raw_data, event) = match result {
-                Ok(pair) => pair,
-                Err(ApiError::SseParseError(msg)) => {
-                    // Malformed SSE event — log and skip, don't abort the stream.
-                    // Other errors (Connection, HttpError, etc.) are still fatal.
-                    tracing::warn!("Skipping malformed SSE event: {msg}");
-                    continue;
-                }
-                Err(e) => return Err(ConversationLoopError::Api(e)),
+        // ── Typewriter: char buffer + adaptive ticker ──────────────────
+        // Instead of blocking stream.next() with sleep loops, we use
+        // tokio::select! to concurrently read SSE events AND tick chars
+        // out of a buffer. This decouples network jitter from display rate.
+        let mut char_buffer: std::collections::VecDeque<char> = std::collections::VecDeque::new();
+        /// Maximum per-char sleep: 50ms (prevents painfully slow trickle)
+        const MAX_CHAR_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+        // Average chars-per-second from SSE stream (smoothed)
+        let mut avg_chars_per_sec: f64 = 0.0;
+        let mut total_chars_received: u64 = 0;
+        let mut first_char_at: Option<std::time::Instant> = None;
+        let mut stream_done = false;
+
+        loop {
+            // Compute tick interval based on buffer fill and stream rate.
+            // Goal: drain the buffer at roughly the rate chars arrive,
+            // so the buffer stays small but never empty (smooth output).
+            let tick_interval = if char_buffer.is_empty() {
+                // Nothing to send — wait a long time (select! will wake us on SSE)
+                std::time::Duration::from_millis(500)
+            } else if avg_chars_per_sec > 0.0 {
+                // We know the stream rate. Target: drain at stream rate,
+                // but speed up if buffer is growing (>20 chars buffered).
+                let buf_len = char_buffer.len() as f64;
+                // Base interval from stream rate
+                let base = 1.0 / avg_chars_per_sec;
+                // Speed up when buffer is large: for every 10 chars over 10,
+                // halve the interval. This prevents backlog accumulation.
+                let speedup = if buf_len > 10.0 {
+                    (1.0_f64).max(buf_len / 10.0)
+                } else {
+                    1.0
+                };
+                let secs = (base / speedup).min(MAX_CHAR_INTERVAL.as_secs_f64());
+                std::time::Duration::from_secs_f64(secs.max(0.0001)) // floor at 0.1ms
+            } else {
+                // No rate estimate yet — tick fast to avoid visible stall
+                std::time::Duration::from_millis(5)
             };
-            let _ = event_tx.send(ConversationEvent::SseRawChunk(raw_data));
-            match event {
-                SseEvent::MessageStart { message } => {
-                    let _ = event_tx.send(ConversationEvent::HttpResponseMeta {
-                        model: message.model.clone(),
-                        input_tokens: message.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
-                        output_tokens: message.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
-                    });
-                    if let Some(usage) = message.usage {
-                        let _ = event_tx.send(ConversationEvent::Usage {
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                        });
-                    }
-                }
 
-                SseEvent::ContentBlockStart { index, content_block } => {
-                    tracing::debug!("ContentBlockStart[{}]: {:?}", index, content_block);
-                    match content_block {
-                        ContentBlockStartInfo::Text { .. } => {
-                            blocks.insert(index, BlockAcc::Text(String::new()));
+            if stream_done && char_buffer.is_empty() {
+                break;
+            }
+
+            tokio::select! {
+                // Branch 1: read next SSE event (only if stream not done)
+                result = stream.next(), if !stream_done => {
+                    let Some(result) = result else {
+                        // Stream ended — flush remaining chars
+                        stream_done = true;
+                        continue;
+                    };
+                    let (raw_data, event) = match result {
+                        Ok(pair) => pair,
+                        Err(ApiError::SseParseError(msg)) => {
+                            tracing::warn!("Skipping malformed SSE event: {msg}");
+                            continue;
                         }
-                        ContentBlockStartInfo::ToolUse { id, name } => {
-                            if !name.is_empty() {
-                                let _ = event_tx.send(ConversationEvent::ToolUseStart {
-                                    id: id.clone(),
-                                    name: name.clone(),
-                                    input: serde_json::Value::Null,
+                        Err(e) => return Err(ConversationLoopError::Api(e)),
+                    };
+                    let _ = event_tx.send(ConversationEvent::SseRawChunk(raw_data));
+                    match event {
+                        SseEvent::MessageStart { message } => {
+                            let _ = event_tx.send(ConversationEvent::HttpResponseMeta {
+                                model: message.model.clone(),
+                                input_tokens: message.usage.as_ref().map(|u| u.input_tokens).unwrap_or(0),
+                                output_tokens: message.usage.as_ref().map(|u| u.output_tokens).unwrap_or(0),
+                            });
+                            if let Some(usage) = message.usage {
+                                let _ = event_tx.send(ConversationEvent::Usage {
+                                    input_tokens: usage.input_tokens,
+                                    output_tokens: usage.output_tokens,
                                 });
                             }
-                            blocks.insert(index, BlockAcc::ToolUse { id, name, json: String::new() });
                         }
-                        ContentBlockStartInfo::Thinking { .. } => {
-                            blocks.insert(index, BlockAcc::Thinking(String::new()));
-                        }
-                    }
-                }
 
-                SseEvent::ContentBlockDelta { index, delta } => {
-                    match delta {
-                        Delta::TextDelta { text } => {
-                            if let Some(BlockAcc::Text(buf)) = blocks.get_mut(&index) {
-                                buf.push_str(&text);
-                            }
-                            let _ = event_tx.send(ConversationEvent::TextDelta(text));
-                        }
-                        Delta::InputJsonDelta { partial_json } => {
-                            if let Some(BlockAcc::ToolUse { json, .. }) = blocks.get_mut(&index) {
-                                json.push_str(&partial_json);
-                            }
-                        }
-                        Delta::ThinkingDelta { thinking } => {
-                            if let Some(BlockAcc::Thinking(buf)) = blocks.get_mut(&index) {
-                                buf.push_str(&thinking);
-                            }
-                            let _ = event_tx.send(ConversationEvent::ThinkingDelta(thinking));
-                        }
-                    }
-                }
-
-                SseEvent::ContentBlockStop { index } => {
-                    if let Some(acc) = blocks.remove(&index) {
-                        match acc {
-                            BlockAcc::Text(text) => {
-                                let _ = event_tx.send(ConversationEvent::TextComplete(text.clone()));
-                                assistant_blocks.push(ContentBlock::Text { text });
-                            }
-                            BlockAcc::ToolUse { id, name, json } => {
-                                let input: serde_json::Value =
-                                    serde_json::from_str(&json).unwrap_or_default();
-
-                                tracing::debug!("ToolUse complete[{}]: id={}, name={}, input={}", index, id, name, input);
-
-                                if !name.is_empty() {
-                                    let _ = event_tx.send(ConversationEvent::ToolUseStart {
-                                        id: id.clone(),
-                                        name: name.clone(),
-                                        input: input.clone(),
-                                    });
+                        SseEvent::ContentBlockStart { index, content_block } => {
+                            tracing::debug!("ContentBlockStart[{}]: {:?}", index, content_block);
+                            match content_block {
+                                ContentBlockStartInfo::Text { .. } => {
+                                    blocks.insert(index, BlockAcc::Text(String::new()));
                                 }
+                                ContentBlockStartInfo::ToolUse { id, name } => {
+                                    if !name.is_empty() {
+                                        let _ = event_tx.send(ConversationEvent::ToolUseStart {
+                                            id: id.clone(),
+                                            name: name.clone(),
+                                            input: serde_json::Value::Null,
+                                        });
+                                    }
+                                    blocks.insert(index, BlockAcc::ToolUse { id, name, json: String::new() });
+                                }
+                                ContentBlockStartInfo::Thinking { .. } => {
+                                    blocks.insert(index, BlockAcc::Thinking(String::new()));
+                                }
+                            }
+                        }
 
-                                assistant_blocks.push(ContentBlock::ToolUse {
-                                    id: id.clone(),
-                                    name: name.clone(),
-                                    input: input.clone(),
+                        SseEvent::ContentBlockDelta { index, delta } => {
+                            match delta {
+                                Delta::TextDelta { text } => {
+                                    if let Some(BlockAcc::Text(buf)) = blocks.get_mut(&index) {
+                                        buf.push_str(&text);
+                                    }
+
+                                    // Push chars into the buffer for the ticker to drain
+                                    let now = std::time::Instant::now();
+                                    let n = text.chars().count() as u64;
+                                    if n > 0 {
+                                        for ch in text.chars() {
+                                            char_buffer.push_back(ch);
+                                        }
+                                        total_chars_received += n;
+                                        if first_char_at.is_none() {
+                                            first_char_at = Some(now);
+                                        }
+                                        // Update running average: total chars / total time
+                                        if let Some(first) = first_char_at {
+                                            let elapsed = now.duration_since(first).as_secs_f64();
+                                            if elapsed > 0.01 {
+                                                avg_chars_per_sec = total_chars_received as f64 / elapsed;
+                                            }
+                                        }
+                                    }
+                                }
+                                Delta::InputJsonDelta { partial_json } => {
+                                    if let Some(BlockAcc::ToolUse { json, .. }) = blocks.get_mut(&index) {
+                                        json.push_str(&partial_json);
+                                    }
+                                }
+                                Delta::ThinkingDelta { thinking } => {
+                                    if let Some(BlockAcc::Thinking(buf)) = blocks.get_mut(&index) {
+                                        buf.push_str(&thinking);
+                                    }
+                                    let _ = event_tx.send(ConversationEvent::ThinkingDelta(thinking));
+                                }
+                            }
+                        }
+
+                        SseEvent::ContentBlockStop { index } => {
+                            if let Some(acc) = blocks.remove(&index) {
+                                match acc {
+                                    BlockAcc::Text(text) => {
+                                        // Flush remaining chars from this block immediately
+                                        // before sending TextComplete
+                                        while let Some(ch) = char_buffer.pop_front() {
+                                            let mut s = String::with_capacity(ch.len_utf8());
+                                            s.push(ch);
+                                            let _ = event_tx.send(ConversationEvent::TextDelta(s));
+                                        }
+                                        let _ = event_tx.send(ConversationEvent::TextComplete(text.clone()));
+                                        assistant_blocks.push(ContentBlock::Text { text });
+                                    }
+                                    BlockAcc::ToolUse { id, name, json } => {
+                                        let input: serde_json::Value =
+                                            serde_json::from_str(&json).unwrap_or_default();
+
+                                        tracing::debug!("ToolUse complete[{}]: id={}, name={}, input={}", index, id, name, input);
+
+                                        if !name.is_empty() {
+                                            let _ = event_tx.send(ConversationEvent::ToolUseStart {
+                                                id: id.clone(),
+                                                name: name.clone(),
+                                                input: input.clone(),
+                                            });
+                                        }
+
+                                        assistant_blocks.push(ContentBlock::ToolUse {
+                                            id: id.clone(),
+                                            name: name.clone(),
+                                            input: input.clone(),
+                                        });
+                                        tool_uses.push(PendingToolUse { id, name, input });
+                                    }
+                                    BlockAcc::Thinking(thinking) => {
+                                        let _ = event_tx.send(ConversationEvent::ThinkingComplete(thinking.clone()));
+                                        assistant_blocks.push(ContentBlock::Thinking { thinking });
+                                    }
+                                }
+                            }
+                        }
+
+                        SseEvent::MessageDelta { delta, usage } => {
+                            if let Some(usage) = usage {
+                                let _ = event_tx.send(ConversationEvent::Usage {
+                                    input_tokens: usage.input_tokens,
+                                    output_tokens: usage.output_tokens,
                                 });
-                                tool_uses.push(PendingToolUse { id, name, input });
                             }
-                            BlockAcc::Thinking(thinking) => {
-                                let _ = event_tx.send(ConversationEvent::ThinkingComplete(thinking.clone()));
-                                assistant_blocks.push(ContentBlock::Thinking { thinking });
-                            }
+                            let _ = delta; // stop_reason is implicit from tool_uses
+                        }
+
+                        SseEvent::MessageStop => {
+                            let _ = event_tx.send(ConversationEvent::HttpResponseComplete {
+                                duration_ms: request_start.elapsed().as_millis() as u64,
+                            });
+                            stream_done = true;
+                        }
+                        SseEvent::Ping => {}
+
+                        SseEvent::Error { error } => {
+                            let _ = event_tx.send(ConversationEvent::Error(format!(
+                                "{}: {}",
+                                error.error_type, error.message
+                            )));
+                            return Err(ConversationLoopError::Api(ApiError::HttpError {
+                                status: 0,
+                                body: error.message,
+                            }));
                         }
                     }
                 }
 
-                SseEvent::MessageDelta { delta, usage } => {
-                    if let Some(usage) = usage {
-                        let _ = event_tx.send(ConversationEvent::Usage {
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                        });
+                // Branch 2: tick a char out of the buffer
+                _ = tokio::time::sleep(tick_interval), if !char_buffer.is_empty() => {
+                    if let Some(ch) = char_buffer.pop_front() {
+                        let mut s = String::with_capacity(ch.len_utf8());
+                        s.push(ch);
+                        let _ = event_tx.send(ConversationEvent::TextDelta(s));
                     }
-                    let _ = delta; // stop_reason is implicit from tool_uses
-                }
-
-                SseEvent::MessageStop => {
-                    let _ = event_tx.send(ConversationEvent::HttpResponseComplete {
-                        duration_ms: request_start.elapsed().as_millis() as u64,
-                    });
-                }
-                SseEvent::Ping => {}
-
-                SseEvent::Error { error } => {
-                    let _ = event_tx.send(ConversationEvent::Error(format!(
-                        "{}: {}",
-                        error.error_type, error.message
-                    )));
-                    return Err(ConversationLoopError::Api(ApiError::HttpError {
-                        status: 0,
-                        body: error.message,
-                    }));
                 }
             }
         }
@@ -981,10 +1068,15 @@ mod tests {
 
         let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
 
-        // Should have TextDelta, TextComplete, TurnComplete
-        assert!(events
+        // Should have TextDelta chars that together form "Hello!", TextComplete, TurnComplete
+        let text_deltas: String = events
             .iter()
-            .any(|e| matches!(e, ConversationEvent::TextDelta(t) if t == "Hello!")));
+            .filter_map(|e| match e {
+                ConversationEvent::TextDelta(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text_deltas, "Hello!", "TextDelta chars should form 'Hello!'");
         assert!(events
             .iter()
             .any(|e| matches!(e, ConversationEvent::TextComplete(t) if t == "Hello!")));
