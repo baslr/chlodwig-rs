@@ -31,6 +31,7 @@ fn test_session_snapshot_from_conversation_state() {
 
     let snap = SessionSnapshot {
         saved_at: chrono::Local::now().to_rfc3339(),
+        started_at: "2026-04-13T10:00:00+02:00".into(),
         model: "claude-sonnet-4-20250514".into(),
         messages: messages.clone(),
         system_prompt: system_prompt.clone(),
@@ -88,6 +89,7 @@ fn test_session_snapshot_survives_serde_roundtrip_with_all_block_types() {
 
     let snap = SessionSnapshot {
         saved_at: "2026-04-04T14:00:00+02:00".into(),
+        started_at: "2026-04-04T13:00:00+02:00".into(),
         model: "test-model".into(),
         messages,
         system_prompt: vec![SystemBlock::text("Be helpful")],
@@ -111,19 +113,21 @@ fn test_session_snapshot_survives_serde_roundtrip_with_all_block_types() {
 }
 
 #[test]
-fn test_save_session_path_is_deterministic() {
-    let path1 = chlodwig_core::session_path();
-    let path2 = chlodwig_core::session_path();
-    assert_eq!(path1, path2, "session_path() must be deterministic");
+fn test_session_path_for_is_deterministic() {
+    let started_at = "2026-04-13T14:30:15+02:00";
+    let path1 = chlodwig_core::session_path_for(started_at);
+    let path2 = chlodwig_core::session_path_for(started_at);
+    assert_eq!(path1, path2, "session_path_for() must be deterministic for the same started_at");
 }
 
 #[test]
 fn test_save_and_reload_via_temp_dir() {
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("session.json");
+    let path = tmp.path().join("2026_04_04_12_00_00.json");
 
     let snap = SessionSnapshot {
         saved_at: "2026-04-04T12:00:00Z".into(),
+        started_at: "2026-04-04T12:00:00+00:00".into(),
         model: "claude-sonnet-4-20250514".into(),
         messages: vec![
             Message {
@@ -144,8 +148,7 @@ fn test_save_and_reload_via_temp_dir() {
     };
 
     // Save
-    let json = serde_json::to_string_pretty(&snap).unwrap();
-    std::fs::write(&path, &json).unwrap();
+    chlodwig_core::save_session_to(&snap, &path).unwrap();
 
     // Reload
     let loaded_json = std::fs::read_to_string(&path).unwrap();
@@ -166,11 +169,12 @@ fn test_clear_does_not_overwrite_saved_session() {
     // This test verifies the design decision: after /clear the previous
     // saved session file remains unchanged.
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("session.json");
+    let path = tmp.path().join("2026_04_04_10_00_00.json");
 
     // Pre-existing session on disk
     let original = SessionSnapshot {
         saved_at: "2026-04-04T10:00:00Z".into(),
+        started_at: "2026-04-04T10:00:00+00:00".into(),
         model: "test-model".into(),
         messages: vec![Message {
             role: Role::User,
@@ -181,8 +185,7 @@ fn test_clear_does_not_overwrite_saved_session() {
         system_prompt: vec![],
         constants: None,
     };
-    let json = serde_json::to_string_pretty(&original).unwrap();
-    std::fs::write(&path, &json).unwrap();
+    chlodwig_core::save_session_to(&original, &path).unwrap();
 
     // Simulate what /clear should do: clear state but NOT save.
     // (The actual event_loop code is tested by inspection — this test
@@ -199,10 +202,10 @@ fn test_clear_does_not_overwrite_saved_session() {
 #[test]
 fn test_manual_save_writes_current_state_to_disk() {
     // /save should immediately persist the current conversation state.
-    // This test verifies the save_session function works as the manual
+    // This test verifies the save_session_to function works as the manual
     // /save command would use it — snapshot construction + write + reload.
     let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("session.json");
+    let path = tmp.path().join("2026_04_04_15_00_00.json");
 
     let messages = vec![
         Message {
@@ -228,17 +231,15 @@ fn test_manual_save_writes_current_state_to_disk() {
     // Build snapshot (same as /save would do)
     let snap = SessionSnapshot {
         saved_at: "2026-04-04T15:00:00Z".into(),
+        started_at: "2026-04-04T15:00:00+00:00".into(),
         model: "claude-sonnet-4-20250514".into(),
         messages: messages.clone(),
         system_prompt: vec![SystemBlock::text("Be helpful")],
         constants: None,
     };
 
-    // Write via atomic pattern (same as save_session uses)
-    let json = serde_json::to_string_pretty(&snap).unwrap();
-    let tmp_path = path.with_extension("json.tmp");
-    std::fs::write(&tmp_path, &json).unwrap();
-    std::fs::rename(&tmp_path, &path).unwrap();
+    // Write via save_session_to (uses atomic write)
+    chlodwig_core::save_session_to(&snap, &path).unwrap();
 
     // Verify the file contains exactly what we saved
     let loaded: SessionSnapshot =
@@ -249,4 +250,41 @@ fn test_manual_save_writes_current_state_to_disk() {
     assert_eq!(loaded.messages[2].text(), "Second message");
     assert_eq!(loaded.model, "claude-sonnet-4-20250514");
     assert_eq!(loaded.saved_at, "2026-04-04T15:00:00Z");
+}
+
+// ── Event loop source-level checks for session commands ──
+
+#[test]
+fn test_event_loop_has_sessions_command() {
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("/sessions"),
+        "event_loop.rs must handle the /sessions command"
+    );
+    assert!(
+        src.contains("list_sessions"),
+        "event_loop.rs must call list_sessions() for /sessions command"
+    );
+}
+
+#[test]
+fn test_event_loop_has_resume_with_prefix() {
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("starts_with(\"/resume \")"),
+        "event_loop.rs must match /resume with a prefix argument"
+    );
+    assert!(
+        src.contains("load_session_by_prefix"),
+        "event_loop.rs must call load_session_by_prefix() for /resume <prefix>"
+    );
+}
+
+#[test]
+fn test_event_loop_has_help_command() {
+    let src = include_str!("../event_loop.rs");
+    assert!(
+        src.contains("/help"),
+        "event_loop.rs must handle the /help command"
+    );
 }

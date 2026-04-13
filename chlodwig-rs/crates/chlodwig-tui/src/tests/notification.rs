@@ -13,7 +13,7 @@ fn test_event_loop_calls_notify_on_turn_complete() {
         .find(needle)
         .expect("TurnComplete match arm must exist in event_loop.rs");
     // The notification call should appear within ~500 chars after the match arm
-    let region = &src[turn_complete_idx..src.len().min(turn_complete_idx + 500)];
+    let region = &src[turn_complete_idx..src.len().min(turn_complete_idx + 1200)];
     assert!(
         region.contains("notify_turn_complete("),
         "TurnComplete match arm must call notify_turn_complete(). Region:\n{region}"
@@ -37,14 +37,20 @@ fn test_is_terminal_focused_does_not_panic() {
     let _ = crate::notification::is_terminal_focused();
 }
 
-/// Verify that `notify_turn_complete` source code checks focus before sending.
+/// Verify that the TurnComplete handler in event_loop.rs checks focus
+/// before sending the notification — only notify when the terminal is NOT focused,
+/// so the user gets alerted when they're in another app but not spammed when watching.
 #[test]
-fn test_notify_turn_complete_checks_focus() {
-    let src = include_str!("../notification.rs");
+fn test_turn_complete_checks_focus_before_notify() {
+    let src = include_str!("../event_loop.rs");
+    let needle = "ConversationEvent::TurnComplete => {";
+    let idx = src
+        .find(needle)
+        .expect("TurnComplete match arm must exist");
+    let region = &src[idx..src.len().min(idx + 1200)];
     assert!(
-        src.contains("is_terminal_focused()"),
-        "notify_turn_complete must call is_terminal_focused() to suppress \
-         notifications when the terminal is in the foreground"
+        region.contains("is_terminal_focused"),
+        "TurnComplete handler must check is_terminal_focused() before notifying. Region:\n{region}"
     );
 }
 

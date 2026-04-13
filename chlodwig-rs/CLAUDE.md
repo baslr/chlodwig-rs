@@ -137,9 +137,12 @@ cargo run --release -- --print "prompt"  # Headless mode
 
 | Command | Effect |
 |---------|--------|
+| `/help`, `/?` | Show available commands and keybindings |
 | `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
 | `/compact [instructions]` | Compact conversation history |
-| `/resume` | Load the last saved session from disk |
+| `/sessions` | List all saved sessions |
+| `/resume` | Load the most recent saved session |
+| `/resume <prefix>` | Load session matching prefix (e.g. `2026_04_13`, `2026_04_13_14`) |
 | `! <cmd>` | Execute shell command |
 | `exit`, `quit`, `/exit`, `/quit` | Exit |
 
@@ -176,7 +179,7 @@ Sessions are automatically saved to `~/.chlodwig-rs/session.json` after:
 
 The save is **asynchronous** (via `tokio::spawn` + `spawn_blocking`) so it never blocks the event loop. Writes use atomic rename (write to `.tmp`, then rename) to prevent corruption on crash.
 
-**Resume**: Use `--resume` CLI flag or `/resume` TUI command. When resuming, only messages are restored — model, tools, and system prompt use the current CLI settings (they may have changed between sessions).
+**Resume**: Use `--resume` CLI flag or `/resume` TUI command. When resuming, only messages are restored — model, tools, and system prompt use the current CLI settings (they may have changed between sessions). Use `/resume <prefix>` to load a specific session by timestamp prefix (e.g. `/resume 2026_04_13`). Use `/sessions` to list all available sessions.
 
 **Implementation**: `chlodwig-core/src/session.rs` — `SessionSnapshot`, `save_session()`, `load_session()`, `session_path()`.
 

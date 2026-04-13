@@ -276,7 +276,7 @@ async fn main() -> Result<()> {
 
     // Resume previous session if --resume flag is set
     let (state, initial_constants) = if cli.resume {
-        match chlodwig_core::load_session() {
+        match chlodwig_core::load_latest_session() {
             Ok(Some(snapshot)) => {
                 let msg_count = snapshot.messages.len();
                 tracing::info!("Resuming session with {msg_count} messages");
@@ -401,8 +401,10 @@ async fn run_headless(
     println!(); // final newline
 
     // Auto-save session after headless turn
+    let started_at = chrono::Local::now().to_rfc3339();
     let snapshot = SessionSnapshot {
-        saved_at: chrono::Local::now().to_rfc3339(),
+        saved_at: started_at.clone(),
+        started_at,
         model: state.model.clone(),
         messages: state.messages.clone(),
         system_prompt: state.system_prompt.clone(),

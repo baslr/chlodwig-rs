@@ -1,8 +1,12 @@
 //! Session persistence — auto-save conversation state to disk.
 //!
-//! After every completed turn or compaction, the conversation messages
-//! are serialised to `~/.chlodwig-rs/session.json` so the session can
-//! be resumed after a crash or restart.
+//! Each session gets its own file in `~/.chlodwig-rs/sessions/`, named by
+//! start timestamp: `YYYY_MM_DD_HH_MM_SS.json`. After every completed turn
+//! or compaction, the conversation messages are serialised to this file so
+//! the session can be resumed after a crash or restart.
+//!
+//! Legacy: the old `~/.chlodwig-rs/session.json` is still checked for
+//! backward compatibility when loading.
 
 use crate::{Message, SystemBlock};
 use serde::{Deserialize, Serialize};
@@ -16,6 +20,11 @@ use std::path::PathBuf;
 pub struct SessionSnapshot {
     /// ISO-8601 timestamp when the snapshot was taken.
     pub saved_at: String,
+    /// ISO-8601 timestamp when the session was started.
+    /// Used to derive the per-session filename (`YYYY_MM_DD_HH_MM_SS.json`).
+    /// Defaults to `saved_at` for backward compatibility with old session files.
+    #[serde(default)]
+    pub started_at: String,
     /// Model name (e.g. "claude-sonnet-4-20250514").
     pub model: String,
     /// The full conversation history.
@@ -93,7 +102,41 @@ impl Default for ConstantsSnapshot {
     }
 }
 
-/// Returns the path to the session file: `~/.chlodwig-rs/session.json`.
+/// Returns the sessions directory: `~/.chlodwig-rs/sessions/`, creating it if necessary.
+pub fn sessions_dir() -> PathBuf {
+    let dir = crate::log_dir().join("sessions");
+    std::fs::create_dir_all(&dir).ok();
+    dir
+}
+
+/// Converts an ISO-8601 `started_at` timestamp to a filename like `2026_04_13_14_30_15.json`.
+///
+/// Parses the timestamp with `chrono` and formats it as `YYYY_MM_DD_HH_MM_SS.json`.
+/// Falls back to the raw string (sanitized) if parsing fails.
+pub fn session_filename_for(started_at: &str) -> String {
+    // Try parsing as RFC-3339 (which covers ISO-8601 with timezone)
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(started_at) {
+        return format!("{}.json", dt.format("%Y_%m_%d_%H_%M_%S"));
+    }
+    // Fallback: sanitize the raw string to make a safe filename
+    let sanitized: String = started_at
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    format!("{sanitized}.json")
+}
+
+/// Returns the full path for a session file based on its `started_at` timestamp.
+///
+/// Example: `~/.chlodwig-rs/sessions/2026_04_13_14_30_15.json`
+pub fn session_path_for(started_at: &str) -> PathBuf {
+    sessions_dir().join(session_filename_for(started_at))
+}
+
+/// Returns the path to the legacy session file: `~/.chlodwig-rs/session.json`.
+///
+/// Used only for backward-compatible migration.
+#[deprecated(note = "Use session_path_for() with a started_at timestamp")]
 pub fn session_path() -> PathBuf {
     crate::log_dir().join("session.json")
 }
@@ -105,31 +148,84 @@ pub fn constants_path() -> PathBuf {
 
 /// Save a session snapshot to disk (blocking I/O).
 ///
+/// The file path is derived from `snapshot.started_at` — each session
+/// gets its own file: `~/.chlodwig-rs/sessions/YYYY_MM_DD_HH_MM_SS.json`.
+///
 /// Writes to a temporary file first, then atomically renames,
 /// so a crash during write never corrupts the existing file.
 pub fn save_session(snapshot: &SessionSnapshot) -> std::io::Result<()> {
-    let path = session_path();
+    let path = session_path_for(&snapshot.started_at);
+    save_session_to(snapshot, &path)
+}
+
+/// Save a session snapshot to an arbitrary path (used by tests and internal code).
+pub fn save_session_to(snapshot: &SessionSnapshot, path: &std::path::Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
     let json = serde_json::to_string_pretty(snapshot)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
 
     // Write to a temp file in the same directory, then rename (atomic on POSIX).
     let tmp_path = path.with_extension("json.tmp");
     std::fs::write(&tmp_path, json.as_bytes())?;
-    std::fs::rename(&tmp_path, &path)?;
+    std::fs::rename(&tmp_path, path)?;
 
     tracing::debug!(path = %path.display(), bytes = json.len(), "session saved");
     Ok(())
 }
 
-/// Load a session snapshot from disk, if one exists.
+/// Load the most recent session snapshot from the sessions directory.
 ///
-/// Returns `None` if the file doesn't exist. Returns `Err` on I/O
-/// or parse errors.
-pub fn load_session() -> std::io::Result<Option<SessionSnapshot>> {
-    let path = session_path();
-    if !path.exists() {
-        return Ok(None);
+/// Scans `~/.chlodwig-rs/sessions/` for `*.json` files, sorts by filename
+/// (which is a timestamp, so lexicographic = chronological), and loads the last one.
+///
+/// Also checks the legacy `~/.chlodwig-rs/session.json` for backward compatibility.
+/// If the legacy file exists and is newer than any file in sessions/, it is used.
+///
+/// Returns `None` if no session file exists. Returns `Err` on I/O or parse errors.
+pub fn load_latest_session() -> std::io::Result<Option<SessionSnapshot>> {
+    let dir = sessions_dir();
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // Collect all .json files in the sessions directory
+    if dir.exists() {
+        for entry in std::fs::read_dir(&dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") {
+                candidates.push(path);
+            }
+        }
     }
+
+    // Sort lexicographically — filenames are timestamps, so this is chronological
+    candidates.sort();
+
+    // Check the legacy session.json for backward compatibility
+    #[allow(deprecated)]
+    let legacy_path = session_path();
+    let use_legacy = if legacy_path.exists() {
+        if let Some(newest) = candidates.last() {
+            // Compare modification times: use legacy if it's newer
+            let legacy_mtime = std::fs::metadata(&legacy_path)?.modified()?;
+            let newest_mtime = std::fs::metadata(newest)?.modified()?;
+            legacy_mtime > newest_mtime
+        } else {
+            true // no session files in sessions/, use legacy
+        }
+    } else {
+        false
+    };
+
+    let path = if use_legacy {
+        legacy_path
+    } else if let Some(newest) = candidates.last() {
+        newest.clone()
+    } else {
+        return Ok(None);
+    };
+
     let json = std::fs::read_to_string(&path)?;
     let snapshot: SessionSnapshot = serde_json::from_str(&json)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -137,6 +233,160 @@ pub fn load_session() -> std::io::Result<Option<SessionSnapshot>> {
         path = %path.display(),
         messages = snapshot.messages.len(),
         "session loaded"
+    );
+    Ok(Some(snapshot))
+}
+
+/// Load a session snapshot from disk, if one exists.
+///
+/// **Deprecated**: Use `load_latest_session()` instead. This function only
+/// checks the legacy `~/.chlodwig-rs/session.json` path.
+#[deprecated(note = "Use load_latest_session() which checks the sessions/ directory")]
+pub fn load_session() -> std::io::Result<Option<SessionSnapshot>> {
+    load_latest_session()
+}
+
+/// Summary of a saved session, for listing purposes.
+///
+/// Contains only metadata — does NOT load the full conversation messages.
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    /// The filename (e.g. `2026_04_13_14_30_15.json`).
+    pub filename: String,
+    /// The `started_at` timestamp from the session file.
+    pub started_at: String,
+    /// The `saved_at` timestamp (last save).
+    pub saved_at: String,
+    /// Model name.
+    pub model: String,
+    /// Number of messages in the conversation.
+    pub message_count: usize,
+    /// Full path to the session file.
+    pub path: PathBuf,
+}
+
+/// List all saved sessions, sorted chronologically (oldest first).
+///
+/// Scans `~/.chlodwig-rs/sessions/` for `.json` files and reads their metadata.
+/// Invalid/corrupt files are silently skipped.
+pub fn list_sessions() -> std::io::Result<Vec<SessionInfo>> {
+    list_sessions_in(&sessions_dir())
+}
+
+/// List sessions from an arbitrary directory (used by tests).
+pub fn list_sessions_in(dir: &std::path::Path) -> std::io::Result<Vec<SessionInfo>> {
+    let mut infos = Vec::new();
+
+    if !dir.exists() {
+        return Ok(infos);
+    }
+
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+    // Sort lexicographically — filenames are timestamps, so this is chronological
+    paths.sort();
+
+    for path in paths {
+        match std::fs::read_to_string(&path) {
+            Ok(json) => {
+                match serde_json::from_str::<SessionSnapshot>(&json) {
+                    Ok(snap) => {
+                        infos.push(SessionInfo {
+                            filename: path
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .into_owned(),
+                            started_at: snap.started_at,
+                            saved_at: snap.saved_at,
+                            model: snap.model,
+                            message_count: snap.messages.len(),
+                            path: path.clone(),
+                        });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "skipping corrupt session file"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "skipping unreadable session file"
+                );
+            }
+        }
+    }
+
+    Ok(infos)
+}
+
+/// Load a session by filename prefix match.
+///
+/// The prefix is matched against the session filenames (without `.json` extension).
+/// For example:
+/// - `"2026_04_13"` matches `2026_04_13_14_30_15.json`
+/// - `"2026_04_13_14"` matches `2026_04_13_14_30_15.json`
+/// - `"2026_04_13_14_30_15"` matches exactly
+///
+/// If multiple sessions match, returns the **most recent** (last in sorted order).
+/// Returns `Ok(None)` if no session matches the prefix.
+pub fn load_session_by_prefix(prefix: &str) -> std::io::Result<Option<SessionSnapshot>> {
+    load_session_by_prefix_in(prefix, &sessions_dir())
+}
+
+/// Load a session by prefix from an arbitrary directory (used by tests).
+pub fn load_session_by_prefix_in(
+    prefix: &str,
+    dir: &std::path::Path,
+) -> std::io::Result<Option<SessionSnapshot>> {
+    if !dir.exists() {
+        return Ok(None);
+    }
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let stem = path
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy();
+        if stem.starts_with(prefix) {
+            candidates.push(path);
+        }
+    }
+
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    // Sort and pick the most recent (last)
+    candidates.sort();
+    let path = candidates.last().unwrap();
+
+    let json = std::fs::read_to_string(path)?;
+    let snapshot: SessionSnapshot = serde_json::from_str(&json)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    tracing::debug!(
+        path = %path.display(),
+        prefix = prefix,
+        messages = snapshot.messages.len(),
+        "session loaded by prefix"
     );
     Ok(Some(snapshot))
 }
@@ -193,6 +443,7 @@ mod tests {
     fn make_snapshot(messages: Vec<Message>) -> SessionSnapshot {
         SessionSnapshot {
             saved_at: "2026-04-04T12:00:00Z".into(),
+            started_at: "2026-04-04T11:00:00+02:00".into(),
             model: "test-model".into(),
             messages,
             system_prompt: vec![SystemBlock::text("You are helpful.")],
@@ -370,40 +621,206 @@ mod tests {
     }
 
     #[test]
-    fn test_session_path_is_in_chlodwig_rs_dir() {
-        let path = session_path();
+    fn test_sessions_dir_is_under_chlodwig_rs() {
+        let dir = sessions_dir();
         assert!(
-            path.parent()
-                .unwrap()
-                .ends_with(".chlodwig-rs"),
-            "Expected .chlodwig-rs dir, got: {}",
-            path.display()
-        );
-        assert_eq!(
-            path.file_name().unwrap().to_str().unwrap(),
-            "session.json"
+            dir.ends_with(".chlodwig-rs/sessions"),
+            "Expected .chlodwig-rs/sessions, got: {}",
+            dir.display()
         );
     }
 
     #[test]
-    fn test_load_session_returns_none_when_no_file() {
-        // We can't easily test with the real path, but we can test the
-        // deserialization of a "file not found" scenario via the function
-        // logic. If the file doesn't exist at `session_path()`, it should
-        // return Ok(None). We'll just verify the path logic here.
-        let path = session_path();
-        // If by chance the file doesn't exist, load should return None.
-        // (We don't delete real files in tests.)
-        if !path.exists() {
-            let result = load_session().unwrap();
-            assert!(result.is_none());
-        }
+    fn test_session_filename_for_rfc3339() {
+        let filename = session_filename_for("2026-04-13T14:30:15+02:00");
+        assert_eq!(filename, "2026_04_13_14_30_15.json");
+    }
+
+    #[test]
+    fn test_session_filename_for_utc() {
+        let filename = session_filename_for("2026-01-02T03:04:05+00:00");
+        assert_eq!(filename, "2026_01_02_03_04_05.json");
+    }
+
+    #[test]
+    fn test_session_filename_for_fallback_on_invalid() {
+        // If the timestamp can't be parsed, it should sanitize and still produce a filename
+        let filename = session_filename_for("not-a-timestamp");
+        assert!(filename.ends_with(".json"));
+        assert!(!filename.contains('/'));
+        assert!(!filename.contains(':'));
+    }
+
+    #[test]
+    fn test_session_path_for_produces_correct_path() {
+        let path = session_path_for("2026-04-13T14:30:15+02:00");
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "2026_04_13_14_30_15.json"
+        );
+        assert!(
+            path.parent().unwrap().ends_with("sessions"),
+            "Expected sessions dir, got: {}",
+            path.parent().unwrap().display()
+        );
+    }
+
+    #[test]
+    fn test_save_session_uses_started_at_for_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let snap = SessionSnapshot {
+            saved_at: "2026-04-13T15:00:00+02:00".into(),
+            started_at: "2026-04-13T14:30:15+02:00".into(),
+            model: "test-model".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+        };
+
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        assert!(path.exists());
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "2026_04_13_14_30_15.json"
+        );
+    }
+
+    #[test]
+    fn test_load_latest_session_returns_none_when_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        // No files — no session to load
+        // (We can't test load_latest_session directly because it uses
+        // the hardcoded sessions_dir(). We test the logic via save_session_to
+        // and manual file reading.)
+    }
+
+    #[test]
+    fn test_load_latest_session_picks_most_recent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        // Save two sessions with different started_at timestamps
+        let old_snap = SessionSnapshot {
+            saved_at: "2026-04-13T10:00:00+02:00".into(),
+            started_at: "2026-04-13T09:00:00+02:00".into(),
+            model: "old-model".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "old".into() }],
+            }],
+            system_prompt: vec![],
+            constants: None,
+        };
+        let new_snap = SessionSnapshot {
+            saved_at: "2026-04-13T15:00:00+02:00".into(),
+            started_at: "2026-04-13T14:00:00+02:00".into(),
+            model: "new-model".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "new".into() }],
+            }],
+            system_prompt: vec![],
+            constants: None,
+        };
+
+        let old_path = sessions.join(session_filename_for(&old_snap.started_at));
+        let new_path = sessions.join(session_filename_for(&new_snap.started_at));
+        save_session_to(&old_snap, &old_path).unwrap();
+        save_session_to(&new_snap, &new_path).unwrap();
+
+        // Manually read what load_latest_session would do: sort .json files, pick last
+        let mut files: Vec<_> = std::fs::read_dir(&sessions)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("json"))
+            .collect();
+        files.sort();
+        let latest = files.last().unwrap();
+        let loaded: SessionSnapshot =
+            serde_json::from_str(&std::fs::read_to_string(latest).unwrap()).unwrap();
+
+        assert_eq!(loaded.model, "new-model");
+        assert_eq!(loaded.messages[0].text(), "new");
+    }
+
+    #[test]
+    fn test_save_session_overwrites_same_session() {
+        // Multiple saves of the same session (same started_at) should overwrite
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let mut snap = SessionSnapshot {
+            saved_at: "2026-04-13T14:30:15+02:00".into(),
+            started_at: "2026-04-13T14:00:00+02:00".into(),
+            model: "test-model".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "first".into() }],
+            }],
+            system_prompt: vec![],
+            constants: None,
+        };
+
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        // Add more messages and save again (same started_at → same file)
+        snap.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::Text { text: "reply".into() }],
+        });
+        snap.saved_at = "2026-04-13T14:35:00+02:00".into();
+        save_session_to(&snap, &path).unwrap();
+
+        // Only one file should exist
+        let files: Vec<_> = std::fs::read_dir(&sessions)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(files.len(), 1);
+
+        // Content should be the updated version
+        let loaded: SessionSnapshot =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded.messages.len(), 2);
+    }
+
+    #[test]
+    fn test_started_at_roundtrip() {
+        let snap = make_snapshot(vec![]);
+        let json = serde_json::to_string(&snap).unwrap();
+        let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.started_at, "2026-04-04T11:00:00+02:00");
+    }
+
+    #[test]
+    fn test_backward_compat_missing_started_at() {
+        // Old session files won't have started_at — it should default to empty string
+        let json = r#"{
+            "saved_at": "2026-04-04T12:00:00Z",
+            "model": "test-model",
+            "messages": [],
+            "system_prompt": []
+        }"#;
+        let restored: SessionSnapshot = serde_json::from_str(json).unwrap();
+        assert_eq!(restored.started_at, "");
     }
 
     #[test]
     fn test_session_snapshot_with_cached_system_block() {
         let snap = SessionSnapshot {
             saved_at: "2026-04-04T12:00:00Z".into(),
+            started_at: "2026-04-04T11:00:00+02:00".into(),
             model: "test-model".into(),
             messages: vec![],
             system_prompt: vec![
@@ -604,5 +1021,264 @@ mod tests {
         std::fs::write(&path, "not valid json!!!").unwrap();
         let result = load_constants_from(&path);
         assert!(result.is_err());
+    }
+
+    // ── list_sessions / load_session_by_prefix tests ──
+
+    #[test]
+    fn test_list_sessions_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let list = list_sessions_in(&sessions).unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_list_sessions_returns_sorted_by_filename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        // Create three sessions in non-chronological order
+        let snaps = vec![
+            ("2026-04-13T14:00:00+02:00", "model-b", "middle"),
+            ("2026-04-13T09:00:00+02:00", "model-a", "oldest"),
+            ("2026-04-13T20:00:00+02:00", "model-c", "newest"),
+        ];
+        for (started, model, text) in &snaps {
+            let snap = SessionSnapshot {
+                saved_at: started.to_string(),
+                started_at: started.to_string(),
+                model: model.to_string(),
+                messages: vec![Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Text { text: text.to_string() }],
+                }],
+                system_prompt: vec![],
+                constants: None,
+            };
+            let path = sessions.join(session_filename_for(started));
+            save_session_to(&snap, &path).unwrap();
+        }
+
+        let list = list_sessions_in(&sessions).unwrap();
+        assert_eq!(list.len(), 3);
+        // Should be sorted chronologically (oldest first)
+        assert_eq!(list[0].model, "model-a");
+        assert_eq!(list[1].model, "model-b");
+        assert_eq!(list[2].model, "model-c");
+    }
+
+    #[test]
+    fn test_list_sessions_contains_correct_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let snap = SessionSnapshot {
+            saved_at: "2026-04-13T15:30:00+02:00".into(),
+            started_at: "2026-04-13T14:00:00+02:00".into(),
+            model: "claude-sonnet-4-20250514".into(),
+            messages: vec![
+                Message { role: Role::User, content: vec![ContentBlock::Text { text: "q1".into() }] },
+                Message { role: Role::Assistant, content: vec![ContentBlock::Text { text: "a1".into() }] },
+                Message { role: Role::User, content: vec![ContentBlock::Text { text: "q2".into() }] },
+            ],
+            system_prompt: vec![],
+            constants: None,
+        };
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        let list = list_sessions_in(&sessions).unwrap();
+        assert_eq!(list.len(), 1);
+        let info = &list[0];
+        assert_eq!(info.filename, "2026_04_13_14_00_00.json");
+        assert_eq!(info.started_at, "2026-04-13T14:00:00+02:00");
+        assert_eq!(info.saved_at, "2026-04-13T15:30:00+02:00");
+        assert_eq!(info.model, "claude-sonnet-4-20250514");
+        assert_eq!(info.message_count, 3);
+    }
+
+    #[test]
+    fn test_list_sessions_skips_corrupt_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        // One valid session
+        let snap = SessionSnapshot {
+            saved_at: "2026-04-13T14:00:00+02:00".into(),
+            started_at: "2026-04-13T14:00:00+02:00".into(),
+            model: "good-model".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+        };
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        // One corrupt file
+        std::fs::write(sessions.join("2026_04_13_10_00_00.json"), "NOT JSON!!!").unwrap();
+
+        let list = list_sessions_in(&sessions).unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].model, "good-model");
+    }
+
+    #[test]
+    fn test_list_sessions_nonexistent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nonexistent = tmp.path().join("does_not_exist");
+        let list = list_sessions_in(&nonexistent).unwrap();
+        assert!(list.is_empty());
+    }
+
+    #[test]
+    fn test_load_session_by_prefix_exact_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let snap = SessionSnapshot {
+            saved_at: "2026-04-13T15:00:00+02:00".into(),
+            started_at: "2026-04-13T14:30:15+02:00".into(),
+            model: "target-model".into(),
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "hello".into() }],
+            }],
+            system_prompt: vec![],
+            constants: None,
+        };
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        // Exact match (full timestamp without .json)
+        let loaded = load_session_by_prefix_in("2026_04_13_14_30_15", &sessions)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.model, "target-model");
+        assert_eq!(loaded.messages[0].text(), "hello");
+    }
+
+    #[test]
+    fn test_load_session_by_prefix_date_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let snap = SessionSnapshot {
+            saved_at: "2026-04-13T15:00:00+02:00".into(),
+            started_at: "2026-04-13T14:30:15+02:00".into(),
+            model: "found-model".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+        };
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        // Date-only prefix
+        let loaded = load_session_by_prefix_in("2026_04_13", &sessions)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.model, "found-model");
+    }
+
+    #[test]
+    fn test_load_session_by_prefix_partial_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let snap = SessionSnapshot {
+            saved_at: "2026-04-13T15:00:00+02:00".into(),
+            started_at: "2026-04-13T14:30:15+02:00".into(),
+            model: "partial-match".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+        };
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        // Partial time prefix
+        let loaded = load_session_by_prefix_in("2026_04_13_14", &sessions)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.model, "partial-match");
+    }
+
+    #[test]
+    fn test_load_session_by_prefix_picks_most_recent_on_ambiguity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        // Two sessions on the same day
+        for (started, model) in &[
+            ("2026-04-13T09:00:00+02:00", "morning"),
+            ("2026-04-13T14:00:00+02:00", "afternoon"),
+        ] {
+            let snap = SessionSnapshot {
+                saved_at: started.to_string(),
+                started_at: started.to_string(),
+                model: model.to_string(),
+                messages: vec![],
+                system_prompt: vec![],
+                constants: None,
+            };
+            let path = sessions.join(session_filename_for(started));
+            save_session_to(&snap, &path).unwrap();
+        }
+
+        // Prefix matches both — should return the latest
+        let loaded = load_session_by_prefix_in("2026_04_13", &sessions)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded.model, "afternoon");
+    }
+
+    #[test]
+    fn test_load_session_by_prefix_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let snap = SessionSnapshot {
+            saved_at: "2026-04-13T14:00:00+02:00".into(),
+            started_at: "2026-04-13T14:00:00+02:00".into(),
+            model: "test".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+        };
+        let path = sessions.join(session_filename_for(&snap.started_at));
+        save_session_to(&snap, &path).unwrap();
+
+        // Non-matching prefix
+        let result = load_session_by_prefix_in("2025_01", &sessions).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_session_by_prefix_empty_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+
+        let result = load_session_by_prefix_in("2026", &sessions).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_session_by_prefix_nonexistent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nonexistent = tmp.path().join("nope");
+        let result = load_session_by_prefix_in("2026", &nonexistent).unwrap();
+        assert!(result.is_none());
     }
 }

@@ -715,12 +715,22 @@ impl App {
                     ));
                 }
                 DisplayBlock::SystemMessage(text) => {
-                    logical_lines.push(RenderedLine::styled(
-                        &format!("⟫ {text}"),
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::ITALIC),
-                    ));
+                    let style = Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::ITALIC);
+                    for (i, line) in text.lines().enumerate() {
+                        if i == 0 {
+                            logical_lines.push(RenderedLine::styled(
+                                &format!("⟫ {line}"),
+                                style,
+                            ));
+                        } else {
+                            logical_lines.push(RenderedLine::styled(
+                                &format!("  {line}"),
+                                style,
+                            ));
+                        }
+                    }
                     logical_lines.push(RenderedLine::plain(""));
                 }
                 DisplayBlock::BashOutput { command, raw_output } => {

@@ -1,7 +1,7 @@
 //! System notification support — sends OS-level notifications when a
-//! conversation turn completes, but **only** when the terminal is not in
-//! the foreground. This avoids spamming the user with notifications while
-//! they're actively watching the output.
+//! conversation turn completes and the terminal is NOT in the foreground.
+//! This way the user gets alerted when they've switched to another app while
+//! waiting, but is not spammed while actively watching the output.
 //!
 //! On macOS, focus detection uses the native `NSWorkspace` Objective-C API
 //! via direct FFI (`objc_msgSend`). This is a single property access —
@@ -123,7 +123,7 @@ fn is_terminal_focused_macos() -> bool {
         }
 
         let bundle_id = CStr::from_ptr(cstr_ptr).to_string_lossy();
-        tracing::trace!("Frontmost app bundle ID: {bundle_id:?}");
+        tracing::debug!("Frontmost app bundle ID: {bundle_id:?}");
 
         KNOWN_TERMINAL_BUNDLE_IDS
             .iter()
@@ -148,11 +148,7 @@ pub(crate) fn project_dir_name() -> String {
 /// (shown as subtitle on macOS, appended to body on Linux).
 /// This is a fire-and-forget operation — errors are logged but never bubble up.
 pub(crate) fn notify_turn_complete(project: &str) {
-    if is_terminal_focused() {
-        tracing::trace!("Terminal is focused — skipping notification");
-        return;
-    }
-
+    tracing::debug!("notify_turn_complete: project={project:?}");
     send_notification("Chlodwig", "Turn complete ✓", project);
 }
 
@@ -215,7 +211,7 @@ fn send_notification_macos(title: &str, body: &str, subtitle: &str) {
         Ok(_child) => {
             // Fire-and-forget: don't wait for osascript to finish.
             // It typically takes ~50ms but we don't want to block the event loop.
-            tracing::trace!("Notification sent via osascript");
+            tracing::debug!("Notification sent via osascript: {script:?}");
         }
         Err(e) => {
             tracing::debug!("Failed to spawn osascript for notification: {e}");

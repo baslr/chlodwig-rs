@@ -105,3 +105,38 @@ fn test_clear_resets_requests() {
     assert_eq!(app.requests_scroll, 0, "requests_scroll should be 0");
     assert!(!app.requests_dirty, "requests_dirty should be false");
 }
+
+#[test]
+fn test_system_message_multiline_renders_each_line_separately() {
+    let mut app = App::new("test".into());
+    app.display_blocks.push(DisplayBlock::SystemMessage(
+        "Line one\nLine two\nLine three".into(),
+    ));
+    app.mark_dirty();
+    app.rebuild_lines();
+
+    // Find all rendered lines that contain our text
+    let line_texts: Vec<String> = app
+        .rendered_lines
+        .iter()
+        .map(|rl| rl.spans.iter().map(|(text, _style)| text.as_str()).collect::<String>())
+        .collect();
+
+    // Each line should appear as a separate RenderedLine
+    let has_line_one = line_texts.iter().any(|l| l.contains("Line one"));
+    let has_line_two = line_texts.iter().any(|l| l.contains("Line two"));
+    let has_line_three = line_texts.iter().any(|l| l.contains("Line three"));
+
+    assert!(has_line_one, "Should have 'Line one' as a separate line, got: {line_texts:?}");
+    assert!(has_line_two, "Should have 'Line two' as a separate line, got: {line_texts:?}");
+    assert!(has_line_three, "Should have 'Line three' as a separate line, got: {line_texts:?}");
+
+    // They should NOT all be on the same RenderedLine
+    let all_on_one = line_texts.iter().any(|l| {
+        l.contains("Line one") && l.contains("Line two") && l.contains("Line three")
+    });
+    assert!(
+        !all_on_one,
+        "All three lines should NOT be on a single RenderedLine"
+    );
+}

@@ -361,17 +361,23 @@ extern "C" fn sigint_handler(_sig: libc::c_int) {
 /// Clones the current messages + system prompt from `ConversationState`,
 /// builds a `SessionSnapshot`, and writes it to disk in a blocking task
 /// (so the event loop is never stalled by I/O).
+///
+/// The file path is derived from `started_at` — each session gets its own
+/// file: `~/.chlodwig-rs/sessions/YYYY_MM_DD_HH_MM_SS.json`.
 fn trigger_session_save(
     state: &std::sync::Arc<tokio::sync::Mutex<ConversationState>>,
     model: &str,
     constants: chlodwig_core::ConstantsSnapshot,
+    started_at: &str,
 ) {
     let state_clone = state.clone();
     let model = model.to_string();
+    let started_at = started_at.to_string();
     tokio::spawn(async move {
         let guard = state_clone.lock().await;
         let snapshot = SessionSnapshot {
             saved_at: chrono::Local::now().to_rfc3339(),
+            started_at,
             model,
             messages: guard.messages.clone(),
             system_prompt: guard.system_prompt.clone(),
@@ -380,7 +386,7 @@ fn trigger_session_save(
         drop(guard); // release lock before blocking I/O
 
         // Write to disk on the blocking thread pool so we never block the
-        // async runtime (session.json can be several MB after long sessions).
+        // async runtime (session can be several MB after long sessions).
         let _ = tokio::task::spawn_blocking(move || {
             if let Err(e) = chlodwig_core::save_session(&snapshot) {
                 tracing::warn!("Failed to auto-save session: {e}");
@@ -614,6 +620,10 @@ pub async fn run_tui_with_permissions(
     let system_prompt_blocks = initial_state.system_prompt.clone();
     let initial_messages = initial_state.messages.clone();
     let mut app = App::new(model_name);
+
+    // Generate a unique session start timestamp — this is used as the
+    // filename for the per-session save file (YYYY_MM_DD_HH_MM_SS.json).
+    let session_started_at = chrono::Local::now().to_rfc3339();
 
     // Determine project name once at startup for notification identification
     let project_name = crate::notification::project_dir_name();
@@ -859,9 +869,96 @@ pub async fn run_tui_with_permissions(
                             break; // exit inner drain loop
                         }
 
-                        // /resume command — load the last saved session
-                        if trimmed == "/resume" {
-                            match chlodwig_core::load_session() {
+                        // /help command — show available commands and keybindings
+                        if trimmed == "/help" || trimmed == "/h" || trimmed == "help" || trimmed == "/?" {
+                            let help_text = "\
+📖 Commands:
+  /help, /?             Show this help
+  /sessions             List all saved sessions
+  /resume               Load the most recent session
+  /resume <prefix>      Load session by timestamp prefix (e.g. 2026_04_13)
+  /save                 Manually save the current session
+  /compact [instr]      Compact conversation history
+  /clear, /reset, /new  Clear conversation, start fresh
+  ! <cmd>               Execute shell command
+  exit, quit            Exit
+
+⌨ Key Bindings:
+  Enter                 Submit input
+  Ctrl+J                Insert newline (all terminals)
+  Shift+Enter           Insert newline (Kitty-protocol terminals)
+  Up / Down             Move cursor in multiline input; history on first/last line
+  Alt+← / Alt+→         Move cursor word left / right
+  Alt+b / Alt+f         Move cursor word left / right (Emacs)
+  Alt+Backspace         Delete word backward
+  Alt+d                 Delete word forward
+  Ctrl+K                Delete word backward
+  Ctrl+L                Delete word forward
+  Ctrl+C                Quit";
+                            app.display_blocks.push(DisplayBlock::SystemMessage(
+                                help_text.into(),
+                            ));
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
+                            break; // exit inner drain loop
+                        }
+
+                        // /sessions command — list all saved sessions
+                        if trimmed == "/sessions" {
+                            match chlodwig_core::list_sessions() {
+                                Ok(sessions_list) => {
+                                    if sessions_list.is_empty() {
+                                        app.display_blocks.push(DisplayBlock::SystemMessage(
+                                            "No saved sessions found.".into(),
+                                        ));
+                                    } else {
+                                        let mut lines = vec![format!(
+                                            "📋 {} saved session{}:",
+                                            sessions_list.len(),
+                                            if sessions_list.len() == 1 { "" } else { "s" }
+                                        )];
+                                        for (i, info) in sessions_list.iter().enumerate() {
+                                            // Strip the .json extension from filename for the prefix hint
+                                            let prefix = info.filename.trim_end_matches(".json");
+                                            lines.push(format!(
+                                                "  {}. {} — {} ({} msgs, {})",
+                                                i + 1,
+                                                prefix,
+                                                info.model,
+                                                info.message_count,
+                                                info.saved_at,
+                                            ));
+                                        }
+                                        lines.push(String::new());
+                                        lines.push("Use /resume <prefix> to load a specific session.".into());
+                                        lines.push("Example: /resume 2026_04_13 or /resume 2026_04_13_14".into());
+                                        app.display_blocks.push(DisplayBlock::SystemMessage(
+                                            lines.join("\n"),
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    app.display_blocks.push(DisplayBlock::Error(
+                                        format!("Failed to list sessions: {e}"),
+                                    ));
+                                }
+                            }
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
+                            break; // exit inner drain loop
+                        }
+
+                        // /resume command — load a saved session
+                        // /resume        → load the most recent session
+                        // /resume PREFIX → load session matching the prefix
+                        if trimmed == "/resume" || trimmed.starts_with("/resume ") {
+                            let prefix = trimmed.strip_prefix("/resume").unwrap().trim();
+                            let load_result = if prefix.is_empty() {
+                                chlodwig_core::load_latest_session()
+                            } else {
+                                chlodwig_core::load_session_by_prefix(prefix)
+                            };
+                            match load_result {
                                 Ok(Some(snapshot)) => {
                                     let msg_count = snapshot.messages.len();
                                     // Restore display blocks so the user can scroll back
@@ -888,9 +985,12 @@ pub async fn run_tui_with_permissions(
                                     });
                                 }
                                 Ok(None) => {
-                                    app.display_blocks.push(DisplayBlock::SystemMessage(
-                                        "No saved session found.".into(),
-                                    ));
+                                    let msg = if prefix.is_empty() {
+                                        "No saved session found.".to_string()
+                                    } else {
+                                        format!("No session matching prefix '{prefix}' found. Use /sessions to list available sessions.")
+                                    };
+                                    app.display_blocks.push(DisplayBlock::SystemMessage(msg));
                                 }
                                 Err(e) => {
                                     app.display_blocks.push(DisplayBlock::Error(
@@ -905,7 +1005,7 @@ pub async fn run_tui_with_permissions(
 
                         // /save command — manually persist the current session
                         if trimmed == "/save" {
-                            trigger_session_save(&state, &app.model, app.constants.to_snapshot());
+                            trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at);
                             app.display_blocks.push(DisplayBlock::SystemMessage(
                                 "✓ Session saved.".into(),
                             ));
@@ -1664,12 +1764,23 @@ pub async fn run_tui_with_permissions(
                     app.display_blocks.push(DisplayBlock::Thinking(text));
                 }
                 ConversationEvent::TurnComplete => {
+                    let was_loading = app.is_loading;
+                    tracing::debug!("TurnComplete received, is_loading was {was_loading}");
                     app.is_loading = false;
                     app.streaming_buffer.clear();
-                    // Auto-save session after every completed turn
-                    trigger_session_save(&state, &app.model, app.constants.to_snapshot());
-                    // Send system notification so the user notices in background
-                    crate::notification::notify_turn_complete(&project_name);
+                    // Only act on the first TurnComplete per turn
+                    // (run_turn sends one, and the spawned task sends another)
+                    if was_loading {
+                        // Auto-save session after every completed turn
+                        trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at);
+                        // Send system notification only when the terminal is NOT focused
+                        // (user switched to another app while waiting for the turn to finish)
+                        if !crate::notification::is_terminal_focused() {
+                            crate::notification::notify_turn_complete(&project_name);
+                        } else {
+                            tracing::debug!("Skipping notification — terminal is focused");
+                        }
+                    }
                 }
                 ConversationEvent::Error(e) => {
                     app.display_blocks.push(DisplayBlock::Error(e));
@@ -1744,7 +1855,7 @@ pub async fn run_tui_with_permissions(
                 } => {
                     app.on_compaction_complete(old_messages, summary_tokens);
                     // Auto-save session after compaction (messages were replaced)
-                    trigger_session_save(&state, &app.model, app.constants.to_snapshot());
+                    trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at);
                 }
                 _ => {}
             }
