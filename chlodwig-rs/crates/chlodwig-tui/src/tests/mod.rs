@@ -94,3 +94,5 @@ mod bracketed_paste;
 mod user_question;
 mod notification;
 mod typewriter;
+mod git_tab;
+mod grep_output;

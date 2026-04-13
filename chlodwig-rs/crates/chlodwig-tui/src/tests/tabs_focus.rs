@@ -52,14 +52,14 @@ fn test_left_in_tabbar_wraps_to_last() {
     app.focus = Focus::TabBar;
     app.active_tab = 0;
     app.handle_tab_bar_left();
-    assert_eq!(app.active_tab, 3, "Left from first tab should wrap to last tab");
+    assert_eq!(app.active_tab, 4, "Left from first tab should wrap to last tab");
 }
 
 #[test]
 fn test_right_in_tabbar_wraps_to_first() {
     let mut app = App::new("test".into());
     app.focus = Focus::TabBar;
-    app.active_tab = 3;
+    app.active_tab = 4;
     app.handle_tab_bar_right();
     assert_eq!(app.active_tab, 0, "Right from last tab should wrap to first tab");
 }
@@ -69,11 +69,12 @@ fn test_tab_wrap_full_cycle_right() {
     let mut app = App::new("test".into());
     app.focus = Focus::TabBar;
     app.active_tab = 0;
-    // Cycle through all 4 tabs and back to start
+    // Cycle through all 5 tabs and back to start
     app.handle_tab_bar_right(); // 0 -> 1
     app.handle_tab_bar_right(); // 1 -> 2
     app.handle_tab_bar_right(); // 2 -> 3
-    app.handle_tab_bar_right(); // 3 -> 0
+    app.handle_tab_bar_right(); // 3 -> 4
+    app.handle_tab_bar_right(); // 4 -> 0
     assert_eq!(app.active_tab, 0, "Full right cycle should return to first tab");
 }
 
@@ -82,8 +83,9 @@ fn test_tab_wrap_full_cycle_left() {
     let mut app = App::new("test".into());
     app.focus = Focus::TabBar;
     app.active_tab = 0;
-    // Cycle backwards through all 4 tabs and back to start
-    app.handle_tab_bar_left(); // 0 -> 3
+    // Cycle backwards through all 5 tabs and back to start
+    app.handle_tab_bar_left(); // 0 -> 4
+    app.handle_tab_bar_left(); // 4 -> 3
     app.handle_tab_bar_left(); // 3 -> 2
     app.handle_tab_bar_left(); // 2 -> 1
     app.handle_tab_bar_left(); // 1 -> 0

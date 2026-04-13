@@ -701,6 +701,11 @@ pub async fn run_tui_with_permissions(
                 app.rebuild_constants_lines();
                 tracing::trace!("loop: rebuild_constants_lines done");
             }
+            // Refresh git info when the Git tab is visible.
+            if app.active_tab == 4 {
+                app.refresh_git_info();
+                tracing::trace!("loop: refresh_git_info done");
+            }
             // Update crash state snapshot (for panic hook)
             tracing::trace!("loop: crash_dump start");
             if let Ok(mut guard) = crash_state().lock() {
@@ -1240,6 +1245,11 @@ pub async fn run_tui_with_permissions(
                         app.active_tab = 0;
                         app.focus = Focus::Input;
                     }
+                    KeyCode::Esc if app.active_tab == 4 => {
+                        // Esc in Git tab: go back to prompt tab
+                        app.active_tab = 0;
+                        app.focus = Focus::Input;
+                    }
 
                     // Word-jump: Alt+Left / Option+Left
                     KeyCode::Left
@@ -1606,6 +1616,21 @@ pub async fn run_tui_with_permissions(
                                     file_path,
                                     content,
                                     summary: summary.clone(),
+                                });
+                                app.scroll_to_bottom_if_auto();
+                                continue;
+                            }
+                        }
+                        // Grep → GrepOutput (syntax highlighting in content mode)
+                        if tool_name == "Grep" && !is_error {
+                            if let ToolResultContent::Text(ref t) = output {
+                                let output_mode = tool_input["output_mode"]
+                                    .as_str()
+                                    .unwrap_or("files_with_matches")
+                                    .to_string();
+                                app.display_blocks.push(DisplayBlock::GrepOutput {
+                                    content: t.clone(),
+                                    output_mode,
                                 });
                                 app.scroll_to_bottom_if_auto();
                                 continue;

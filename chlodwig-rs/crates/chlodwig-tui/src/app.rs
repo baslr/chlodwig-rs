@@ -467,12 +467,16 @@ pub(crate) struct App {
     pub(crate) constants: ConstantsConfig,               // Editable constants
     pub(crate) constants_lines: Vec<RenderedLine>,       // Pre-rendered constants tab lines
     pub(crate) constants_scroll: usize,                  // Scroll position in constants tab
-
+    // Git tab
+    pub(crate) git_branch: String,                       // Current git branch name (empty if not in a repo)
+    pub(crate) git_status_output: String,                // Raw `git status` output
+    pub(crate) git_lines: Vec<RenderedLine>,             // Pre-rendered git tab lines
+    pub(crate) git_scroll: usize,                        // Scroll position in git tab
 }
 
 impl App {
     pub(crate) fn new(model: String) -> Self {
-        Self {
+        let mut app = Self {
             display_blocks: Vec::new(),
             input: String::new(),
             cursor: 0,
@@ -515,8 +519,13 @@ impl App {
             constants: ConstantsConfig::default(),
             constants_lines: Vec::new(),
             constants_scroll: 0,
-
-        }
+            git_branch: String::new(),
+            git_status_output: String::new(),
+            git_lines: Vec::new(),
+            git_scroll: 0,
+        };
+        app.refresh_git_branch();
+        app
     }
 
     /// Advance the spinner frame (called on each poll tick while loading).
@@ -627,6 +636,7 @@ impl App {
 
         // First, collect logical lines (unwrapped)
         let mut logical_lines: Vec<RenderedLine> = Vec::new();
+        let w = if self.wrap_width > 0 { self.wrap_width } else { usize::MAX };
 
         for block in &self.display_blocks {
             match block {
@@ -654,7 +664,7 @@ impl App {
                         text_lines = text.lines().count(),
                         "rebuild_lines: rendering AssistantText as markdown"
                     );
-                    logical_lines.extend(markdown::render_markdown(text));
+                    logical_lines.extend(markdown::render_markdown_with_width(text, w));
                     logical_lines.push(RenderedLine::plain(""));
                 }
                 DisplayBlock::ToolCall {
@@ -906,6 +916,75 @@ impl App {
                     }
                     logical_lines.push(RenderedLine::plain(""));
                 }
+                DisplayBlock::GrepOutput { content, output_mode } => {
+                    // Header
+                    logical_lines.push(RenderedLine::styled(
+                        "── Grep ──",
+                        Style::default().fg(Color::Blue),
+                    ));
+
+                    if output_mode == "content" {
+                        // Content mode: lines are "file:line:code" or "file-line-context"
+                        for line in content.lines() {
+                            // Separator between context groups
+                            if line == "--" {
+                                logical_lines.push(RenderedLine::styled(
+                                    "  ──",
+                                    Style::default().fg(Color::DarkGray),
+                                ));
+                                continue;
+                            }
+
+                            // Try to parse "file:line:code" (match) or "file-line-code" (context)
+                            if let Some((file, line_num, code, is_match)) = parse_grep_content_line(line) {
+                                let lang = markdown::lang_from_path(file);
+
+                                // Syntax-highlight the code portion
+                                let highlighted = markdown::highlight_code(lang, code);
+                                let code_spans = if let Some(rl) = highlighted.first() {
+                                    rl.spans.clone()
+                                } else {
+                                    vec![(code.to_string(), Style::default())]
+                                };
+
+                                // Build: " file:line │ code" or " file-line │ code"
+                                let sep = if is_match { ':' } else { '-' };
+                                let gutter = format!("  {file}{sep}{line_num} │ ");
+                                let gutter_style = if is_match {
+                                    Style::default().fg(Color::Green)
+                                } else {
+                                    Style::default().fg(Color::DarkGray)
+                                };
+                                let mut spans = Vec::with_capacity(1 + code_spans.len());
+                                spans.push((gutter, gutter_style));
+                                for (text, mut style) in code_spans {
+                                    style.bg = None;
+                                    if !is_match {
+                                        // Dim context lines
+                                        style = Style::default().fg(Color::DarkGray);
+                                    }
+                                    spans.push((text, style));
+                                }
+                                logical_lines.push(RenderedLine { spans, wrap_prefix: None });
+                            } else {
+                                // Not parseable as grep output — render as-is
+                                logical_lines.push(RenderedLine::styled(
+                                    &format!("  {line}"),
+                                    Style::default().fg(Color::White),
+                                ));
+                            }
+                        }
+                    } else {
+                        // files_with_matches or count mode — render as plain colored lines
+                        for line in content.lines() {
+                            logical_lines.push(RenderedLine::styled(
+                                &format!("  {line}"),
+                                Style::default().fg(Color::Cyan),
+                            ));
+                        }
+                    }
+                    logical_lines.push(RenderedLine::plain(""));
+                }
             }
         }
 
@@ -924,7 +1003,7 @@ impl App {
                 buf_lines = self.streaming_buffer.lines().count(),
                 "rebuild_lines: rendering streaming buffer as markdown"
             );
-            logical_lines.extend(markdown::render_markdown(&self.streaming_buffer));
+            logical_lines.extend(markdown::render_markdown_with_width(&self.streaming_buffer, w));
             tracing::debug!(
                 logical_lines = logical_lines.len(),
                 "rebuild_lines: streaming markdown done"
@@ -939,7 +1018,6 @@ impl App {
         }
 
         // Wrap logical lines to viewport width and collect into rendered_lines
-        let w = if self.wrap_width > 0 { self.wrap_width } else { usize::MAX };
         self.rendered_lines.clear();
         tracing::debug!(
             logical_lines = logical_lines.len(),
@@ -1704,6 +1782,9 @@ impl App {
             3 => {
                 self.constants_scroll = self.constants_scroll.saturating_sub(n);
             }
+            4 => {
+                self.git_scroll = self.git_scroll.saturating_sub(n);
+            }
             _ => {}
         }
     }
@@ -1723,6 +1804,10 @@ impl App {
             3 => {
                 let max = self.constants_lines.len().saturating_sub(view_height);
                 self.constants_scroll = (self.constants_scroll + n).min(max);
+            }
+            4 => {
+                let max = self.git_lines.len().saturating_sub(view_height);
+                self.git_scroll = (self.git_scroll + n).min(max);
             }
             _ => {}
         }
@@ -1756,12 +1841,12 @@ impl App {
 
     /// Handle Right key when focus is on TabBar: switch to next tab (wraps around).
     pub(crate) fn handle_tab_bar_right(&mut self) {
-        self.active_tab = (self.active_tab + 1) % 4;
+        self.active_tab = (self.active_tab + 1) % 5;
     }
 
     /// Handle Left key when focus is on TabBar: switch to previous tab (wraps around).
     pub(crate) fn handle_tab_bar_left(&mut self) {
-        self.active_tab = (self.active_tab + 3) % 4;
+        self.active_tab = (self.active_tab + 4) % 5;
     }
 
     /// Clear the entire conversation — reset display, tokens, scroll, streaming.
@@ -1881,6 +1966,27 @@ impl App {
                                             file_path,
                                             content: file_content,
                                             summary: summary.clone(),
+                                        });
+                                        continue;
+                                    }
+                                }
+
+                                // Check if this was a Grep tool result
+                                let is_grep = tool_id_map
+                                    .get(tool_use_id.as_str())
+                                    .map(|(name, _)| *name == "Grep")
+                                    .unwrap_or(false);
+
+                                if is_grep && !is_error.unwrap_or(false) {
+                                    if let ToolResultContent::Text(t) = content {
+                                        let output_mode = tool_id_map
+                                            .get(tool_use_id.as_str())
+                                            .and_then(|(_, input)| input["output_mode"].as_str())
+                                            .unwrap_or("files_with_matches")
+                                            .to_string();
+                                        self.display_blocks.push(DisplayBlock::GrepOutput {
+                                            content: t.clone(),
+                                            output_mode,
                                         });
                                         continue;
                                     }
@@ -2313,6 +2419,133 @@ impl App {
         }
     }
 
+    /// Generate the label for the Git tab.
+    /// Shows "git ⎇ {branch}" when on a branch, or just "git" otherwise.
+    pub(crate) fn git_tab_label(&self) -> String {
+        if self.git_branch.is_empty() {
+            "git".to_string()
+        } else {
+            format!("git ⎇ {}", self.git_branch)
+        }
+    }
+
+    /// Refresh only the git branch name (cheap: single git command).
+    /// Called at startup so the tab label shows the branch immediately.
+    pub(crate) fn refresh_git_branch(&mut self) {
+        self.git_branch = std::process::Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+    }
+
+    /// Refresh git branch and status by running git commands.
+    /// This is synchronous and should only be called when the Git tab is
+    /// about to be displayed.
+    pub(crate) fn refresh_git_info(&mut self) {
+        // Refresh branch name
+        self.refresh_git_branch();
+
+        // Get status output
+        self.git_status_output = std::process::Command::new("git")
+            .args(["status"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).to_string())
+                } else {
+                    Some(String::from_utf8_lossy(&o.stderr).to_string())
+                }
+            })
+            .unwrap_or_else(|| "git is not available".to_string());
+
+        self.rebuild_git_lines();
+    }
+
+    /// Build rendered lines for the Git tab from stored status output.
+    pub(crate) fn rebuild_git_lines(&mut self) {
+        let mut logical_lines: Vec<RenderedLine> = Vec::new();
+
+        // Header
+        let header = if self.git_branch.is_empty() {
+            "── Git ──".to_string()
+        } else {
+            format!("── Git ⎇ {} ──", self.git_branch)
+        };
+        logical_lines.push(RenderedLine::styled(
+            &header,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+        logical_lines.push(RenderedLine::plain(""));
+
+        if self.git_status_output.is_empty() && self.git_branch.is_empty() {
+            logical_lines.push(RenderedLine::styled(
+                "(not a git repo or git not available)",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else if self.git_status_output.is_empty() {
+            logical_lines.push(RenderedLine::styled(
+                "(no changes — working tree clean)",
+                Style::default().fg(Color::DarkGray),
+            ));
+        } else {
+            // Parse git status output with color coding
+            for line in self.git_status_output.lines() {
+                let style = if line.starts_with("On branch")
+                    || line.starts_with("Your branch")
+                {
+                    Style::default().fg(Color::Cyan)
+                } else if line.starts_with("Changes to be committed")
+                    || line.starts_with("Changes not staged")
+                    || line.starts_with("Untracked files")
+                    || line.starts_with("Unmerged paths")
+                {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if line.starts_with("\tnew file:")
+                    || line.starts_with("\tadded:")
+                {
+                    Style::default().fg(Color::Green)
+                } else if line.starts_with("\tmodified:") {
+                    Style::default().fg(Color::Yellow)
+                } else if line.starts_with("\tdeleted:") {
+                    Style::default().fg(Color::Red)
+                } else if line.starts_with("\trenamed:") {
+                    Style::default().fg(Color::Magenta)
+                } else if line.starts_with('\t') {
+                    // Untracked files are just tab-indented filenames
+                    Style::default().fg(Color::Red)
+                } else if line.starts_with("nothing to commit")
+                    || line.starts_with("no changes added")
+                {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                logical_lines.push(RenderedLine::styled(line, style));
+            }
+        }
+
+        let w = if self.wrap_width > 0 { self.wrap_width } else { usize::MAX };
+        self.git_lines.clear();
+        for logical in &logical_lines {
+            for wrapped in logical.wrap(w) {
+                self.git_lines.push(wrapped);
+            }
+        }
+    }
+
     /// Generate a crash dump string with all relevant App state.
     /// Used by the panic hook to write a human-readable state snapshot.
     pub(crate) fn crash_dump(&self) -> String {
@@ -2334,6 +2567,8 @@ impl App {
         let _ = writeln!(out, "sys_prompt_blocks.len():     {}", self.system_prompt_blocks.len());
         let _ = writeln!(out, "requests_lines.len():        {}", self.requests_lines.len());
         let _ = writeln!(out, "constants_lines.len():       {}", self.constants_lines.len());
+        let _ = writeln!(out, "git_lines.len():             {}", self.git_lines.len());
+        let _ = writeln!(out, "git_branch:                  {}", self.git_branch);
 
         let _ = writeln!(out);
         let _ = writeln!(out, "=== Counters ===");
@@ -2439,6 +2674,7 @@ impl App {
                 DisplayBlock::BashOutput { .. } => "BashOutput",
                 DisplayBlock::ReadOutput { .. } => "ReadOutput",
                 DisplayBlock::WriteOutput { .. } => "WriteOutput",
+                DisplayBlock::GrepOutput { .. } => "GrepOutput",
             };
             *counts.entry(name).or_insert(0) += 1;
         }
@@ -2450,4 +2686,57 @@ impl App {
 
         out
     }
+}
+
+/// Parse a ripgrep content-mode line into (file_path, line_number, code, is_match).
+///
+/// Match lines:   `file.rs:42:code here`  → is_match = true
+/// Context lines: `file.rs-42-code here`  → is_match = false
+///
+/// Returns `None` if the line doesn't match the expected pattern.
+pub(crate) fn parse_grep_content_line(line: &str) -> Option<(&str, &str, &str, bool)> {
+    // Strategy: find the LAST occurrence of `:number:` or `-number-` pattern.
+    // This handles file paths that contain colons (e.g. on Windows) or hyphens.
+    // ripgrep format: everything before the line-number separator is the file path.
+
+    // Try match lines first (`:number:`)
+    if let Some(result) = try_parse_grep_line(line, ':') {
+        return Some(result);
+    }
+    // Try context lines (`-number-`)
+    if let Some(result) = try_parse_grep_line(line, '-') {
+        return Some(result);
+    }
+    None
+}
+
+/// Try to parse a grep line with the given separator character.
+/// Looks for the pattern `path<sep>digits<sep>rest`.
+pub(crate) fn try_parse_grep_line(line: &str, sep: char) -> Option<(&str, &str, &str, bool)> {
+    let is_match = sep == ':';
+    let bytes = line.as_bytes();
+    let sep_byte = sep as u8;
+
+    // Find first separator followed by digits followed by another separator.
+    // We scan forward to find the first valid "path<sep>digits<sep>" pattern.
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == sep_byte {
+            // Found first separator at i — now check for digits
+            let digit_start = i + 1;
+            let mut j = digit_start;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            // Need at least one digit, and the next char must be the same separator
+            if j > digit_start && j < bytes.len() && bytes[j] == sep_byte {
+                let file = &line[..i];
+                let line_num = &line[digit_start..j];
+                let code = &line[j + 1..];
+                return Some((file, line_num, code, is_match));
+            }
+        }
+        i += 1;
+    }
+    None
 }

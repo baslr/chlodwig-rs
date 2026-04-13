@@ -45,6 +45,13 @@ pub(crate) enum DisplayBlock {
         content: String,
         summary: String,
     },
+    /// Grep tool output with optional syntax highlighting.
+    /// In "content" mode, lines are `file:line:code` — highlighted per file extension.
+    /// In "files_with_matches" / "count" mode, displayed as plain text.
+    GrepOutput {
+        content: String,
+        output_mode: String,
+    },
 }
 
 /// A single line in an Edit diff display.

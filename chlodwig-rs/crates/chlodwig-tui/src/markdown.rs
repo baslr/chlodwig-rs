@@ -236,6 +236,12 @@ fn merge_styles(stack: &[Style]) -> Style {
 /// Handles: bold, italic, inline code, headings, lists, blockquotes,
 /// horizontal rules, and fenced code blocks with syntax highlighting.
 pub fn render_markdown(text: &str) -> Vec<RenderedLine> {
+    render_markdown_with_width(text, usize::MAX)
+}
+
+/// Render Markdown text to styled RenderedLines, wrapping table columns to fit
+/// within `viewport_width` terminal columns.
+pub fn render_markdown_with_width(text: &str, viewport_width: usize) -> Vec<RenderedLine> {
     let options = Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES;
@@ -533,6 +539,7 @@ pub fn render_markdown(text: &str) -> Vec<RenderedLine> {
                     &table_head,
                     &table_rows,
                     &table_alignments,
+                    viewport_width,
                     &mut result,
                 );
                 in_table = false;
@@ -587,19 +594,22 @@ pub fn render_markdown(text: &str) -> Vec<RenderedLine> {
 }
 
 /// Render a Markdown table to styled RenderedLines with box-drawing characters.
+/// If `viewport_width` is not `usize::MAX`, column widths are shrunk to fit.
+/// Long cell contents are wrapped within the cell (multi-line rows).
 fn render_table(
     head: &[String],
     rows: &[Vec<String>],
     _alignments: &[Alignment],
+    viewport_width: usize,
     result: &mut Vec<RenderedLine>,
 ) {
-    // Calculate column count and widths
+    // Calculate column count
     let col_count = head.len().max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
     if col_count == 0 {
         return;
     }
 
-    // Calculate max display width for each column (unicode-width, not byte length!)
+    // Calculate natural (max content) display width per column (unicode-width)
     let mut col_widths: Vec<usize> = vec![0; col_count];
     for (i, cell) in head.iter().enumerate() {
         col_widths[i] = col_widths[i].max(cell.width());
@@ -614,6 +624,20 @@ fn render_table(
     // Minimum column width of 3
     for w in col_widths.iter_mut() {
         *w = (*w).max(3);
+    }
+
+    // ── Shrink columns to fit viewport_width ────────────────────────
+    // Total table width = 1 (left │) + sum(col_w + 2 padding + 1 right │) for each col
+    //                    = 1 + col_count * 3 + sum(col_widths)
+    // Simplification: border overhead = col_count + 1 (│ separators) + col_count * 2 (padding)
+    //                                  = 3 * col_count + 1
+    let border_overhead = 3 * col_count + 1;
+    let total_natural: usize = col_widths.iter().sum::<usize>() + border_overhead;
+
+    if viewport_width < usize::MAX && total_natural > viewport_width && viewport_width > border_overhead {
+        let available = viewport_width - border_overhead;
+        // Shrink columns proportionally, but each at least 3 wide
+        shrink_columns(&mut col_widths, available);
     }
 
     /// Pad `text` with spaces on the right to fill `target_width` display columns.
@@ -631,59 +655,177 @@ fn render_table(
     let header_style = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
     let cell_style = Style::default().fg(Color::White);
 
-    // ┌─────┬─────┐
-    let top_border = format!(
-        "┌{}┐",
-        col_widths.iter()
-            .map(|w| "─".repeat(w + 2))
-            .collect::<Vec<_>>()
-            .join("┬")
-    );
-    result.push(RenderedLine::styled(&top_border, border_style));
-
-    // │ Head1 │ Head2 │
-    {
-        let mut spans = Vec::new();
-        spans.push(("│".to_string(), border_style));
-        for (i, w) in col_widths.iter().enumerate() {
-            let text = head.get(i).map(|s| s.as_str()).unwrap_or("");
-            spans.push((format!(" {} ", pad_to_width(text, *w)), header_style));
-            spans.push(("│".to_string(), border_style));
+    // ── Helper: wrap cell text into multiple lines of at most `col_w` display columns ──
+    fn wrap_cell(text: &str, col_w: usize) -> Vec<String> {
+        if text.width() <= col_w {
+            return vec![text.to_string()];
         }
-        result.push(RenderedLine { spans, wrap_prefix: None });
+        let mut lines = Vec::new();
+        let mut current = String::new();
+        let mut current_w: usize = 0;
+
+        for word in text.split_inclusive(' ') {
+            let word_w = word.width();
+            if current_w + word_w <= col_w || current.is_empty() {
+                current.push_str(word);
+                current_w += word_w;
+            } else {
+                lines.push(current);
+                current = word.to_string();
+                current_w = word_w;
+            }
+        }
+        if !current.is_empty() {
+            lines.push(current);
+        }
+
+        // If any line still exceeds col_w (single word longer than column), force-break it
+        let mut result = Vec::new();
+        for line in lines {
+            if line.width() <= col_w {
+                result.push(line);
+            } else {
+                // Character-level break
+                let mut buf = String::new();
+                let mut buf_w: usize = 0;
+                for ch in line.chars() {
+                    let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                    if buf_w + ch_w > col_w && !buf.is_empty() {
+                        result.push(buf);
+                        buf = String::new();
+                        buf_w = 0;
+                    }
+                    buf.push(ch);
+                    buf_w += ch_w;
+                }
+                if !buf.is_empty() {
+                    result.push(buf);
+                }
+            }
+        }
+
+        if result.is_empty() {
+            result.push(String::new());
+        }
+        result
     }
 
-    // ├─────┼─────┤
-    let mid_border = format!(
-        "├{}┤",
-        col_widths.iter()
-            .map(|w| "─".repeat(w + 2))
+    // ── Emit horizontal border line ──
+    fn emit_border(
+        col_widths: &[usize],
+        left: &str, mid: &str, right: &str, fill: &str,
+        border_style: Style,
+    ) -> RenderedLine {
+        let inner = col_widths.iter()
+            .map(|w| fill.repeat(w + 2))
             .collect::<Vec<_>>()
-            .join("┼")
-    );
-    result.push(RenderedLine::styled(&mid_border, border_style));
+            .join(mid);
+        RenderedLine::styled(&format!("{left}{inner}{right}"), border_style)
+    }
+
+    // ── Emit a content row (possibly multi-line due to wrapping) ──
+    fn emit_row(
+        cells: &[String],
+        col_widths: &[usize],
+        col_count: usize,
+        border_style: Style,
+        content_style: Style,
+        result: &mut Vec<RenderedLine>,
+    ) {
+        // Wrap each cell and determine max visual lines for this row
+        let wrapped_cells: Vec<Vec<String>> = (0..col_count)
+            .map(|i| {
+                let text = cells.get(i).map(|s| s.as_str()).unwrap_or("");
+                wrap_cell(text, col_widths[i])
+            })
+            .collect();
+        let max_lines = wrapped_cells.iter().map(|c| c.len()).max().unwrap_or(1);
+
+        for line_idx in 0..max_lines {
+            let mut spans = Vec::new();
+            spans.push(("│".to_string(), border_style));
+            for (col_idx, w) in col_widths.iter().enumerate() {
+                let cell_text = wrapped_cells[col_idx]
+                    .get(line_idx)
+                    .map(|s| s.as_str())
+                    .unwrap_or("");
+                spans.push((format!(" {} ", pad_to_width(cell_text, *w)), content_style));
+                spans.push(("│".to_string(), border_style));
+            }
+            result.push(RenderedLine { spans, wrap_prefix: None });
+        }
+    }
+
+    // ┌─────┬─────┐
+    result.push(emit_border(&col_widths, "┌", "┬", "┐", "─", border_style));
+
+    // │ Head1 │ Head2 │ (possibly multi-line)
+    emit_row(head, &col_widths, col_count, border_style, header_style, result);
+
+    // ├─────┼─────┤
+    result.push(emit_border(&col_widths, "├", "┼", "┤", "─", border_style));
 
     // Body rows
     for row in rows {
-        let mut spans = Vec::new();
-        spans.push(("│".to_string(), border_style));
-        for (i, w) in col_widths.iter().enumerate() {
-            let text = row.get(i).map(|s| s.as_str()).unwrap_or("");
-            spans.push((format!(" {} ", pad_to_width(text, *w)), cell_style));
-            spans.push(("│".to_string(), border_style));
-        }
-        result.push(RenderedLine { spans, wrap_prefix: None });
+        emit_row(row, &col_widths, col_count, border_style, cell_style, result);
     }
 
     // └─────┴─────┘
-    let bottom_border = format!(
-        "└{}┘",
-        col_widths.iter()
-            .map(|w| "─".repeat(w + 2))
-            .collect::<Vec<_>>()
-            .join("┴")
-    );
-    result.push(RenderedLine::styled(&bottom_border, border_style));
+    result.push(emit_border(&col_widths, "└", "┴", "┘", "─", border_style));
+}
+
+/// Shrink column widths proportionally to fit within `available` total width.
+/// Each column keeps at least width 3.
+fn shrink_columns(col_widths: &mut [usize], available: usize) {
+    let total: usize = col_widths.iter().sum();
+    if total <= available {
+        return;
+    }
+    let col_count = col_widths.len();
+    let min_width = 3usize;
+
+    // Minimum fair share: each column gets at least 1/(col_count+1) of available.
+    // For 2 columns this gives ~1/3 each, for 3 columns ~1/4 each, etc.
+    // This prevents a narrow column from being squished to nothing when another
+    // column has vastly more content. Capped by natural width (don't inflate).
+    let fair_min = (available / (col_count + 1)).max(min_width);
+
+    // Proportional shrink: new_w = max(fair_min, floor(old_w * available / total))
+    let mut new_widths: Vec<usize> = col_widths.iter()
+        .map(|&w| {
+            let proportional = (w as f64 * available as f64 / total as f64).floor() as usize;
+            // Apply fair minimum so narrow columns keep reasonable space
+            proportional.max(fair_min)
+        })
+        .collect();
+
+    // Adjust rounding: distribute remaining space to the widest columns
+    let new_total: usize = new_widths.iter().sum();
+    if new_total < available {
+        let mut remaining = available - new_total;
+        // Sort indices by original width descending, give extra to widest first
+        let mut indices: Vec<usize> = (0..new_widths.len()).collect();
+        indices.sort_by(|&a, &b| col_widths[b].cmp(&col_widths[a]));
+        for &i in &indices {
+            if remaining == 0 { break; }
+            new_widths[i] += 1;
+            remaining -= 1;
+        }
+    } else if new_total > available {
+        // Over budget (due to fair_min floors) — shrink widest columns
+        let mut excess = new_total - available;
+        let mut indices: Vec<usize> = (0..new_widths.len()).collect();
+        indices.sort_by(|&a, &b| new_widths[b].cmp(&new_widths[a]));
+        for &i in &indices {
+            if excess == 0 { break; }
+            let can_shrink = new_widths[i].saturating_sub(min_width);
+            let shrink = can_shrink.min(excess);
+            new_widths[i] -= shrink;
+            excess -= shrink;
+        }
+    }
+
+    col_widths.copy_from_slice(&new_widths);
 }
 
 /// Flush accumulated spans into a RenderedLine. Prepends blockquote prefix if needed.
@@ -1315,6 +1457,176 @@ mod tests {
         assert!(
             marker_pos.unwrap() < code_pos.unwrap(),
             "Marker must come before code. got:\n{text}"
+        );
+    }
+
+    // ── Table cell wrapping ─────────────────────────────────────────
+
+    #[test]
+    fn test_md_table_wraps_long_cell_within_viewport() {
+        // A table with a very long cell text should not exceed the viewport width.
+        // Instead, the cell content should be wrapped within the column.
+        let md = "| Key | Description |\n|-----|-------------|\n| a | This is a very long description that should be wrapped within the table cell to fit the viewport width |\n| b | short |";
+        let lines = render_markdown_with_width(md, 50);
+        // Every rendered line must fit within 50 columns
+        for (i, rl) in lines.iter().enumerate() {
+            let dw = rl.display_width();
+            assert!(dw <= 50,
+                "Line {i} has display_width {dw}, exceeds viewport 50. Text: {:?}",
+                rl.spans.iter().map(|(t, _)| t.as_str()).collect::<String>());
+        }
+    }
+
+    #[test]
+    fn test_md_table_all_lines_same_width() {
+        // All table lines (borders + content rows) must have the same display width
+        // even when cells are wrapped into multiple visual rows.
+        let md = "| Name | Value |\n|------|-------|\n| short | This is a long value that must wrap inside the cell |\n| x | y |";
+        let lines = render_markdown_with_width(md, 40);
+        let widths: Vec<usize> = lines.iter()
+            .map(|rl| rl.display_width())
+            .filter(|&w| w > 0)
+            .collect();
+        assert!(!widths.is_empty());
+        let first = widths[0];
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(*w, first,
+                "Line {i} has display_width {w} but expected {first}. Lines:\n{}",
+                lines.iter().map(|rl| {
+                    rl.spans.iter().map(|(t, _): &(String, Style)| t.as_str()).collect::<String>()
+                }).collect::<Vec<_>>().join("\n"));
+        }
+    }
+
+    #[test]
+    fn test_md_table_wrapped_row_preserves_borders() {
+        // When a cell wraps, every visual row of that logical row must have │ borders.
+        let md = "| A | B |\n|---|---|\n| x | This text is long enough to require wrapping inside the table cell |\n";
+        let lines = render_markdown_with_width(md, 40);
+        // Every non-empty line that isn't a horizontal border (─) should have │
+        for (i, rl) in lines.iter().enumerate() {
+            let line_text: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
+            if line_text.is_empty() { continue; }
+            // Border lines have ┌┬┐├┼┤└┴┘ — they don't use │ as cell separator
+            if line_text.contains('┌') || line_text.contains('├') || line_text.contains('└') {
+                continue;
+            }
+            // Content rows must start and end with │
+            assert!(line_text.starts_with('│') && line_text.ends_with('│'),
+                "Line {i} should be bordered with │: {:?}", line_text);
+        }
+    }
+
+    #[test]
+    fn test_md_table_narrow_viewport_still_renders() {
+        // Even with a very narrow viewport (e.g. 20 cols), the table should render
+        // without panicking or producing empty output.
+        let md = "| Column1 | Column2 |\n|---------|--------|\n| data1 | data2 |";
+        let lines = render_markdown_with_width(md, 20);
+        assert!(!lines.is_empty(), "Table should render even at narrow width");
+        let text = text_of(&lines);
+        assert!(text.contains("data1"), "Content should be present: {text}");
+    }
+
+    #[test]
+    fn test_md_table_without_width_uses_natural_width() {
+        // When no width is provided (render_markdown), table uses natural column widths
+        // (backward compatible behavior).
+        let md = "| A | B |\n|---|---|\n| x | y |";
+        let with_width = render_markdown_with_width(md, usize::MAX);
+        let without_width = render_markdown(md);
+        let text_w = text_of(&with_width);
+        let text_n = text_of(&without_width);
+        assert_eq!(text_w, text_n, "usize::MAX width should match no-width behavior");
+    }
+
+    #[test]
+    fn test_md_table_utf8_cell_wrap() {
+        // UTF-8 content (Umlaute, CJK) in cells should wrap correctly.
+        let md = "| Schlüssel | Wert |\n|-----------|------|\n| ä | Ünïcödé Tëxt dës ïst ëïn ländlïchësch Wört |\n";
+        let lines = render_markdown_with_width(md, 35);
+        for (i, rl) in lines.iter().enumerate() {
+            let dw = rl.display_width();
+            assert!(dw <= 35,
+                "Line {i} has display_width {dw}, exceeds viewport 35.");
+        }
+    }
+
+    #[test]
+    fn test_md_table_visual_output() {
+        // Visual check: table with wrapped cells should look correct
+        let md = "| Key | Description |\n|-----|-------------|\n| a | This is a very long description that should be wrapped within the table cell |\n| b | short |";
+        let lines = render_markdown_with_width(md, 50);
+        for rl in &lines {
+            let text: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
+            let dw = rl.display_width();
+            println!("[w={:2}] {}", dw, text);
+        }
+        // All non-empty lines should have the same width
+        let widths: Vec<usize> = lines.iter()
+            .map(|rl| rl.display_width())
+            .filter(|&w| w > 0)
+            .collect();
+        let first = widths[0];
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(*w, first, "Line {i} has width {w} != {first}");
+        }
+    }
+
+    #[test]
+    fn test_md_table_min_column_width_one_third() {
+        // When the second column has much more text, the first column
+        // should still get at least 1/3 of the available width (for 2 columns).
+        let md = "| K | Description |\n|---|---|\n| a | This is an extremely long description text that fills up the entire second column and pushes the first column to minimum |\n| b | short |";
+        let lines = render_markdown_with_width(md, 60);
+
+        // Find a data row line (starts with │)
+        let text: String = lines.iter()
+            .map(|rl| rl.spans.iter().map(|(t, _)| t.as_str()).collect::<String>())
+            .find(|t| t.starts_with('│') && t.contains("│") && !t.contains('─'))
+            .expect("should have at least one data row");
+
+        // Extract first column content (between first and second │)
+        let parts: Vec<&str> = text.split('│').collect();
+        // parts[0] = "" (before first │), parts[1] = first col, parts[2] = second col, ...
+        let first_col_content = parts[1];
+        let first_col_width = UnicodeWidthStr::width(first_col_content);
+
+        // border_overhead for 2 cols = 3*2+1 = 7
+        // available = 60 - 7 = 53
+        // 1/3 of 53 ≈ 17
+        // First column should be at least 1/3 of available
+        let border_overhead = 3 * 2 + 1;
+        let available = 60 - border_overhead;
+        let min_expected = available / 3;
+
+        assert!(
+            first_col_width >= min_expected,
+            "First column width {} should be at least 1/3 of available ({}) = {}",
+            first_col_width, available, min_expected,
+        );
+    }
+
+    #[test]
+    fn test_md_table_min_column_width_does_not_apply_when_natural_fits() {
+        // When the table fits naturally within the viewport, no shrinking happens
+        // and the min-width rule should NOT inflate small columns.
+        let md = "| K | Desc |\n|---|---|\n| a | hello |";
+        let lines = render_markdown_with_width(md, 120);
+
+        let text: String = lines.iter()
+            .map(|rl| rl.spans.iter().map(|(t, _)| t.as_str()).collect::<String>())
+            .find(|t| t.starts_with('│') && !t.contains('─'))
+            .expect("should have at least one data row");
+
+        let parts: Vec<&str> = text.split('│').collect();
+        let first_col_width = UnicodeWidthStr::width(parts[1]);
+
+        // Natural width of "K" with padding = 3 (" K "), should NOT be inflated to 1/3
+        assert!(
+            first_col_width <= 5,
+            "First column should stay at natural width, got {}",
+            first_col_width,
         );
     }
 }
