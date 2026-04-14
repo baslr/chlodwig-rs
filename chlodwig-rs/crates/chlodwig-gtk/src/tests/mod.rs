@@ -1,5 +1,6 @@
 //! Tests for chlodwig-gtk.
 
+mod ansi_tests;
 mod app_state_tests;
 mod copy_tests;
 mod emoji_tests;

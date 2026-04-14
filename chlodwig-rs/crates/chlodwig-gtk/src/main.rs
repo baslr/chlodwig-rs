@@ -561,7 +561,7 @@ fn render_event_to_buffer(
             let text = extract_tool_result_text(output);
 
             if let Some((ref tool_name, ref tool_input)) = tool_info {
-                // Bash → $ command + output (monospace)
+                // Bash → $ command + output with ANSI color rendering
                 if tool_name == "Bash" {
                     let command = tool_input["command"]
                         .as_str()
@@ -571,10 +571,8 @@ fn render_event_to_buffer(
                         &format!("$ {command}\n"),
                         &["bash_header", "code"],
                     );
-                    // Show output lines in monospace
-                    for line in text.lines() {
-                        window::append_styled(buffer, &format!("{line}\n"), "code");
-                    }
+                    // Parse ANSI escape codes and render with colored tags
+                    render_ansi_output(buffer, &text);
                     window::append_to_output(buffer, "\n");
                     return;
                 }
@@ -777,4 +775,83 @@ fn load_claude_md() -> Option<String> {
     }
 
     if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
+}
+
+/// Render ANSI-colored text into a GtkTextBuffer.
+///
+/// Parses ANSI escape codes from shell output and applies colored
+/// GtkTextTags. Each unique (fg_color, bold) combination gets a
+/// dynamically created tag. All segments also get the "code" tag
+/// for monospace rendering.
+fn render_ansi_output(buffer: &gtk4::TextBuffer, text: &str) {
+    let segments = chlodwig_gtk::ansi::parse_ansi(text);
+    let tag_table = buffer.tag_table();
+
+    for seg in &segments {
+        if seg.text.is_empty() {
+            continue;
+        }
+
+        match (seg.fg, seg.bold) {
+            (None, false) => {
+                // Plain monospace — use the existing "code" tag
+                window::append_styled(buffer, &seg.text, "code");
+            }
+            (fg, bold) => {
+                // Build a unique tag name for this (fg, bold) combination
+                let tag_name = ansi_tag_name(fg, bold);
+
+                // Create the tag if it doesn't exist yet
+                if tag_table.lookup(&tag_name).is_none() {
+                    let mut builder = gtk4::TextTag::builder()
+                        .name(&tag_name)
+                        .family("monospace");
+                    if let Some(color) = fg {
+                        builder = builder.foreground(&color.to_hex());
+                    }
+                    if bold {
+                        builder = builder.weight(700);
+                    }
+                    let tag = builder.build();
+                    tag_table.add(&tag);
+                }
+
+                // Insert text with the ANSI color tag
+                let mut end_iter = buffer.end_iter();
+                let start_offset = end_iter.offset();
+                buffer.insert(&mut end_iter, &seg.text);
+                let start_iter = buffer.iter_at_offset(start_offset);
+                let end_iter = buffer.end_iter();
+                buffer.apply_tag_by_name(&tag_name, &start_iter, &end_iter);
+            }
+        }
+    }
+}
+
+/// Generate a unique tag name for an ANSI color + bold combination.
+fn ansi_tag_name(fg: Option<chlodwig_gtk::ansi::AnsiColor>, bold: bool) -> String {
+    use chlodwig_gtk::ansi::AnsiColor;
+    let color_part = match fg {
+        None => "default".into(),
+        Some(AnsiColor::Black) => "black".into(),
+        Some(AnsiColor::Red) => "red".into(),
+        Some(AnsiColor::Green) => "green".into(),
+        Some(AnsiColor::Yellow) => "yellow".into(),
+        Some(AnsiColor::Blue) => "blue".into(),
+        Some(AnsiColor::Magenta) => "magenta".into(),
+        Some(AnsiColor::Cyan) => "cyan".into(),
+        Some(AnsiColor::White) => "white".into(),
+        Some(AnsiColor::BrightBlack) => "br_black".into(),
+        Some(AnsiColor::BrightRed) => "br_red".into(),
+        Some(AnsiColor::BrightGreen) => "br_green".into(),
+        Some(AnsiColor::BrightYellow) => "br_yellow".into(),
+        Some(AnsiColor::BrightBlue) => "br_blue".into(),
+        Some(AnsiColor::BrightMagenta) => "br_magenta".into(),
+        Some(AnsiColor::BrightCyan) => "br_cyan".into(),
+        Some(AnsiColor::BrightWhite) => "br_white".into(),
+        Some(AnsiColor::Indexed(n)) => format!("idx{n}"),
+        Some(AnsiColor::Rgb(r, g, b)) => format!("rgb{r}_{g}_{b}"),
+    };
+    let bold_part = if bold { "_b" } else { "" };
+    format!("ansi_{color_part}{bold_part}")
 }

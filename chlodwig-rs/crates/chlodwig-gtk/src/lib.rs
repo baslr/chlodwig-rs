@@ -1,5 +1,6 @@
 //! Chlodwig GTK — native macOS/Linux GUI for Chlodwig.
 
+pub mod ansi;
 pub mod app_state;
 pub mod emoji;
 pub mod md_renderer;

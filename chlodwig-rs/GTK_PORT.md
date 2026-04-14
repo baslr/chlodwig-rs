@@ -168,10 +168,10 @@ The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK vers
 - [ ] **2.3.3** — Include context lines and line numbers
 
 ### 2.4 Bash Output (ANSI Colors)
-- [ ] **2.4.1** — Parse ANSI escape sequences in shell output
-- [ ] **2.4.2** — **Option A**: Use `ansi_to_tui` → extract (text, style) pairs → convert to `GtkTextTag`s
+- [x] **2.4.1** — Parse ANSI escape sequences in shell output (`ansi.rs` — SGR parser)
+- [x] **2.4.2** — Convert ANSI colors to GtkTextTags (dynamic tag creation per color/bold combo)
 - [ ] **2.4.3** — **Option B**: Use VTE widget (embedded terminal emulator — full ANSI support but heavier)
-- [ ] **2.4.4** — PTY wrapping for `! <cmd>` (same `script -q /dev/null` trick as TUI)
+- [x] **2.4.4** — PTY wrapping for `! <cmd>` (same `script -q /dev/null` trick as TUI — handled by `chlodwig-tools/bash.rs`)
 
 ### 2.5 Timestamps
 - [ ] **2.5.1** — Add timestamp above each user message and assistant response

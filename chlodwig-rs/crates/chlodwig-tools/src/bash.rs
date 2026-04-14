@@ -69,7 +69,16 @@ impl Tool for BashTool {
         }
         cmd.current_dir(&ctx.working_directory)
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            // Disable interactive pagers. The PTY wrapper (script) makes
+            // isatty()=true, which causes programs like git, man, bat to
+            // start an interactive pager (usually `less`). The pager emits
+            // terminal control sequences (\x1b[?1h, \x1b[?1l etc.) that
+            // are not ANSI color codes and render as tofu in GUI output.
+            // Setting PAGER=cat and GIT_PAGER=cat makes them dump output
+            // directly without a pager.
+            .env("PAGER", "cat")
+            .env("GIT_PAGER", "cat");
 
         let result = tokio::time::timeout(timeout, cmd.output()).await;
 
@@ -236,6 +245,33 @@ mod tests {
                     .display()
                     .to_string();
                 assert!(t.trim().contains(&expected) || expected.contains(t.trim()));
+            }
+            _ => panic!("Expected text"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pager_disabled() {
+        // Programs like git start a pager (less) when isatty()=true.
+        // The pager emits terminal control sequences (\x1b[?1h, \x1b[?1l)
+        // that show up as tofu in GUI rendering. The Bash tool must set
+        // PAGER=cat and GIT_PAGER=cat to prevent interactive pagers.
+        let tool = BashTool;
+        let output = tool
+            .call(
+                serde_json::json!({"command": "echo $PAGER; echo $GIT_PAGER"}),
+                &test_ctx(),
+            )
+            .await
+            .unwrap();
+
+        match &output.content {
+            ToolResultContent::Text(t) => {
+                assert!(
+                    t.contains("cat"),
+                    "PAGER should be set to 'cat' to prevent interactive pagers, got: {:?}",
+                    t.trim()
+                );
             }
             _ => panic!("Expected text"),
         }
