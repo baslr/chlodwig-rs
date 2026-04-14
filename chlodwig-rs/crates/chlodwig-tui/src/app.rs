@@ -647,15 +647,27 @@ impl App {
                     ));
                 }
                 DisplayBlock::UserMessage(text) => {
-                    logical_lines.push(RenderedLine::multi(vec![
-                        (
-                            "You: ",
-                            Style::default()
-                                .fg(Color::Green)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        (text, Style::default()),
-                    ]));
+                    let prefix_style = Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD);
+                    let text_style = Style::default();
+                    // "You: " is 5 chars — indent continuation lines to align
+                    let indent = "     ";
+                    let mut first = true;
+                    for line in text.split('\n') {
+                        if first {
+                            logical_lines.push(RenderedLine::multi(vec![
+                                ("You: ", prefix_style),
+                                (line, text_style),
+                            ]));
+                            first = false;
+                        } else {
+                            logical_lines.push(RenderedLine::multi(vec![
+                                (indent, prefix_style),
+                                (line, text_style),
+                            ]));
+                        }
+                    }
                     logical_lines.push(RenderedLine::plain(""));
                 }
                 DisplayBlock::AssistantText(text) => {

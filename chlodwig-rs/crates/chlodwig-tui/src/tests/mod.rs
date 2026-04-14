@@ -96,3 +96,4 @@ mod notification;
 mod typewriter;
 mod git_tab;
 mod grep_output;
+mod multiline_user_message;
