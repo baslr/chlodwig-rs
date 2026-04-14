@@ -149,6 +149,7 @@ fn activate(app: &libadwaita::Application) {
         }
 
         // Cmd+V → paste, Cmd+C → copy, Cmd+X → cut, Cmd+A → select all
+        // Cmd+Backspace → delete from cursor to line start
         if is_cmd {
             match key {
                 k if k == gtk4::gdk::Key::v || k == gtk4::gdk::Key::V => {
@@ -166,6 +167,17 @@ fn activate(app: &libadwaita::Application) {
                 k if k == gtk4::gdk::Key::a || k == gtk4::gdk::Key::A => {
                     let buf = input_view_for_key.buffer();
                     buf.select_range(&buf.start_iter(), &buf.end_iter());
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::BackSpace => {
+                    let buf = input_view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let (new_text, new_cursor) = chlodwig_gtk::app_state::delete_to_line_start(&text, cursor);
+                    buf.set_text(&new_text);
+                    // Place cursor at the new position
+                    let iter = buf.iter_at_offset(new_cursor as i32);
+                    buf.place_cursor(&iter);
                     return glib::Propagation::Stop;
                 }
                 _ => {}

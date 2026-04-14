@@ -235,3 +235,50 @@ impl AppState {
         SPINNER_FRAMES[frame]
     }
 }
+
+// ── Input editing helpers (GTK-independent, testable) ──────────────
+
+/// Delete text from cursor position back to the start of the current line.
+///
+/// macOS behavior for Cmd+Backspace: deletes everything between the cursor
+/// and the beginning of the line the cursor is on. If the cursor is already
+/// at the start of a line, nothing happens.
+///
+/// `text`: the full input text.
+/// `cursor`: cursor position as a **char index** (not byte index).
+///
+/// Returns `(new_text, new_cursor)` where `new_cursor` is the char index
+/// after deletion (i.e. the position of the line start).
+pub fn delete_to_line_start(text: &str, cursor: usize) -> (String, usize) {
+    if cursor == 0 || text.is_empty() {
+        return (text.to_string(), cursor);
+    }
+
+    // Clamp cursor to text length
+    let char_count = text.chars().count();
+    let cursor = cursor.min(char_count);
+
+    // Find the start of the current line by scanning backwards from cursor
+    // for a '\n'. The line start is the char right after the '\n', or 0.
+    let chars: Vec<char> = text.chars().collect();
+    let mut line_start = 0;
+    for i in (0..cursor).rev() {
+        if chars[i] == '\n' {
+            line_start = i + 1;
+            break;
+        }
+    }
+
+    if line_start == cursor {
+        // Cursor is already at the start of the line — nothing to delete.
+        return (text.to_string(), cursor);
+    }
+
+    // Delete chars[line_start..cursor]
+    let new_text: String = chars[..line_start]
+        .iter()
+        .chain(chars[cursor..].iter())
+        .collect();
+
+    (new_text, line_start)
+}

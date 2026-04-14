@@ -328,3 +328,96 @@ fn test_spinner_char_is_deterministic_within_same_100ms() {
     let b = state.spinner_char();
     assert_eq!(a, b, "Two immediate calls should return the same spinner char");
 }
+
+// --- delete_to_line_start tests ---
+
+use crate::app_state::delete_to_line_start;
+
+#[test]
+fn test_delete_to_line_start_mid_line() {
+    // "123456789" with cursor between '6' and '7' (char index 6)
+    let (text, cursor) = delete_to_line_start("123456789", 6);
+    assert_eq!(text, "789");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_to_line_start_at_end() {
+    // Cursor at end of line → deletes entire line content
+    let (text, cursor) = delete_to_line_start("hello", 5);
+    assert_eq!(text, "");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_to_line_start_at_beginning() {
+    // Cursor at start of line → nothing to delete
+    let (text, cursor) = delete_to_line_start("hello", 0);
+    assert_eq!(text, "hello");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_to_line_start_empty_input() {
+    let (text, cursor) = delete_to_line_start("", 0);
+    assert_eq!(text, "");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_to_line_start_multiline_second_line() {
+    // "line1\nline2\nline3"
+    // chars: l(0) i(1) n(2) e(3) 1(4) \n(5) l(6) i(7) n(8) e(9) 2(10) \n(11) ...
+    // cursor at index 8 = after 'n', deletes "li" (indices 6,7)
+    let (text, cursor) = delete_to_line_start("line1\nline2\nline3", 8);
+    assert_eq!(text, "line1\nne2\nline3");
+    assert_eq!(cursor, 6); // at start of second line
+}
+
+#[test]
+fn test_delete_to_line_start_multiline_end_of_second_line() {
+    // Cursor at end of "line2" (char index 11, right before '\n')
+    let (text, cursor) = delete_to_line_start("line1\nline2\nline3", 11);
+    assert_eq!(text, "line1\n\nline3");
+    assert_eq!(cursor, 6);
+}
+
+#[test]
+fn test_delete_to_line_start_at_newline_boundary() {
+    // Cursor right after '\n' = start of next line → nothing to delete
+    let (text, cursor) = delete_to_line_start("line1\nline2", 6);
+    assert_eq!(text, "line1\nline2");
+    assert_eq!(cursor, 6);
+}
+
+#[test]
+fn test_delete_to_line_start_utf8() {
+    // "Ümläute" with cursor at char index 4 (between 'ä' and 'u')
+    let (text, cursor) = delete_to_line_start("Ümläute", 4);
+    assert_eq!(text, "ute");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_to_line_start_emoji() {
+    // "🌻hello" — emoji is 1 char, cursor at char index 1 (after emoji)
+    let (text, cursor) = delete_to_line_start("🌻hello", 1);
+    assert_eq!(text, "hello");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_to_line_start_cursor_past_end() {
+    // Cursor beyond text length → clamped to end
+    let (text, cursor) = delete_to_line_start("abc", 100);
+    assert_eq!(text, "");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_to_line_start_third_line() {
+    // Three lines, cursor in the middle of the third
+    let (text, cursor) = delete_to_line_start("aa\nbb\nccdd", 8);
+    assert_eq!(text, "aa\nbb\ndd");
+    assert_eq!(cursor, 6);
+}
