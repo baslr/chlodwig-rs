@@ -130,18 +130,49 @@ fn activate(app: &libadwaita::Application) {
     //
     // On macOS, Cmd maps to META_MASK in GTK4. We check both META (Cmd)
     // and CONTROL (Ctrl) so the shortcut works on all platforms.
+    //
+    // Cmd+V/C/X/A (macOS): GTK4's GtkTextView binds paste/copy/cut/select-all
+    // to <Control>v/c/x/a. On macOS, users press Cmd (META_MASK) not Ctrl.
+    // GTK4 has an internal Cmd→Ctrl remapping, but it doesn't work reliably
+    // with MacPorts builds (GTK 4.14.x). We explicitly handle Cmd+V/C/X/A
+    // by emitting the corresponding clipboard signals.
     let submit_for_key = submit.clone();
+    let input_view_for_key = widgets.input_view.clone();
     let input_view_key_ctrl = gtk4::EventControllerKey::new();
     input_view_key_ctrl.connect_key_pressed(move |_, key, _keycode, modifiers| {
-        if key == gtk4::gdk::Key::Return
-            && (modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
-                || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK))
-        {
+        let is_cmd = modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
+            || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+
+        if key == gtk4::gdk::Key::Return && is_cmd {
             submit_for_key();
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+            return glib::Propagation::Stop;
         }
+
+        // Cmd+V → paste, Cmd+C → copy, Cmd+X → cut, Cmd+A → select all
+        if is_cmd {
+            match key {
+                k if k == gtk4::gdk::Key::v || k == gtk4::gdk::Key::V => {
+                    input_view_for_key.emit_paste_clipboard();
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::c || k == gtk4::gdk::Key::C => {
+                    input_view_for_key.emit_copy_clipboard();
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::x || k == gtk4::gdk::Key::X => {
+                    input_view_for_key.emit_cut_clipboard();
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::a || k == gtk4::gdk::Key::A => {
+                    let buf = input_view_for_key.buffer();
+                    buf.select_range(&buf.start_iter(), &buf.end_iter());
+                    return glib::Propagation::Stop;
+                }
+                _ => {}
+            }
+        }
+
+        glib::Propagation::Proceed
     });
     widgets.input_view.add_controller(input_view_key_ctrl);
 
