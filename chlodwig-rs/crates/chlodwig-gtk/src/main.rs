@@ -201,6 +201,32 @@ fn activate(app: &libadwaita::Application) {
             }
         }
 
+        // Option+Left → word left, Option+Right → word right
+        let is_alt = modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK);
+        if is_alt {
+            match key {
+                k if k == gtk4::gdk::Key::Left => {
+                    let buf = input_view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = chlodwig_gtk::app_state::word_left_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Right => {
+                    let buf = input_view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = chlodwig_gtk::app_state::word_right_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return glib::Propagation::Stop;
+                }
+                _ => {}
+            }
+        }
+
         glib::Propagation::Proceed
     });
     widgets.input_view.add_controller(input_view_key_ctrl);

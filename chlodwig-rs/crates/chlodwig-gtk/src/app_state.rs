@@ -328,3 +328,60 @@ pub fn line_end_pos(text: &str, cursor: usize) -> usize {
     }
     char_count
 }
+
+/// Move cursor one word to the left (Option+Left / Alt+Left).
+///
+/// Algorithm (matches macOS behavior):
+/// 1. From cursor, skip non-alphanumeric chars backwards (spaces, punctuation).
+/// 2. Then skip alphanumeric chars backwards (the word body).
+/// 3. Return the position where we stopped.
+///
+/// `cursor` is a char index (not byte index), clamped to text length.
+pub fn word_left_pos(text: &str, cursor: usize) -> usize {
+    if text.is_empty() || cursor == 0 {
+        return 0;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut pos = cursor.min(chars.len());
+
+    // Step 1: skip non-alphanumeric backwards
+    while pos > 0 && !chars[pos - 1].is_alphanumeric() {
+        pos -= 1;
+    }
+    // Step 2: skip alphanumeric backwards (the word)
+    while pos > 0 && chars[pos - 1].is_alphanumeric() {
+        pos -= 1;
+    }
+    pos
+}
+
+/// Move cursor one word to the right (Option+Right / Alt+Right).
+///
+/// Algorithm (matches macOS behavior):
+/// - If cursor is on an alphanumeric char: skip forward past the word → stop.
+/// - If cursor is on a non-alphanumeric char: skip non-alnum, then skip the
+///   next word → stop.
+///
+/// This places the cursor right after the end of the current/next word.
+///
+/// `cursor` is a char index (not byte index), clamped to text length.
+pub fn word_right_pos(text: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    if text.is_empty() || cursor >= len {
+        return len;
+    }
+    let mut pos = cursor;
+
+    if !chars[pos].is_alphanumeric() {
+        // Cursor on space/punctuation: skip non-alnum first
+        while pos < len && !chars[pos].is_alphanumeric() {
+            pos += 1;
+        }
+    }
+    // Skip alphanumeric (the word body)
+    while pos < len && chars[pos].is_alphanumeric() {
+        pos += 1;
+    }
+    pos
+}

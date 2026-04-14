@@ -533,3 +533,148 @@ fn test_line_end_pos_cursor_past_end() {
 fn test_line_start_pos_cursor_past_end() {
     assert_eq!(line_start_pos("abc", 100), 0);
 }
+
+// --- word_left_pos / word_right_pos tests ---
+
+use crate::app_state::{word_left_pos, word_right_pos};
+
+#[test]
+fn test_word_left_from_end() {
+    // "hello world" cursor at 11 (end) → before 'w' = 6
+    assert_eq!(word_left_pos("hello world", 11), 6);
+}
+
+#[test]
+fn test_word_left_from_mid_word() {
+    // "hello world" cursor at 8 (between 'r' and 'l') → before 'w' = 6
+    assert_eq!(word_left_pos("hello world", 8), 6);
+}
+
+#[test]
+fn test_word_left_from_word_start() {
+    // "hello world" cursor at 6 (at 'w') → before 'h' = 0
+    assert_eq!(word_left_pos("hello world", 6), 0);
+}
+
+#[test]
+fn test_word_left_from_space() {
+    // "hello world" cursor at 5 (at space) → before 'h' = 0
+    assert_eq!(word_left_pos("hello world", 5), 0);
+}
+
+#[test]
+fn test_word_left_at_start() {
+    assert_eq!(word_left_pos("hello", 0), 0);
+}
+
+#[test]
+fn test_word_left_multiple_spaces() {
+    // "aaa   bbb" cursor at 9 (end) → before 'b' = 6
+    assert_eq!(word_left_pos("aaa   bbb", 9), 6);
+}
+
+#[test]
+fn test_word_left_three_words() {
+    // "one two three" cursor at 8 (at 't' of three) → before 't' of two = 4
+    // Wait: cursor at 8 = 'h' of "three". word_left skips back to start of "three" = no,
+    // cursor is inside "three" so it goes to start of "three"? No — macOS word-left
+    // skips whitespace first, then skips the word. Let me think:
+    // cursor=8: chars before cursor = "one two " — skip non-alnum backwards...
+    // Actually the standard algorithm: skip whitespace left, then skip word chars left.
+    // From 8: char[7]='t' (not space) → skip word chars: t(7) o(6) w(5)? No wait...
+    // "one two three"
+    //  0123456789...
+    //  o=0 n=1 e=2 ' '=3 t=4 w=5 o=6 ' '=7 t=8 h=9 r=10 e=11 e=12
+    // cursor=8: char[7]=' ' → skip spaces: ' '(7) → then skip word: o(6) w(5) t(4) → stop at 4
+    assert_eq!(word_left_pos("one two three", 8), 4);
+}
+
+#[test]
+fn test_word_left_empty() {
+    assert_eq!(word_left_pos("", 0), 0);
+}
+
+#[test]
+fn test_word_left_utf8() {
+    // "über cool" cursor at 9 (end) → before 'c' = 5
+    assert_eq!(word_left_pos("über cool", 9), 5);
+}
+
+#[test]
+fn test_word_left_punctuation() {
+    // "hello, world" cursor at 7 (at 'w') — skip no space, skip word 'w'?
+    // Actually cursor=7: char[6]=' ' → skip space → char[5]=',' skip punct → char[4]='o'
+    // Hmm, depends on whether punct is treated as word or space.
+    // macOS treats punctuation as a word boundary. Let's define:
+    // skip non-alphanumeric, then skip alphanumeric.
+    // cursor=7: char[6]=' ' (non-alnum) → skip: ' '(6) ','(5) → then skip alnum: o(4) l(3) l(2) e(1) h(0) → 0
+    assert_eq!(word_left_pos("hello, world", 7), 0);
+}
+
+#[test]
+fn test_word_right_from_start() {
+    // "hello world" cursor at 0 → after 'o' = 5
+    assert_eq!(word_right_pos("hello world", 0), 5);
+}
+
+#[test]
+fn test_word_right_from_mid_word() {
+    // "hello world" cursor at 2 → after 'o' = 5
+    assert_eq!(word_right_pos("hello world", 2), 5);
+}
+
+#[test]
+fn test_word_right_from_space() {
+    // "hello world" cursor at 5 (at space) → after 'd' = 11
+    assert_eq!(word_right_pos("hello world", 5), 11);
+}
+
+#[test]
+fn test_word_right_from_word_end() {
+    // "hello world" cursor at 5 → after 'd' = 11
+    assert_eq!(word_right_pos("hello world", 5), 11);
+}
+
+#[test]
+fn test_word_right_at_end() {
+    assert_eq!(word_right_pos("hello", 5), 5);
+}
+
+#[test]
+fn test_word_right_multiple_spaces() {
+    // "aaa   bbb" cursor at 0 → after last 'a' = 3
+    assert_eq!(word_right_pos("aaa   bbb", 0), 3);
+}
+
+#[test]
+fn test_word_right_three_words() {
+    // "one two three" cursor at 4 (at 't' of two) → after 'o' of two = 7
+    assert_eq!(word_right_pos("one two three", 4), 7);
+}
+
+#[test]
+fn test_word_right_empty() {
+    assert_eq!(word_right_pos("", 0), 0);
+}
+
+#[test]
+fn test_word_right_utf8() {
+    // "über cool" cursor at 0 → after 'r' = 4
+    assert_eq!(word_right_pos("über cool", 0), 4);
+}
+
+#[test]
+fn test_word_right_punctuation() {
+    // "hello, world" cursor at 0 → after 'o' of hello = 5
+    assert_eq!(word_right_pos("hello, world", 0), 5);
+}
+
+#[test]
+fn test_word_left_cursor_past_end() {
+    assert_eq!(word_left_pos("abc def", 100), 4);
+}
+
+#[test]
+fn test_word_right_cursor_past_end() {
+    assert_eq!(word_right_pos("abc def", 100), 7);
+}
