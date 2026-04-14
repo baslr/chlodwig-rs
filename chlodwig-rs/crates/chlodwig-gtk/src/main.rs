@@ -197,6 +197,16 @@ fn activate(app: &libadwaita::Application) {
                     buf.place_cursor(&iter);
                     return glib::Propagation::Stop;
                 }
+                k if k == gtk4::gdk::Key::Up => {
+                    let buf = input_view_for_key.buffer();
+                    buf.place_cursor(&buf.start_iter());
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Down => {
+                    let buf = input_view_for_key.buffer();
+                    buf.place_cursor(&buf.end_iter());
+                    return glib::Propagation::Stop;
+                }
                 _ => {}
             }
         }
