@@ -678,3 +678,86 @@ fn test_word_left_cursor_past_end() {
 fn test_word_right_cursor_past_end() {
     assert_eq!(word_right_pos("abc def", 100), 7);
 }
+
+// --- delete_word_back tests ---
+
+use crate::app_state::delete_word_back;
+
+#[test]
+fn test_delete_word_back_from_end() {
+    // "hello world" cursor=11 → delete "world" → "hello "
+    let (text, cursor) = delete_word_back("hello world", 11);
+    assert_eq!(text, "hello ");
+    assert_eq!(cursor, 6);
+}
+
+#[test]
+fn test_delete_word_back_from_space() {
+    // "hello world" cursor=6 (at space after 'o') → skip space, delete "hello" → " world"
+    // Wait: word_left_pos("hello world", 6) = 0 (skip space, then skip "hello")
+    // So delete chars 0..6 → "world"
+    let (text, cursor) = delete_word_back("hello world", 6);
+    assert_eq!(text, "world");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_word_back_mid_word() {
+    // "hello world" cursor=8 → word_left=6 → delete "wo" → "hello rld"
+    let (text, cursor) = delete_word_back("hello world", 8);
+    assert_eq!(text, "hello rld");
+    assert_eq!(cursor, 6);
+}
+
+#[test]
+fn test_delete_word_back_at_start() {
+    let (text, cursor) = delete_word_back("hello", 0);
+    assert_eq!(text, "hello");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_word_back_empty() {
+    let (text, cursor) = delete_word_back("", 0);
+    assert_eq!(text, "");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_word_back_single_word() {
+    let (text, cursor) = delete_word_back("hello", 5);
+    assert_eq!(text, "");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_word_back_multiple_spaces() {
+    // "aaa   bbb" cursor=9 → word_left=6 → delete "bbb" → "aaa   "
+    let (text, cursor) = delete_word_back("aaa   bbb", 9);
+    assert_eq!(text, "aaa   ");
+    assert_eq!(cursor, 6);
+}
+
+#[test]
+fn test_delete_word_back_utf8() {
+    // "über cool" cursor=9 → word_left=5 → delete "cool" → "über "
+    let (text, cursor) = delete_word_back("über cool", 9);
+    assert_eq!(text, "über ");
+    assert_eq!(cursor, 5);
+}
+
+#[test]
+fn test_delete_word_back_punctuation() {
+    // "hello, world" cursor=7 → word_left=0 → delete "hello, " → "world"
+    let (text, cursor) = delete_word_back("hello, world", 7);
+    assert_eq!(text, "world");
+    assert_eq!(cursor, 0);
+}
+
+#[test]
+fn test_delete_word_back_three_words() {
+    // "one two three" cursor=13 → word_left=8 → delete "three" → "one two "
+    let (text, cursor) = delete_word_back("one two three", 13);
+    assert_eq!(text, "one two ");
+    assert_eq!(cursor, 8);
+}

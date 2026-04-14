@@ -385,3 +385,30 @@ pub fn word_right_pos(text: &str, cursor: usize) -> usize {
     }
     pos
 }
+
+/// Delete the word before the cursor (Option+Backspace).
+///
+/// Uses `word_left_pos` to find where the previous word starts, then
+/// deletes chars between that position and the cursor.
+///
+/// Returns `(new_text, new_cursor)`.
+pub fn delete_word_back(text: &str, cursor: usize) -> (String, usize) {
+    if text.is_empty() || cursor == 0 {
+        return (text.to_string(), cursor);
+    }
+    let char_count = text.chars().count();
+    let cursor = cursor.min(char_count);
+    let word_start = word_left_pos(text, cursor);
+
+    if word_start == cursor {
+        return (text.to_string(), cursor);
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    let new_text: String = chars[..word_start]
+        .iter()
+        .chain(chars[cursor..].iter())
+        .collect();
+
+    (new_text, word_start)
+}

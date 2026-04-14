@@ -201,7 +201,7 @@ fn activate(app: &libadwaita::Application) {
             }
         }
 
-        // Option+Left → word left, Option+Right → word right
+        // Option+Left → word left, Option+Right → word right, Option+Backspace → delete word back
         let is_alt = modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK);
         if is_alt {
             match key {
@@ -220,6 +220,16 @@ fn activate(app: &libadwaita::Application) {
                     let cursor = buf.cursor_position() as usize;
                     let new_pos = chlodwig_gtk::app_state::word_right_pos(&text, cursor);
                     let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::BackSpace => {
+                    let buf = input_view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let (new_text, new_cursor) = chlodwig_gtk::app_state::delete_word_back(&text, cursor);
+                    buf.set_text(&new_text);
+                    let iter = buf.iter_at_offset(new_cursor as i32);
                     buf.place_cursor(&iter);
                     return glib::Propagation::Stop;
                 }
