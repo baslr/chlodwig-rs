@@ -125,11 +125,18 @@ fn activate(app: &libadwaita::Application) {
         submit_clone();
     });
 
-    // Ctrl+Enter or just Enter (without Shift) to send
+    // Cmd+Enter (macOS) or Ctrl+Enter (Linux/Windows) to send.
+    // Plain Enter inserts a newline (GTK default behavior).
+    //
+    // On macOS, Cmd maps to META_MASK in GTK4. We check both META (Cmd)
+    // and CONTROL (Ctrl) so the shortcut works on all platforms.
     let submit_for_key = submit.clone();
     let input_view_key_ctrl = gtk4::EventControllerKey::new();
     input_view_key_ctrl.connect_key_pressed(move |_, key, _keycode, modifiers| {
-        if key == gtk4::gdk::Key::Return && !modifiers.contains(gtk4::gdk::ModifierType::SHIFT_MASK) {
+        if key == gtk4::gdk::Key::Return
+            && (modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
+                || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK))
+        {
             submit_for_key();
             glib::Propagation::Stop
         } else {
