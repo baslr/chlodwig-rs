@@ -1,8 +1,9 @@
 # Chlodwig GTK4 Port — Roadmap
 
-> Status: **Scaffolding complete, not yet functional.**
-> The GTK crate compiles and 15 unit tests pass (app_state), but the binary
-> has never been launched — GTK4/libadwaita are not yet installed on the dev machine.
+> Status: **Functional prototype — basic conversation loop works.**
+> The GTK crate compiles, ~50 unit tests pass, and the binary runs on macOS
+> with MacPorts GTK4/libadwaita. Markdown streaming, emoji rendering (CoreText),
+> copy/paste, and standard macOS keybindings are working.
 
 ---
 
@@ -12,10 +13,18 @@
 
 | File | Lines | Content |
 |------|------:|---------|
-| `app_state.rs` | 166 | GTK-independent `AppState` + `DisplayBlock` enum, `handle_event()` |
-| `window.rs` | 233 | Window layout, TextTags, `append_styled()`, `scroll_to_bottom()` |
-| `main.rs` | 355 | Entry point, Tokio↔GTK bridge, `render_event_to_buffer()`, `build_system_prompt()` |
-| `tests/app_state_tests.rs` | 285 | 15 unit tests for AppState (all pass without GTK4) |
+| `app_state.rs` | 414 | GTK-independent `AppState` + `DisplayBlock` enum, `handle_event()`, input editing helpers (`delete_to_line_start`, `line_start_pos`, `line_end_pos`, `word_left_pos`, `word_right_pos`, `delete_word_back`) |
+| `window.rs` | 753 | Window layout, TextTags, `append_styled()`, `scroll_to_bottom()`, emoji overlay rendering, context menu, DND disable |
+| `main.rs` | 780 | Entry point, Tokio↔GTK bridge, `render_event_to_buffer()`, `build_system_prompt()`, keyboard shortcuts (Cmd+V/C/X/A, Cmd+Enter, Cmd+Backspace, Cmd+←/→/↑/↓, Option+←/→/⌫) |
+| `md_renderer.rs` | 355 | Markdown → GtkTextBuffer renderer (headings, bold, italic, code blocks, lists, tables) |
+| `emoji.rs` | 1243 | Emoji detection, CoreText bitmap rendering, ZWJ sequence handling |
+| `emoji_overlay.rs` | 417 | EmojiTextView subclass with overlay-based emoji rendering |
+| `lib.rs` | 204 | GSK/Pango backend selection, bundled emoji font, CSS |
+| `tests/app_state_tests.rs` | 763 | ~50 unit tests for AppState + input editing helpers |
+| `tests/emoji_tests.rs` | 198 | Emoji detection and segmentation tests |
+| `tests/copy_tests.rs` | 42 | Clipboard logic tests |
+| `tests/line_number_tests.rs` | 90 | Line number formatting tests |
+| `tests/streaming_tests.rs` | 74 | Streaming buffer tests |
 
 ### What the TUI has (feature comparison)
 
@@ -23,14 +32,15 @@
 |---------|:---:|:---:|-----|
 | Basic conversation loop | ✅ | ✅ | — |
 | Streaming text (TextDelta → buffer) | ✅ | ✅ | — |
-| Tool call display | ✅ | ✅ | GTK version is minimal (plain text) |
-| Tool result display | ✅ | ⚠️ | **Bug**: `main.rs:264` references `ImageBase64` which doesn't exist. Must use `Blocks(Vec<ToolResultBlock>)` like `app_state.rs` does |
-| Markdown rendering | ✅ pulldown-cmark + syntect | ❌ | Major gap — output is plain text only |
+| Streaming Markdown re-rendering | ✅ | ✅ | Per-tick Markdown re-render with `rerender_streaming_markdown()` |
+| Tool call display | ✅ | ✅ | GTK shows tool name + JSON preview, Edit shows red/green diff |
+| Tool result display | ✅ | ✅ | Specialized rendering for Bash, Read, Write, Grep + generic fallback |
+| Markdown rendering | ✅ pulldown-cmark + syntect | ✅ | `md_renderer.rs` — headings, bold, italic, code, lists, tables |
 | Syntax highlighting (code blocks) | ✅ syntect → ratatui styles | ❌ | Need syntect → GtkTextTag or GtkSourceView |
 | Syntax highlighting (Read output) | ✅ per-file extension | ❌ | — |
 | Syntax highlighting (Write output) | ✅ per-file extension | ❌ | — |
 | Syntax highlighting (Grep output) | ✅ content mode | ❌ | — |
-| Edit diff display (red/green) | ✅ side-by-side diff | ❌ | — |
+| Edit diff display (red/green) | ✅ side-by-side diff | ✅ | `render_event_to_buffer` shows `-`/`+` lines with `diff_remove`/`diff_add` tags |
 | Bash output (ANSI colors) | ✅ `ansi_to_tui` | ❌ | Need ANSI→Pango or VTE widget |
 | Timestamps | ✅ per-message | ❌ | — |
 | Adaptive typewriter effect | ✅ char-by-char queue | ❌ | Could skip — GTK TextBuffer updates are smooth enough |
@@ -52,36 +62,43 @@
 | Git tab (branch + status) | ✅ | ❌ | — |
 | Prompt history (Up/Down) | ✅ | ❌ | — |
 | Scroll anchoring (manual scroll) | ✅ Gotcha #5, #14 | ⚠️ | GTK ScrolledWindow handles this natively, but manual scroll suppression logic needed |
-| Auto-scroll on new content | ✅ | ⚠️ | Basic in place, but no manual-scroll suppression |
+| Auto-scroll on new content | ✅ | ✅ | `scroll_to_bottom()` via `glib::idle_add_local_once` after content updates |
 | Scrollbar | ✅ ratatui scrollbar | ✅ | Native GTK |
 | Input soft-wrapping | ✅ word-wrap matching ratatui | ✅ | `WrapMode::Word` built-in |
-| Multiline input (Ctrl+J / Shift+Enter) | ✅ | ⚠️ | Shift+Enter works (GTK natively), but Enter submits — need to verify behavior |
-| Word-jump (Alt+b/f) | ✅ | ✅ | GTK TextViews handle this natively |
+| Multiline input (Ctrl+J / Shift+Enter) | ✅ | ✅ | Enter inserts newline (GTK default), Cmd+Enter submits |
+| Word-jump (Option+←/→) | ✅ | ✅ | Custom `word_left_pos`/`word_right_pos` in EventControllerKey |
+| Word-delete (Option+⌫) | ✅ | ✅ | Custom `delete_word_back` in EventControllerKey |
+| Line-jump (Cmd+←/→) | ✅ | ✅ | Custom `line_start_pos`/`line_end_pos` in EventControllerKey |
+| Document-jump (Cmd+↑/↓) | N/A | ✅ | Cmd+Up → start, Cmd+Down → end |
+| Line-delete (Cmd+⌫) | ✅ | ✅ | Custom `delete_to_line_start` in EventControllerKey |
+| Clipboard (Cmd+V/C/X/A) | N/A | ✅ | Explicit handling for macOS META_MASK |
 | Cursor movement (Up/Down in multiline) | ✅ complex word-wrap | ✅ | GTK TextViews handle this natively |
 | Bracketed paste | ✅ | ✅ | GTK handles paste natively |
+| Copy feedback ("✓ Copied!") | ✅ | ✅ | Status bar shows feedback for 2s |
 | UTF-8 safety (Gotcha #1, #16, #28) | ✅ | ✅ | GTK uses UTF-8 natively — no byte-slicing needed |
+| Emoji rendering | ✅ terminal emoji | ✅ | CoreText bitmap rendering with overlay (EmojiTextView), ZWJ support |
 | Crash diagnostics (static buffer + signals) | ✅ 10 MiB static buf | ❌ | Different approach needed for GUI |
 | System notifications on turn complete | ✅ osascript/D-Bus | ❌ | — |
-| Status bar (model, tokens, context, cost) | ✅ detailed | ⚠️ | Basic — missing turns, context size, cost indicator |
+| Status bar (model, tokens, context, cost) | ✅ detailed | ✅ | Left/right status labels with model, turns, tokens, build info |
+| Spinner animation | ✅ braille chars | ✅ | Braille spinner (same as TUI), time-based rotation |
 | Context timer / session timer | ✅ title bar | ❌ | — |
-| Build info (build ID, timestamp) | ✅ build.rs | ❌ | No `build.rs` for GTK crate |
-| Spinner animation | ✅ braille chars | ❌ | Could use `GtkSpinner` widget instead |
+| Build info (build ID, timestamp) | ✅ build.rs | ✅ | `build.rs` generates BUILD_TIME + BUILD_ID |
 
 ---
 
 ## Phase 0: Prerequisites
 
-- [ ] **P0.1** — Install GTK4 + libadwaita: `brew install gtk4 libadwaita`
-- [ ] **P0.2** — First launch: `cargo run -p chlodwig-gtk` — verify window opens
-- [ ] **P0.3** — Fix `main.rs:264` bug: `ToolResultContent::ImageBase64` → `ToolResultContent::Blocks`
+- [x] **P0.1** — Install GTK4 + libadwaita: `port install gtk4 libadwaita`
+- [x] **P0.2** — First launch: `cargo run -p chlodwig-gtk` — window opens, conversation works
+- [x] **P0.3** — Fix `main.rs:264` bug: `ToolResultContent::ImageBase64` → `ToolResultContent::Blocks`
 
 ---
 
 ## Phase 1: Core Functionality (must-have for usable app)
 
 ### 1.1 Fix ToolResultContent bug
-- [ ] **1.1.1** — Replace `ImageBase64` match arm in `render_event_to_buffer()` with `Blocks(Vec<ToolResultBlock>)` handling (matching `app_state.rs`)
-- [ ] **1.1.2** — Test: send a ToolResult with `Blocks` content, verify no crash
+- [x] **1.1.1** — Replace `ImageBase64` match arm in `render_event_to_buffer()` with `Blocks(Vec<ToolResultBlock>)` handling (matching `app_state.rs`)
+- [x] **1.1.2** — Test: send a ToolResult with `Blocks` content, verify no crash
 
 ### 1.2 Permission Dialog
 The TUI has a modal overlay (y/n/a). The GTK version currently uses `AutoApprovePrompter` — all tools run without asking.
@@ -129,14 +146,14 @@ The LLM can call the `UserQuestion` tool to ask the user a question with optiona
 ## Phase 2: Rich Text Rendering
 
 ### 2.1 Markdown → GtkTextBuffer
-The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK version needs to convert Markdown to styled `GtkTextTag` regions.
+The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK version converts Markdown to styled `GtkTextTag` regions via `md_renderer.rs`.
 
-- [ ] **2.1.1** — **Option A**: Use `pulldown-cmark` → walk events → apply `GtkTextTag`s (bold, italic, headings, lists, code spans)
+- [x] **2.1.1** — **Option A**: Use `pulldown-cmark` → walk events → apply `GtkTextTag`s (bold, italic, headings, lists, code spans)
 - [ ] **2.1.2** — **Option B**: Use `GtkSourceView` (syntax-aware widget) — better for code but more complex integration
-- [ ] **2.1.3** — Create text tags: `heading1` (large bold), `heading2` (bold), `bold`, `italic`, `code-inline` (mono bg), `code-block` (mono bg), `link` (blue underline), `list-bullet`
+- [x] **2.1.3** — Create text tags: `heading1` (large bold), `heading2` (bold), `bold`, `italic`, `code-inline` (mono bg), `code-block` (mono bg), `link` (blue underline), `list-bullet`
 - [ ] **2.1.4** — Handle fenced code blocks with language annotation (syntax highlighting — see 2.2)
-- [ ] **2.1.5** — Handle markdown tables (render as monospace with alignment)
-- [ ] **2.1.6** — Test: send AssistantText with markdown, verify styled output
+- [x] **2.1.5** — Handle markdown tables (render as monospace with alignment)
+- [x] **2.1.6** — Test: send AssistantText with markdown, verify styled output
 
 ### 2.2 Syntax Highlighting
 - [ ] **2.2.1** — **Option A**: `syntect` → `GtkTextTag` per highlighted region (same highlighter as TUI)
@@ -146,8 +163,8 @@ The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK vers
 - [ ] **2.2.5** — Apply to Grep content-mode output
 
 ### 2.3 Edit Diff Display
-- [ ] **2.3.1** — Render Edit tool calls as red/green diff (same logic as `build_edit_diff()`)
-- [ ] **2.3.2** — Use `GtkTextTag` for red/green background tinting
+- [x] **2.3.1** — Render Edit tool calls as red/green diff (`-`/`+` lines with `diff_remove`/`diff_add` tags)
+- [x] **2.3.2** — Use `GtkTextTag` for red/green coloring
 - [ ] **2.3.3** — Include context lines and line numbers
 
 ### 2.4 Bash Output (ANSI Colors)
@@ -165,13 +182,13 @@ The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK vers
 ## Phase 3: UI Polish
 
 ### 3.1 Status Bar Enhancements
-- [ ] **3.1.1** — Add turn count, context size, cost indicator bar (`░▓`)
+- [x] **3.1.1** — Add turn count, context size, cost indicator bar (`░▓`)
 - [ ] **3.1.2** — Add context timer + session timer
-- [ ] **3.1.3** — Use `GtkSpinner` widget during streaming instead of text-based spinner
-- [ ] **3.1.4** — Build info (build ID + timestamp via `build.rs`)
+- [x] **3.1.3** — Use braille spinner during streaming (same as TUI, time-based rotation)
+- [x] **3.1.4** — Build info (build ID + timestamp via `build.rs`)
 
 ### 3.2 Scroll Behavior
-- [ ] **3.2.1** — Auto-scroll to bottom on new content (only when user hasn't scrolled up)
+- [x] **3.2.1** — Auto-scroll to bottom on new content (via `glib::idle_add_local_once`)
 - [ ] **3.2.2** — Detect manual scroll: monitor `vadjustment.value` vs `upper - page_size`
 - [ ] **3.2.3** — "Scroll to bottom" button (floating, shown when scrolled up)
 
@@ -187,14 +204,21 @@ The TUI has 5 tabs. GTK can use different patterns:
 - [ ] **3.3.7** — Tab: Git (branch + `git status` output)
 
 ### 3.4 Input Area
-- [ ] **3.4.1** — Dynamic height growth (up to N lines, then scroll)
+- [x] **3.4.1** — Dynamic height growth (up to ~5 lines, then scroll) — `ScrolledWindow` with `max_content_height(120)`
 - [ ] **3.4.2** — Prompt history (Up/Down arrows)
 - [ ] **3.4.3** — Character + byte count in a subtle label
 - [ ] **3.4.4** — Keyboard shortcut hints in placeholder text
 
 ### 3.5 Keyboard Shortcuts
-Most TUI keybindings are unnecessary in GTK (native text editing). Focus on:
+Most TUI keybindings are unnecessary in GTK (native text editing). Implemented so far:
 
+- [x] **3.5.0** — `Cmd+Enter` — submit prompt (Ctrl+Enter on Linux)
+- [x] **3.5.0b** — `Cmd+V/C/X/A` — paste/copy/cut/select-all (explicit META_MASK handling for macOS)
+- [x] **3.5.0c** — `Cmd+Backspace` — delete from cursor to line start
+- [x] **3.5.0d** — `Cmd+←/→` — move cursor to line start/end
+- [x] **3.5.0e** — `Cmd+↑/↓` — move cursor to document start/end
+- [x] **3.5.0f** — `Option+←/→` — move cursor word left/right
+- [x] **3.5.0g** — `Option+Backspace` — delete word before cursor
 - [ ] **3.5.1** — `Cmd+K` / `Ctrl+L` — clear conversation
 - [ ] **3.5.2** — `Cmd+Q` — quit
 - [ ] **3.5.3** — `Cmd+,` — open preferences/constants
@@ -250,7 +274,8 @@ Most TUI keybindings are unnecessary in GTK (native text editing). Focus on:
 - [ ] **5.3.2** — Highlight matching text, scroll to results
 
 ### 5.4 Copy/Export
-- [ ] **5.4.1** — Right-click context menu: Copy block, Copy all
+- [x] **5.4.1** — Right-click context menu: Copy (on output view with selection)
+- [x] **5.4.1b** — Copy feedback: "✓ Copied!" shown in status bar for 2 seconds
 - [ ] **5.4.2** — Export conversation as Markdown file
 - [ ] **5.4.3** — Copy code blocks with one click (code block header button)
 
@@ -353,8 +378,8 @@ cargo run -p chlodwig-gtk  # manual testing until automated GTK tests are feasib
 
 ### Workspace tests (must always pass)
 ```bash
-cargo test --workspace --exclude chlodwig-gtk  # existing 67 tests
-cargo test -p chlodwig-gtk --lib --no-default-features  # 15 GTK state tests
+cargo test --workspace --exclude chlodwig-gtk  # existing tests
+cargo test -p chlodwig-gtk --lib --no-default-features  # ~50 GTK state tests
 ```
 
 ---
