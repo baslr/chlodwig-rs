@@ -175,8 +175,25 @@ fn activate(app: &libadwaita::Application) {
                     let cursor = buf.cursor_position() as usize;
                     let (new_text, new_cursor) = chlodwig_gtk::app_state::delete_to_line_start(&text, cursor);
                     buf.set_text(&new_text);
-                    // Place cursor at the new position
                     let iter = buf.iter_at_offset(new_cursor as i32);
+                    buf.place_cursor(&iter);
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Left => {
+                    let buf = input_view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = chlodwig_gtk::app_state::line_start_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Right => {
+                    let buf = input_view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = chlodwig_gtk::app_state::line_end_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
                     buf.place_cursor(&iter);
                     return glib::Propagation::Stop;
                 }

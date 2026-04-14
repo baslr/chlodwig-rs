@@ -282,3 +282,49 @@ pub fn delete_to_line_start(text: &str, cursor: usize) -> (String, usize) {
 
     (new_text, line_start)
 }
+
+/// Return the char index of the start of the line the cursor is on.
+///
+/// Scans backwards from `cursor` for a `\n`. The line start is the char
+/// right after the `\n`, or 0 if no newline is found.
+///
+/// `cursor` is a char index (not byte index), clamped to text length.
+pub fn line_start_pos(text: &str, cursor: usize) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let char_count = text.chars().count();
+    let cursor = cursor.min(char_count);
+    if cursor == 0 {
+        return 0;
+    }
+
+    let chars: Vec<char> = text.chars().collect();
+    for i in (0..cursor).rev() {
+        if chars[i] == '\n' {
+            return i + 1;
+        }
+    }
+    0
+}
+
+/// Return the char index of the end of the line the cursor is on.
+///
+/// Scans forward from `cursor` for a `\n`. The line end is the index of
+/// the `\n`, or `chars.count()` if no newline is found (end of text).
+///
+/// `cursor` is a char index (not byte index), clamped to text length.
+pub fn line_end_pos(text: &str, cursor: usize) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    let char_count = text.chars().count();
+    let cursor = cursor.min(char_count);
+
+    for (i, ch) in text.chars().enumerate().skip(cursor) {
+        if ch == '\n' {
+            return i;
+        }
+    }
+    char_count
+}

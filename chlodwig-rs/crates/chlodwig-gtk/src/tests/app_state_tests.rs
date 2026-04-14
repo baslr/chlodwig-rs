@@ -421,3 +421,115 @@ fn test_delete_to_line_start_third_line() {
     assert_eq!(text, "aa\nbb\ndd");
     assert_eq!(cursor, 6);
 }
+
+// --- line_start_pos / line_end_pos tests ---
+
+use crate::app_state::{line_start_pos, line_end_pos};
+
+#[test]
+fn test_line_start_pos_single_line_mid() {
+    assert_eq!(line_start_pos("hello", 3), 0);
+}
+
+#[test]
+fn test_line_start_pos_single_line_start() {
+    assert_eq!(line_start_pos("hello", 0), 0);
+}
+
+#[test]
+fn test_line_start_pos_single_line_end() {
+    assert_eq!(line_start_pos("hello", 5), 0);
+}
+
+#[test]
+fn test_line_start_pos_multiline_second_line() {
+    // "abc\ndefgh" — cursor at 'd' (index 4) → line start = 4
+    assert_eq!(line_start_pos("abc\ndefgh", 4), 4);
+    // cursor at 'f' (index 6) → line start = 4
+    assert_eq!(line_start_pos("abc\ndefgh", 6), 4);
+}
+
+#[test]
+fn test_line_start_pos_multiline_third_line() {
+    // "a\nb\ncde" — cursor at 'c' (index 4) → line start = 4
+    assert_eq!(line_start_pos("a\nb\ncde", 4), 4);
+    // cursor at 'e' (index 6) → line start = 4
+    assert_eq!(line_start_pos("a\nb\ncde", 6), 4);
+}
+
+#[test]
+fn test_line_start_pos_at_newline() {
+    // cursor on '\n' itself (index 3 in "abc\ndef")
+    assert_eq!(line_start_pos("abc\ndef", 3), 0);
+}
+
+#[test]
+fn test_line_start_pos_empty() {
+    assert_eq!(line_start_pos("", 0), 0);
+}
+
+#[test]
+fn test_line_start_pos_utf8() {
+    // "Ü\näöü" — cursor at 'ö' (char index 3) → line start = 2
+    assert_eq!(line_start_pos("Ü\näöü", 3), 2);
+}
+
+#[test]
+fn test_line_end_pos_single_line_mid() {
+    assert_eq!(line_end_pos("hello", 2), 5);
+}
+
+#[test]
+fn test_line_end_pos_single_line_end() {
+    assert_eq!(line_end_pos("hello", 5), 5);
+}
+
+#[test]
+fn test_line_end_pos_single_line_start() {
+    assert_eq!(line_end_pos("hello", 0), 5);
+}
+
+#[test]
+fn test_line_end_pos_multiline_first_line() {
+    // "abc\ndef" — cursor at 'b' (index 1) → line end = 3 (the '\n')
+    assert_eq!(line_end_pos("abc\ndef", 1), 3);
+}
+
+#[test]
+fn test_line_end_pos_multiline_second_line() {
+    // "abc\ndef" — cursor at 'd' (index 4) → line end = 7
+    assert_eq!(line_end_pos("abc\ndef", 4), 7);
+}
+
+#[test]
+fn test_line_end_pos_multiline_mid_second_line() {
+    // "abc\ndefgh" — cursor at 'f' (index 6) → line end = 9
+    assert_eq!(line_end_pos("abc\ndefgh", 6), 9);
+}
+
+#[test]
+fn test_line_end_pos_at_newline() {
+    // cursor on '\n' (index 3 in "abc\ndef") → line end = 3 (stay at \n)
+    assert_eq!(line_end_pos("abc\ndef", 3), 3);
+}
+
+#[test]
+fn test_line_end_pos_empty() {
+    assert_eq!(line_end_pos("", 0), 0);
+}
+
+#[test]
+fn test_line_end_pos_utf8() {
+    // "Ü\näöü" — cursor at 'ä' (char index 2) → line end = 5
+    assert_eq!(line_end_pos("Ü\näöü", 2), 5);
+}
+
+#[test]
+fn test_line_end_pos_cursor_past_end() {
+    assert_eq!(line_end_pos("abc", 100), 3);
+}
+
+#[test]
+fn test_line_start_pos_cursor_past_end() {
+    assert_eq!(line_start_pos("abc", 100), 0);
+}
