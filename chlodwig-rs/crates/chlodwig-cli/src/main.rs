@@ -36,9 +36,9 @@ struct Cli {
     #[arg(long)]
     system_prompt: Option<String>,
 
-    /// API key (defaults to ANTHROPIC_API_KEY env var)
+    /// API key (defaults to ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN env var)
     #[arg(long, env = "ANTHROPIC_API_KEY", hide_env_values = true)]
-    api_key: String,
+    api_key: Option<String>,
 
     /// Skip tool permission prompts (auto-approve all)
     #[arg(long, default_value_t = true)]
@@ -247,7 +247,13 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let mut client = AnthropicClient::new(cli.api_key.clone());
+    let api_key = chlodwig_core::resolve_api_key(cli.api_key.clone())
+        .unwrap_or_else(|msg| {
+            eprintln!("{msg}");
+            std::process::exit(1);
+        });
+
+    let mut client = AnthropicClient::new(api_key);
     if let Some(ref base_url) = cli.base_url {
         client = client.with_base_url(base_url.clone());
     }

@@ -159,18 +159,24 @@ fn test_tab_right_reaches_requests() {
 
 #[test]
 fn test_tool_use_null_input_not_displayed() {
+    // Since the refactor, conversation.rs no longer sends ToolUseStart with
+    // Null input at ContentBlockStart. It only sends one ToolUseStart at
+    // ContentBlockStop with the complete input. So the UI never receives
+    // Null-input events and doesn't need to filter them.
+    //
+    // This test verifies the UI renders any ToolUseStart it receives
+    // (no defensive is_null check needed).
     let mut app = App::new("test".into());
     let before = app.display_blocks.len();
 
-    let input = serde_json::Value::Null;
-    if !input.is_null() {
-        app.display_blocks.push(DisplayBlock::ToolCall {
-            name: "bash".into(),
-            input_preview: serde_json::to_string_pretty(&input).unwrap_or_default(),
-        });
-    }
+    // Simulate the single ToolUseStart that now arrives (with real input)
+    let input = serde_json::json!({"command": "ls"});
+    app.display_blocks.push(DisplayBlock::ToolCall {
+        name: "bash".into(),
+        input_preview: serde_json::to_string_pretty(&input).unwrap_or_default(),
+    });
 
-    assert_eq!(app.display_blocks.len(), before, "Null-input tool use should not be displayed");
+    assert_eq!(app.display_blocks.len(), before + 1, "ToolUseStart should always be displayed (no Null events arrive anymore)");
 }
 
 #[test]
@@ -179,12 +185,10 @@ fn test_tool_use_real_input_displayed() {
     let before = app.display_blocks.len();
 
     let input = serde_json::json!({"command": "ls"});
-    if !input.is_null() {
-        app.display_blocks.push(DisplayBlock::ToolCall {
-            name: "bash".into(),
-            input_preview: serde_json::to_string_pretty(&input).unwrap_or_default(),
-        });
-    }
+    app.display_blocks.push(DisplayBlock::ToolCall {
+        name: "bash".into(),
+        input_preview: serde_json::to_string_pretty(&input).unwrap_or_default(),
+    });
 
     assert_eq!(app.display_blocks.len(), before + 1, "Real-input tool use should be displayed");
 }

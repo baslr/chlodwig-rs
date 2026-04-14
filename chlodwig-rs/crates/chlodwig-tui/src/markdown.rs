@@ -1,15 +1,19 @@
-//! Markdown rendering for the TUI output — converts Markdown text to styled `RenderedLine`s.
+//! Markdown rendering adapter for the TUI.
 //!
-//! Uses `pulldown-cmark` for Markdown parsing and `syntect` for syntax highlighting
-//! in fenced code blocks.
+//! The actual Markdown parsing lives in `chlodwig_core::markdown` (backend-agnostic).
+//! This module:
+//! - Re-exports `render_markdown` / `render_markdown_with_width` as functions
+//!   that return `Vec<RenderedLine>` (the TUI's native type)
+//! - Provides `highlight_code()` with syntect-based syntax highlighting
+//! - Provides `lang_from_path()` for deriving a language from a file extension
+//! - Converts `MdStyle → ratatui::style::Style`
 
-use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use chlodwig_core::markdown::{MdColor, MdStyle, StyledLine};
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::{FontStyle, ThemeSet};
 use syntect::parsing::SyntaxSet;
-use unicode_width::UnicodeWidthStr;
 
 use crate::rendered_line::RenderedLine;
 
@@ -30,6 +34,47 @@ fn theme() -> &'static syntect::highlighting::Theme {
 
 // ── Style conversion ─────────────────────────────────────────────────
 
+/// Background color for code blocks (must match the core constant).
+const CODE_BG: Color = Color::Rgb(45, 45, 45);
+
+/// Convert a backend-agnostic MdColor to a ratatui Color.
+fn md_color_to_ratatui(c: MdColor) -> Option<Color> {
+    match c {
+        MdColor::Default => None,
+        MdColor::White => Some(Color::White),
+        MdColor::Gray => Some(Color::Gray),
+        MdColor::DarkGray => Some(Color::DarkGray),
+        MdColor::Cyan => Some(Color::Cyan),
+        MdColor::Blue => Some(Color::Blue),
+        MdColor::Yellow => Some(Color::Yellow),
+        MdColor::Green => Some(Color::Green),
+        MdColor::Red => Some(Color::Red),
+        MdColor::Magenta => Some(Color::Magenta),
+        MdColor::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
+    }
+}
+
+/// Convert a backend-agnostic MdStyle to a ratatui Style.
+fn md_style_to_ratatui(s: MdStyle) -> Style {
+    let mut style = Style::default();
+    if let Some(fg) = md_color_to_ratatui(s.fg) {
+        style = style.fg(fg);
+    }
+    if let Some(bg) = md_color_to_ratatui(s.bg) {
+        style = style.bg(bg);
+    }
+    if s.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if s.italic {
+        style = style.add_modifier(Modifier::ITALIC);
+    }
+    if s.underline {
+        style = style.add_modifier(Modifier::UNDERLINED);
+    }
+    style
+}
+
 /// Convert a syntect style to a ratatui style.
 pub(crate) fn syntect_to_ratatui(style: syntect::highlighting::Style) -> Style {
     let fg = style.foreground;
@@ -45,16 +90,41 @@ pub(crate) fn syntect_to_ratatui(style: syntect::highlighting::Style) -> Style {
     rat_style
 }
 
+/// Convert a `StyledLine` (core) to a `RenderedLine` (TUI).
+fn styled_line_to_rendered(line: &StyledLine) -> RenderedLine {
+    let spans: Vec<(String, Style)> = line
+        .spans
+        .iter()
+        .map(|s| (s.text.clone(), md_style_to_ratatui(s.style)))
+        .collect();
+
+    let wrap_prefix = line.wrap_prefix.as_ref().map(|wp| {
+        (wp.text.clone(), md_style_to_ratatui(wp.style))
+    });
+
+    RenderedLine { spans, wrap_prefix }
+}
+
 // ── Code highlighting ────────────────────────────────────────────────
 
-/// Background style for code blocks.
-const CODE_BG: Color = Color::Rgb(45, 45, 45);
+/// Map common language aliases to tokens that syntect's default bundle knows.
+fn resolve_lang_alias(lang: &str) -> &str {
+    match lang {
+        "typescript" | "ts" | "tsx" | "jsx" => "javascript",
+        "shell" | "zsh" | "fish" => "bash",
+        "yml" => "yaml",
+        "dockerfile" => "bash",
+        "toml" => "yaml",
+        "jsonc" => "json",
+        "cxx" | "cpp" | "cc" | "c++" | "hpp" => "c++",
+        "cs" | "csharp" => "c#",
+        "kt" | "kotlin" => "java",
+        "swift" => "objective-c",
+        other => other,
+    }
+}
 
 /// Derive a syntax-highlighting language token from a file path's extension.
-///
-/// Uses syntect's `find_syntax_by_extension()` when possible, then falls back
-/// to manual aliases for extensions syntect doesn't know natively (e.g. `.ts`).
-/// Returns `""` for unknown or missing extensions.
 pub(crate) fn lang_from_path(path: &str) -> &'static str {
     let ext = match std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
         Some(e) => e,
@@ -63,11 +133,7 @@ pub(crate) fn lang_from_path(path: &str) -> &'static str {
 
     let ss = syntax_set();
 
-    // First try syntect's built-in extension mapping
     if let Some(syn) = ss.find_syntax_by_extension(ext) {
-        // Return the lowercased name as a token
-        // syntect names: "Rust", "Python", "JavaScript", etc.
-        // We need a &'static str, so map known names explicitly
         return match syn.name.as_str() {
             "Rust" => "rust",
             "Python" => "python",
@@ -100,7 +166,6 @@ pub(crate) fn lang_from_path(path: &str) -> &'static str {
         };
     }
 
-    // Manual aliases for extensions syntect doesn't know
     match ext {
         "ts" | "tsx" | "jsx" => "javascript",
         "toml" => "yaml",
@@ -114,29 +179,11 @@ pub(crate) fn lang_from_path(path: &str) -> &'static str {
     }
 }
 
-/// Map common language aliases to tokens that syntect's default bundle knows.
-fn resolve_lang_alias(lang: &str) -> &str {
-    match lang {
-        "typescript" | "ts" | "tsx" | "jsx" => "javascript",
-        "shell" | "zsh" | "fish" => "bash",
-        "yml" => "yaml",
-        "dockerfile" => "bash",
-        "toml" => "yaml",       // close enough fallback
-        "jsonc" => "json",
-        "cxx" | "cpp" | "cc" | "c++" | "hpp" => "c++",
-        "cs" | "csharp" => "c#",
-        "kt" | "kotlin" => "java", // close enough
-        "swift" => "objective-c",  // close enough
-        other => other,
-    }
-}
-
 /// Highlight a code block with syntect. Falls back to plain styling for unknown languages.
 pub(crate) fn highlight_code(lang: &str, code: &str) -> Vec<RenderedLine> {
     let ss = syntax_set();
     let th = theme();
 
-    // Resolve aliases, then try to find syntax by language token
     let resolved = if lang.is_empty() { "" } else { resolve_lang_alias(lang) };
     let syntax = if resolved.is_empty() {
         None
@@ -179,7 +226,6 @@ pub(crate) fn highlight_code(lang: &str, code: &str) -> Vec<RenderedLine> {
                 }
             }
 
-            // Empty code block → at least one blank line
             if lines.is_empty() {
                 lines.push(RenderedLine::styled("", Style::default().bg(CODE_BG)));
             }
@@ -187,7 +233,6 @@ pub(crate) fn highlight_code(lang: &str, code: &str) -> Vec<RenderedLine> {
             lines
         }
         None => {
-            // Unknown language fallback — plain white on dark bg
             let fallback_style = Style::default().fg(Color::White).bg(CODE_BG);
             let mut lines: Vec<RenderedLine> = code
                 .lines()
@@ -203,655 +248,53 @@ pub(crate) fn highlight_code(lang: &str, code: &str) -> Vec<RenderedLine> {
     }
 }
 
-// ── Markdown rendering ───────────────────────────────────────────────
+// ── Public markdown rendering (core parsing + TUI conversion) ───────
 
-/// Apply U+0336 (Combining Long Stroke Overlay) after each character to produce
-/// a visible strikethrough that works on every terminal — no SGR 9 needed.
-fn apply_combining_stroke(text: &str) -> String {
-    let mut out = String::with_capacity(text.len() * 2);
-    for ch in text.chars() {
-        out.push(ch);
-        out.push('\u{0336}');
-    }
-    out
-}
-
-/// Merge modifier flags from a style stack into a single Style.
-fn merge_styles(stack: &[Style]) -> Style {
-    let mut merged = Style::default();
-    for s in stack {
-        if let Some(fg) = s.fg {
-            merged = merged.fg(fg);
-        }
-        if let Some(bg) = s.bg {
-            merged = merged.bg(bg);
-        }
-        merged.add_modifier = merged.add_modifier | s.add_modifier;
-    }
-    merged
-}
-
-/// Render Markdown text to styled RenderedLines.
-///
-/// Handles: bold, italic, inline code, headings, lists, blockquotes,
-/// horizontal rules, and fenced code blocks with syntax highlighting.
-pub fn render_markdown(text: &str) -> Vec<RenderedLine> {
+/// Render Markdown text to `RenderedLine`s with syntect-highlighted code blocks.
+pub(crate) fn render_markdown(text: &str) -> Vec<RenderedLine> {
     render_markdown_with_width(text, usize::MAX)
 }
 
-/// Render Markdown text to styled RenderedLines, wrapping table columns to fit
-/// within `viewport_width` terminal columns.
-pub fn render_markdown_with_width(text: &str, viewport_width: usize) -> Vec<RenderedLine> {
-    let options = Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TABLES
-        | Options::ENABLE_FOOTNOTES;
-    let parser = Parser::new_ext(text, options);
+/// Render Markdown text to `RenderedLine`s, wrapping table columns to fit
+/// within `viewport_width`. Code blocks get syntect syntax highlighting.
+pub(crate) fn render_markdown_with_width(text: &str, viewport_width: usize) -> Vec<RenderedLine> {
+    let core_lines = chlodwig_core::markdown::render_markdown_with_width(text, viewport_width);
+    let mut result = Vec::with_capacity(core_lines.len());
 
-    let mut result: Vec<RenderedLine> = Vec::new();
-    let mut style_stack: Vec<Style> = Vec::new();
-    let mut current_spans: Vec<(String, Style)> = Vec::new();
+    for line in &core_lines {
+        if let Some(ref lang) = line.code_info {
+            // This is a code block line — replace the plain code span with
+            // syntect-highlighted spans (if a known language).
+            // The line has spans: [border "  │ ", code_text]
+            // We keep the border span and replace the code span.
+            if line.spans.len() >= 2 {
+                let border_span = &line.spans[0];
+                // Concatenate all code spans (everything after the border)
+                let code_text: String = line.spans[1..]
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect();
 
-    // Code block accumulator
-    let mut in_code_block = false;
-    let mut code_lang = String::new();
-    let mut code_buffer = String::new();
-
-    // List tracking
-    let mut list_stack: Vec<Option<u64>> = Vec::new(); // None = unordered, Some(n) = ordered
-    let mut at_item_start = false;
-
-    // Blockquote depth
-    let mut blockquote_depth: usize = 0;
-
-    // Heading prefix
-    let mut heading_prefix: Option<String> = None;
-
-    // Link URL accumulator
-    let mut link_url: Option<String> = None;
-
-    // Strikethrough flag — when true, text gets U+0336 combining strokes
-    let mut in_strikethrough = false;
-
-    // Table accumulator
-    let mut in_table = false;
-    let mut table_alignments: Vec<Alignment> = Vec::new();
-    let mut table_head: Vec<String> = Vec::new();     // header cells
-    let mut table_rows: Vec<Vec<String>> = Vec::new(); // body rows
-    let mut table_current_row: Vec<String> = Vec::new();
-    let mut table_cell_buf = String::new();
-    let mut in_table_head = false;
-
-    for event in parser {
-        if in_code_block {
-            match event {
-                Event::Text(t) => {
-                    code_buffer.push_str(&t);
-                }
-                Event::End(TagEnd::CodeBlock) => {
-                    // Emit the code block header line
-                    let lang_display = if code_lang.is_empty() {
-                        "".to_string()
-                    } else {
-                        code_lang.clone()
-                    };
-                    result.push(RenderedLine::styled(
-                        &format!("  ┌─ {lang_display} ─"),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-
-                    // Highlight and emit code lines with indent
-                    let code = code_buffer.trim_end_matches('\n');
-                    let highlighted = highlight_code(&code_lang, code);
-                    for rl in highlighted {
-                        // Prepend "  │ " indent
-                        let mut spans = vec![
-                            ("  │ ".to_string(), Style::default().fg(Color::DarkGray)),
-                        ];
-                        spans.extend(rl.spans);
-                        result.push(RenderedLine { spans, wrap_prefix: None });
-                    }
-
-                    result.push(RenderedLine::styled(
-                        "  └─",
-                        Style::default().fg(Color::DarkGray),
-                    ));
-
-                    in_code_block = false;
-                    code_lang.clear();
-                    code_buffer.clear();
-                }
-                _ => {}
-            }
-            continue;
-        }
-
-        match event {
-            Event::Start(Tag::CodeBlock(kind)) => {
-                // Flush current line
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                in_code_block = true;
-                code_lang = match kind {
-                    CodeBlockKind::Fenced(lang) => lang.to_string(),
-                    CodeBlockKind::Indented => String::new(),
-                };
-            }
-
-            Event::Start(Tag::Strong) => {
-                style_stack.push(Style::default().add_modifier(Modifier::BOLD));
-            }
-            Event::End(TagEnd::Strong) => {
-                style_stack.pop();
-            }
-
-            Event::Start(Tag::Emphasis) => {
-                style_stack.push(Style::default().add_modifier(Modifier::ITALIC));
-            }
-            Event::End(TagEnd::Emphasis) => {
-                style_stack.pop();
-            }
-
-            Event::Start(Tag::Strikethrough) => {
-                let style = Style::default().fg(Color::DarkGray);
-                style_stack.push(style);
-                in_strikethrough = true;
-            }
-            Event::End(TagEnd::Strikethrough) => {
-                style_stack.pop();
-                in_strikethrough = false;
-            }
-
-            Event::Start(Tag::Link { dest_url, .. }) => {
-                // Push underlined blue style for link text
-                link_url = Some(dest_url.to_string());
-                style_stack.push(
-                    Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::UNDERLINED),
-                );
-            }
-            Event::End(TagEnd::Link) => {
-                style_stack.pop();
-                // Append URL in gray after the link text
-                if let Some(url) = link_url.take() {
-                    current_spans.push((
-                        format!(" ({})", url),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-            }
-
-            Event::Start(Tag::Heading { level, .. }) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                let lvl = level as usize;
-                let prefix = "#".repeat(lvl);
-                heading_prefix = Some(format!("{prefix} "));
-
-                let style = match lvl {
-                    1 => Style::default()
-                        .add_modifier(Modifier::BOLD)
-                        .add_modifier(Modifier::UNDERLINED)
-                        .fg(Color::White),
-                    2 => Style::default()
-                        .add_modifier(Modifier::BOLD)
-                        .fg(Color::White),
-                    _ => Style::default()
-                        .add_modifier(Modifier::BOLD)
-                        .fg(Color::Cyan),
-                };
-                style_stack.push(style);
-            }
-            Event::End(TagEnd::Heading(_)) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                style_stack.pop();
-                heading_prefix = None;
-            }
-
-            Event::Start(Tag::BlockQuote(_)) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                blockquote_depth += 1;
-            }
-            Event::End(TagEnd::BlockQuote(_)) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                blockquote_depth = blockquote_depth.saturating_sub(1);
-            }
-
-            Event::Start(Tag::List(start)) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                list_stack.push(start);
-            }
-            Event::End(TagEnd::List(_)) => {
-                list_stack.pop();
-            }
-
-            Event::Start(Tag::Item) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                at_item_start = true;
-            }
-            Event::End(TagEnd::Item) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-            }
-
-            Event::Start(Tag::Paragraph) => {
-                // Nothing special needed — text will flow into current_spans
-            }
-            Event::End(TagEnd::Paragraph) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                // Add blank line after paragraph (unless in a list item)
-                if list_stack.is_empty() {
-                    result.push(RenderedLine::plain(""));
-                }
-            }
-
-            Event::Code(code) if !in_table => {
-                // Inject list marker before inline code if this is the first
-                // content in a list item (same logic as Event::Text below).
-                if at_item_start {
-                    let indent = "  ".repeat(list_stack.len().saturating_sub(1));
-                    let marker = match list_stack.last() {
-                        Some(Some(n)) => {
-                            let num = *n;
-                            if let Some(last) = list_stack.last_mut() {
-                                *last = Some(num + 1);
-                            }
-                            format!("{indent}{num}. ")
-                        }
-                        _ => format!("{indent}• "),
-                    };
-                    current_spans.push((
-                        marker,
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                    at_item_start = false;
-                }
-
-                let style = Style::default()
-                    .fg(Color::Yellow)
-                    .bg(Color::Rgb(40, 40, 40));
-                current_spans.push((code.to_string(), style));
-            }
-
-            Event::Text(t) if !in_table => {
-                // Inject heading prefix at the start of heading text
-                if let Some(prefix) = heading_prefix.take() {
-                    let style = merge_styles(&style_stack);
-                    current_spans.push((prefix, style));
-                }
-
-                // Inject list marker at the start of item text
-                if at_item_start {
-                    let indent = "  ".repeat(list_stack.len().saturating_sub(1));
-                    let marker = match list_stack.last() {
-                        Some(Some(n)) => {
-                            // Ordered list: increment counter
-                            let num = *n;
-                            if let Some(last) = list_stack.last_mut() {
-                                *last = Some(num + 1);
-                            }
-                            format!("{indent}{num}. ")
-                        }
-                        _ => format!("{indent}• "),
-                    };
-                    current_spans.push((
-                        marker,
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                    at_item_start = false;
-                }
-
-                let style = merge_styles(&style_stack);
-                let text_out = if in_strikethrough {
-                    // Insert U+0336 (Combining Long Stroke Overlay) after each char
-                    apply_combining_stroke(&t)
+                let highlighted = highlight_code(lang, &code_text);
+                if let Some(hl_line) = highlighted.into_iter().next() {
+                    let mut spans = vec![(
+                        border_span.text.clone(),
+                        md_style_to_ratatui(border_span.style),
+                    )];
+                    spans.extend(hl_line.spans);
+                    result.push(RenderedLine { spans, wrap_prefix: None });
                 } else {
-                    t.to_string()
-                };
-                current_spans.push((text_out, style));
-            }
-
-            Event::SoftBreak => {
-                current_spans.push((" ".to_string(), Style::default()));
-            }
-            Event::HardBreak => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-            }
-
-            Event::Rule => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                result.push(RenderedLine::styled(
-                    "────────────────────────────────────────",
-                    Style::default().fg(Color::DarkGray),
-                ));
-                result.push(RenderedLine::plain(""));
-            }
-
-            // ── Table events ─────────────────────────────────────
-
-            Event::Start(Tag::Table(alignments)) => {
-                flush_line(&mut current_spans, &mut result, blockquote_depth);
-                in_table = true;
-                table_alignments = alignments;
-                table_head.clear();
-                table_rows.clear();
-            }
-            Event::End(TagEnd::Table) => {
-                // Render the accumulated table
-                render_table(
-                    &table_head,
-                    &table_rows,
-                    &table_alignments,
-                    viewport_width,
-                    &mut result,
-                );
-                in_table = false;
-                table_head.clear();
-                table_rows.clear();
-                table_alignments.clear();
-                result.push(RenderedLine::plain(""));
-            }
-
-            Event::Start(Tag::TableHead) => {
-                in_table_head = true;
-                table_current_row.clear();
-            }
-            Event::End(TagEnd::TableHead) => {
-                table_head = std::mem::take(&mut table_current_row);
-                in_table_head = false;
-            }
-
-            Event::Start(Tag::TableRow) => {
-                table_current_row.clear();
-            }
-            Event::End(TagEnd::TableRow) => {
-                if !in_table_head {
-                    table_rows.push(std::mem::take(&mut table_current_row));
+                    result.push(styled_line_to_rendered(line));
                 }
+            } else {
+                result.push(styled_line_to_rendered(line));
             }
-
-            Event::Start(Tag::TableCell) => {
-                table_cell_buf.clear();
-            }
-            Event::End(TagEnd::TableCell) => {
-                table_current_row.push(std::mem::take(&mut table_cell_buf));
-            }
-
-            Event::Text(t) if in_table => {
-                table_cell_buf.push_str(&t);
-            }
-            Event::Code(c) if in_table => {
-                table_cell_buf.push_str(&c);
-            }
-
-            _ => {
-                // Footnotes, etc — silently skip
-            }
+        } else {
+            result.push(styled_line_to_rendered(line));
         }
     }
-
-    // Flush any remaining spans
-    flush_line(&mut current_spans, &mut result, blockquote_depth);
 
     result
-}
-
-/// Render a Markdown table to styled RenderedLines with box-drawing characters.
-/// If `viewport_width` is not `usize::MAX`, column widths are shrunk to fit.
-/// Long cell contents are wrapped within the cell (multi-line rows).
-fn render_table(
-    head: &[String],
-    rows: &[Vec<String>],
-    _alignments: &[Alignment],
-    viewport_width: usize,
-    result: &mut Vec<RenderedLine>,
-) {
-    // Calculate column count
-    let col_count = head.len().max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
-    if col_count == 0 {
-        return;
-    }
-
-    // Calculate natural (max content) display width per column (unicode-width)
-    let mut col_widths: Vec<usize> = vec![0; col_count];
-    for (i, cell) in head.iter().enumerate() {
-        col_widths[i] = col_widths[i].max(cell.width());
-    }
-    for row in rows {
-        for (i, cell) in row.iter().enumerate() {
-            if i < col_count {
-                col_widths[i] = col_widths[i].max(cell.width());
-            }
-        }
-    }
-    // Minimum column width of 3
-    for w in col_widths.iter_mut() {
-        *w = (*w).max(3);
-    }
-
-    // ── Shrink columns to fit viewport_width ────────────────────────
-    // Total table width = 1 (left │) + sum(col_w + 2 padding + 1 right │) for each col
-    //                    = 1 + col_count * 3 + sum(col_widths)
-    // Simplification: border overhead = col_count + 1 (│ separators) + col_count * 2 (padding)
-    //                                  = 3 * col_count + 1
-    let border_overhead = 3 * col_count + 1;
-    let total_natural: usize = col_widths.iter().sum::<usize>() + border_overhead;
-
-    if viewport_width < usize::MAX && total_natural > viewport_width && viewport_width > border_overhead {
-        let available = viewport_width - border_overhead;
-        // Shrink columns proportionally, but each at least 3 wide
-        shrink_columns(&mut col_widths, available);
-    }
-
-    /// Pad `text` with spaces on the right to fill `target_width` display columns.
-    /// Uses unicode-width to compute the actual display width, NOT char count.
-    fn pad_to_width(text: &str, target_width: usize) -> String {
-        let display_w = text.width();
-        if display_w >= target_width {
-            text.to_string()
-        } else {
-            format!("{}{}", text, " ".repeat(target_width - display_w))
-        }
-    }
-
-    let border_style = Style::default().fg(Color::DarkGray);
-    let header_style = Style::default().fg(Color::White).add_modifier(Modifier::BOLD);
-    let cell_style = Style::default().fg(Color::White);
-
-    // ── Helper: wrap cell text into multiple lines of at most `col_w` display columns ──
-    fn wrap_cell(text: &str, col_w: usize) -> Vec<String> {
-        if text.width() <= col_w {
-            return vec![text.to_string()];
-        }
-        let mut lines = Vec::new();
-        let mut current = String::new();
-        let mut current_w: usize = 0;
-
-        for word in text.split_inclusive(' ') {
-            let word_w = word.width();
-            if current_w + word_w <= col_w || current.is_empty() {
-                current.push_str(word);
-                current_w += word_w;
-            } else {
-                lines.push(current);
-                current = word.to_string();
-                current_w = word_w;
-            }
-        }
-        if !current.is_empty() {
-            lines.push(current);
-        }
-
-        // If any line still exceeds col_w (single word longer than column), force-break it
-        let mut result = Vec::new();
-        for line in lines {
-            if line.width() <= col_w {
-                result.push(line);
-            } else {
-                // Character-level break
-                let mut buf = String::new();
-                let mut buf_w: usize = 0;
-                for ch in line.chars() {
-                    let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-                    if buf_w + ch_w > col_w && !buf.is_empty() {
-                        result.push(buf);
-                        buf = String::new();
-                        buf_w = 0;
-                    }
-                    buf.push(ch);
-                    buf_w += ch_w;
-                }
-                if !buf.is_empty() {
-                    result.push(buf);
-                }
-            }
-        }
-
-        if result.is_empty() {
-            result.push(String::new());
-        }
-        result
-    }
-
-    // ── Emit horizontal border line ──
-    fn emit_border(
-        col_widths: &[usize],
-        left: &str, mid: &str, right: &str, fill: &str,
-        border_style: Style,
-    ) -> RenderedLine {
-        let inner = col_widths.iter()
-            .map(|w| fill.repeat(w + 2))
-            .collect::<Vec<_>>()
-            .join(mid);
-        RenderedLine::styled(&format!("{left}{inner}{right}"), border_style)
-    }
-
-    // ── Emit a content row (possibly multi-line due to wrapping) ──
-    fn emit_row(
-        cells: &[String],
-        col_widths: &[usize],
-        col_count: usize,
-        border_style: Style,
-        content_style: Style,
-        result: &mut Vec<RenderedLine>,
-    ) {
-        // Wrap each cell and determine max visual lines for this row
-        let wrapped_cells: Vec<Vec<String>> = (0..col_count)
-            .map(|i| {
-                let text = cells.get(i).map(|s| s.as_str()).unwrap_or("");
-                wrap_cell(text, col_widths[i])
-            })
-            .collect();
-        let max_lines = wrapped_cells.iter().map(|c| c.len()).max().unwrap_or(1);
-
-        for line_idx in 0..max_lines {
-            let mut spans = Vec::new();
-            spans.push(("│".to_string(), border_style));
-            for (col_idx, w) in col_widths.iter().enumerate() {
-                let cell_text = wrapped_cells[col_idx]
-                    .get(line_idx)
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                spans.push((format!(" {} ", pad_to_width(cell_text, *w)), content_style));
-                spans.push(("│".to_string(), border_style));
-            }
-            result.push(RenderedLine { spans, wrap_prefix: None });
-        }
-    }
-
-    // ┌─────┬─────┐
-    result.push(emit_border(&col_widths, "┌", "┬", "┐", "─", border_style));
-
-    // │ Head1 │ Head2 │ (possibly multi-line)
-    emit_row(head, &col_widths, col_count, border_style, header_style, result);
-
-    // ├─────┼─────┤
-    result.push(emit_border(&col_widths, "├", "┼", "┤", "─", border_style));
-
-    // Body rows
-    for row in rows {
-        emit_row(row, &col_widths, col_count, border_style, cell_style, result);
-    }
-
-    // └─────┴─────┘
-    result.push(emit_border(&col_widths, "└", "┴", "┘", "─", border_style));
-}
-
-/// Shrink column widths proportionally to fit within `available` total width.
-/// Each column keeps at least width 3.
-fn shrink_columns(col_widths: &mut [usize], available: usize) {
-    let total: usize = col_widths.iter().sum();
-    if total <= available {
-        return;
-    }
-    let col_count = col_widths.len();
-    let min_width = 3usize;
-
-    // Minimum fair share: each column gets at least 1/(col_count+1) of available.
-    // For 2 columns this gives ~1/3 each, for 3 columns ~1/4 each, etc.
-    // This prevents a narrow column from being squished to nothing when another
-    // column has vastly more content. Capped by natural width (don't inflate).
-    let fair_min = (available / (col_count + 1)).max(min_width);
-
-    // Proportional shrink: new_w = max(fair_min, floor(old_w * available / total))
-    let mut new_widths: Vec<usize> = col_widths.iter()
-        .map(|&w| {
-            let proportional = (w as f64 * available as f64 / total as f64).floor() as usize;
-            // Apply fair minimum so narrow columns keep reasonable space
-            proportional.max(fair_min)
-        })
-        .collect();
-
-    // Adjust rounding: distribute remaining space to the widest columns
-    let new_total: usize = new_widths.iter().sum();
-    if new_total < available {
-        let mut remaining = available - new_total;
-        // Sort indices by original width descending, give extra to widest first
-        let mut indices: Vec<usize> = (0..new_widths.len()).collect();
-        indices.sort_by(|&a, &b| col_widths[b].cmp(&col_widths[a]));
-        for &i in &indices {
-            if remaining == 0 { break; }
-            new_widths[i] += 1;
-            remaining -= 1;
-        }
-    } else if new_total > available {
-        // Over budget (due to fair_min floors) — shrink widest columns
-        let mut excess = new_total - available;
-        let mut indices: Vec<usize> = (0..new_widths.len()).collect();
-        indices.sort_by(|&a, &b| new_widths[b].cmp(&new_widths[a]));
-        for &i in &indices {
-            if excess == 0 { break; }
-            let can_shrink = new_widths[i].saturating_sub(min_width);
-            let shrink = can_shrink.min(excess);
-            new_widths[i] -= shrink;
-            excess -= shrink;
-        }
-    }
-
-    col_widths.copy_from_slice(&new_widths);
-}
-
-/// Flush accumulated spans into a RenderedLine. Prepends blockquote prefix if needed.
-fn flush_line(
-    spans: &mut Vec<(String, Style)>,
-    result: &mut Vec<RenderedLine>,
-    blockquote_depth: usize,
-) {
-    if spans.is_empty() {
-        return;
-    }
-
-    let mut final_spans = Vec::new();
-
-    // Blockquote prefix
-    let wrap_prefix = if blockquote_depth > 0 {
-        let prefix = "│ ".repeat(blockquote_depth);
-        let style = Style::default().fg(Color::Gray);
-        final_spans.push((prefix.clone(), style));
-        Some((prefix, style))
-    } else {
-        None
-    };
-
-    final_spans.extend(std::mem::take(spans));
-    result.push(RenderedLine { spans: final_spans, wrap_prefix });
 }
 
 // ── Tests ────────────────────────────────────────────────────────────
@@ -892,7 +335,56 @@ mod tests {
         spans.iter().any(|(_, s)| s.fg == Some(color))
     }
 
-    // ── syntect_to_ratatui ───────────────────────────────────────────
+    // ── md_color_to_ratatui ─────────────────────────────────────────
+
+    #[test]
+    fn test_md_color_default_maps_to_none() {
+        assert_eq!(md_color_to_ratatui(MdColor::Default), None);
+    }
+
+    #[test]
+    fn test_md_color_rgb_maps_correctly() {
+        assert_eq!(
+            md_color_to_ratatui(MdColor::Rgb(255, 128, 0)),
+            Some(Color::Rgb(255, 128, 0))
+        );
+    }
+
+    #[test]
+    fn test_md_color_named_colors() {
+        assert_eq!(md_color_to_ratatui(MdColor::White), Some(Color::White));
+        assert_eq!(md_color_to_ratatui(MdColor::Red), Some(Color::Red));
+        assert_eq!(md_color_to_ratatui(MdColor::Cyan), Some(Color::Cyan));
+    }
+
+    // ── md_style_to_ratatui ─────────────────────────────────────────
+
+    #[test]
+    fn test_md_style_to_ratatui_bold_italic() {
+        let md = MdStyle::default().bold().italic().fg(MdColor::Red);
+        let rat = md_style_to_ratatui(md);
+        assert_eq!(rat.fg, Some(Color::Red));
+        assert!(rat.add_modifier.contains(Modifier::BOLD));
+        assert!(rat.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    #[test]
+    fn test_md_style_to_ratatui_underline() {
+        let md = MdStyle::default().underline();
+        let rat = md_style_to_ratatui(md);
+        assert!(rat.add_modifier.contains(Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn test_md_style_to_ratatui_default() {
+        let md = MdStyle::default();
+        let rat = md_style_to_ratatui(md);
+        assert_eq!(rat.fg, None);
+        assert_eq!(rat.bg, None);
+        assert!(rat.add_modifier.is_empty());
+    }
+
+    // ── syntect_to_ratatui ──────────────────────────────────────────
 
     #[test]
     fn test_syntect_to_ratatui_rgb() {
@@ -919,13 +411,115 @@ mod tests {
         assert!(rat.add_modifier.is_empty());
     }
 
-    // ── highlight_code ───────────────────────────────────────────────
+    // ── render_markdown (integration: core parsing + TUI conversion) ─
+
+    #[test]
+    fn test_md_plain_text() {
+        let lines = render_markdown("hello");
+        let text = text_of(&lines);
+        assert!(text.contains("hello"), "got: {text}");
+    }
+
+    #[test]
+    fn test_md_bold() {
+        let lines = render_markdown("**bold**");
+        let spans = find_line_spans(&lines, "bold").expect("should have 'bold'");
+        assert!(has_modifier(spans, Modifier::BOLD));
+    }
+
+    #[test]
+    fn test_md_italic() {
+        let lines = render_markdown("*italic*");
+        let spans = find_line_spans(&lines, "italic").expect("should have 'italic'");
+        assert!(has_modifier(spans, Modifier::ITALIC));
+    }
+
+    #[test]
+    fn test_md_heading_h1() {
+        let lines = render_markdown("# Title");
+        let spans = find_line_spans(&lines, "Title").expect("should have heading");
+        assert!(has_modifier(spans, Modifier::BOLD));
+        assert!(has_modifier(spans, Modifier::UNDERLINED));
+    }
+
+    #[test]
+    fn test_md_inline_code() {
+        let lines = render_markdown("`foo`");
+        let spans = find_line_spans(&lines, "foo").expect("should have 'foo'");
+        assert!(has_fg(spans, Color::Yellow));
+    }
+
+    #[test]
+    fn test_md_code_block_syntax_highlighted() {
+        let md = "```rust\nlet x = 42;\n```";
+        let lines = render_markdown(md);
+        let text = text_of(&lines);
+        assert!(text.contains("let x = 42"), "got: {text}");
+        // Syntect should produce RGB colors (not plain White)
+        let code_line = lines.iter().find(|rl| {
+            let t: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
+            t.contains("let")
+        });
+        assert!(code_line.is_some(), "Should have a line with 'let'");
+        let has_rgb = code_line.unwrap().spans.iter().any(|(_, s)| {
+            matches!(s.fg, Some(Color::Rgb(_, _, _)))
+        });
+        assert!(has_rgb, "Rust code should have syntect RGB colors");
+    }
+
+    #[test]
+    fn test_md_code_block_unknown_lang_fallback() {
+        let md = "```unknownlang\nsome code\n```";
+        let lines = render_markdown(md);
+        let text = text_of(&lines);
+        assert!(text.contains("some code"), "got: {text}");
+    }
+
+    #[test]
+    fn test_md_table_basic() {
+        let md = "| A | B |\n|---|---|\n| 1 | 2 |";
+        let lines = render_markdown(md);
+        let text = text_of(&lines);
+        assert!(text.contains("A"), "got: {text}");
+        assert!(text.contains("1"), "got: {text}");
+    }
+
+    #[test]
+    fn test_md_bullet_list() {
+        let lines = render_markdown("- alpha\n- beta");
+        let text = text_of(&lines);
+        assert!(text.contains("• alpha"), "got: {text}");
+    }
+
+    #[test]
+    fn test_md_blockquote() {
+        let lines = render_markdown("> quoted");
+        let text = text_of(&lines);
+        assert!(text.contains("│"), "got: {text}");
+        assert!(text.contains("quoted"), "got: {text}");
+    }
+
+    #[test]
+    fn test_md_link() {
+        let lines = render_markdown("[click](https://example.com)");
+        let text = text_of(&lines);
+        assert!(text.contains("click"), "got: {text}");
+        assert!(text.contains("https://example.com"), "got: {text}");
+    }
+
+    #[test]
+    fn test_md_strikethrough() {
+        let lines = render_markdown("~~del~~");
+        let text = text_of(&lines);
+        assert!(text.contains("d\u{0336}e\u{0336}l\u{0336}"), "got: {text}");
+    }
+
+    // ── highlight_code ──────────────────────────────────────────────
 
     #[test]
     fn test_highlight_code_produces_colored_spans() {
         let lines = highlight_code("rust", "let x = 42;");
         assert!(!lines.is_empty());
-        // Should have at least one span with a non-default Rgb color
         let has_rgb = lines.iter().any(|rl| {
             rl.spans.iter().any(|(_, s)| matches!(s.fg, Some(Color::Rgb(_, _, _))))
         });
@@ -936,7 +530,6 @@ mod tests {
     fn test_highlight_code_unknown_lang_no_crash() {
         let lines = highlight_code("zzzzunknownlang", "some code here");
         assert!(!lines.is_empty());
-        // All lines should have fallback style (White on CODE_BG)
         for rl in &lines {
             for (_, style) in &rl.spans {
                 assert_eq!(style.fg, Some(Color::White));
@@ -948,685 +541,62 @@ mod tests {
     #[test]
     fn test_highlight_code_empty() {
         let lines = highlight_code("rust", "");
-        assert!(!lines.is_empty(), "Empty code block should produce at least one line");
-    }
-
-    #[test]
-    fn test_highlight_code_no_lang() {
-        let lines = highlight_code("", "plain code");
-        assert!(!lines.is_empty());
-        // No language → fallback
-        for rl in &lines {
-            for (_, style) in &rl.spans {
-                assert_eq!(style.fg, Some(Color::White));
-            }
-        }
-    }
-
-    // ── render_markdown ──────────────────────────────────────────────
-
-    #[test]
-    fn test_md_plain_text() {
-        let lines = render_markdown("hello");
-        let text = text_of(&lines);
-        assert!(text.contains("hello"), "Should contain 'hello', got: {text}");
-    }
-
-    #[test]
-    fn test_md_bold() {
-        let lines = render_markdown("**bold**");
-        let spans = find_line_spans(&lines, "bold").expect("Should have line with 'bold'");
-        assert!(
-            has_modifier(spans, Modifier::BOLD),
-            "Bold text should have BOLD modifier, spans: {spans:?}"
-        );
-    }
-
-    #[test]
-    fn test_md_italic() {
-        let lines = render_markdown("*italic*");
-        let spans = find_line_spans(&lines, "italic").expect("Should have line with 'italic'");
-        assert!(
-            has_modifier(spans, Modifier::ITALIC),
-            "Italic text should have ITALIC modifier, spans: {spans:?}"
-        );
-    }
-
-    #[test]
-    fn test_md_bold_italic_nested() {
-        let lines = render_markdown("***bold italic***");
-        let spans = find_line_spans(&lines, "bold italic")
-            .expect("Should have line with 'bold italic'");
-        assert!(has_modifier(spans, Modifier::BOLD), "Should be bold");
-        assert!(has_modifier(spans, Modifier::ITALIC), "Should be italic");
-    }
-
-    #[test]
-    fn test_md_inline_code() {
-        let lines = render_markdown("`foo`");
-        let spans = find_line_spans(&lines, "foo").expect("Should have line with 'foo'");
-        assert!(
-            has_fg(spans, Color::Yellow),
-            "Inline code should be Yellow, spans: {spans:?}"
-        );
-    }
-
-    #[test]
-    fn test_md_code_block_rust() {
-        let md = "```rust\nlet x = 42;\nfn main() {}\n```";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        assert!(text.contains("let x = 42"), "Should contain code: {text}");
-        // Should have code block framing
-        assert!(text.contains("┌─"), "Should have code block top border");
-        assert!(text.contains("└─"), "Should have code block bottom border");
-        assert!(text.contains("│"), "Should have code block left border");
-    }
-
-    #[test]
-    fn test_md_code_block_unknown_lang() {
-        let md = "```zzzunknown\nsome code\n```";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        assert!(text.contains("some code"), "Should render unknown lang code: {text}");
-    }
-
-    #[test]
-    fn test_md_code_block_empty() {
-        let md = "```\n```";
-        let lines = render_markdown(md);
-        // Should not panic, should produce at least the framing
         assert!(!lines.is_empty());
     }
-
-    #[test]
-    fn test_md_heading_h1() {
-        let lines = render_markdown("# Title");
-        let spans = find_line_spans(&lines, "Title").expect("Should have heading line");
-        assert!(has_modifier(spans, Modifier::BOLD), "H1 should be bold");
-        assert!(has_modifier(spans, Modifier::UNDERLINED), "H1 should be underlined");
-        // Should have "# " prefix
-        let text: String = spans.iter().map(|(t, _)| t.as_str()).collect();
-        assert!(text.starts_with("# "), "H1 should start with '# ', got: {text}");
-    }
-
-    #[test]
-    fn test_md_heading_h2() {
-        let lines = render_markdown("## Subtitle");
-        let spans = find_line_spans(&lines, "Subtitle").expect("Should have heading line");
-        assert!(has_modifier(spans, Modifier::BOLD), "H2 should be bold");
-        let text: String = spans.iter().map(|(t, _)| t.as_str()).collect();
-        assert!(text.starts_with("## "), "H2 should start with '## ', got: {text}");
-    }
-
-    #[test]
-    fn test_md_heading_h3_cyan() {
-        let lines = render_markdown("### Section");
-        let spans = find_line_spans(&lines, "Section").expect("Should have heading line");
-        assert!(has_modifier(spans, Modifier::BOLD), "H3 should be bold");
-        assert!(has_fg(spans, Color::Cyan), "H3 should be Cyan");
-    }
-
-    #[test]
-    fn test_md_bullet_list() {
-        let lines = render_markdown("- alpha\n- beta");
-        let text = text_of(&lines);
-        assert!(text.contains("• alpha"), "Should have bullet prefix, got: {text}");
-        assert!(text.contains("• beta"), "Should have bullet prefix, got: {text}");
-    }
-
-    #[test]
-    fn test_md_numbered_list() {
-        let lines = render_markdown("1. first\n2. second");
-        let text = text_of(&lines);
-        assert!(text.contains("1. first"), "Should have '1. ' prefix, got: {text}");
-        assert!(text.contains("2. second"), "Should have '2. ' prefix, got: {text}");
-    }
-
-    #[test]
-    fn test_md_blockquote() {
-        let lines = render_markdown("> quoted text");
-        let text = text_of(&lines);
-        assert!(text.contains("│"), "Blockquote should have '│' prefix, got: {text}");
-        assert!(text.contains("quoted text"), "Should contain text, got: {text}");
-    }
-
-    #[test]
-    fn test_md_multi_paragraph() {
-        let lines = render_markdown("first paragraph\n\nsecond paragraph");
-        let text = text_of(&lines);
-        assert!(text.contains("first paragraph"), "Should have first para: {text}");
-        assert!(text.contains("second paragraph"), "Should have second para: {text}");
-        // Should have a blank line between paragraphs
-        let line_texts: Vec<String> = lines.iter().map(|rl| {
-            rl.spans.iter().map(|(t, _): &(String, Style)| t.as_str()).collect::<String>()
-        }).collect();
-        let blank_count = line_texts.iter().filter(|l: &&String| l.is_empty()).count();
-        assert!(blank_count >= 1, "Should have at least one blank line between paragraphs");
-    }
-
-    #[test]
-    fn test_md_horizontal_rule() {
-        let lines = render_markdown("above\n\n---\n\nbelow");
-        let text = text_of(&lines);
-        assert!(text.contains("────"), "Should have horizontal rule, got: {text}");
-    }
-
-    #[test]
-    fn test_md_mixed_content() {
-        let md = "# Hello\n\nSome **bold** and *italic* text.\n\n```rust\nlet x = 1;\n```\n\n- item one\n- item two";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        assert!(text.contains("# Hello"));
-        assert!(text.contains("bold"));
-        assert!(text.contains("italic"));
-        assert!(text.contains("let x = 1"));
-        assert!(text.contains("• item one"));
-        assert!(text.contains("• item two"));
-    }
-
-    // ── Table rendering ─────────────────────────────────────────────
-
-    #[test]
-    fn test_md_table_basic() {
-        let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        assert!(text.contains("Name"), "Should contain header 'Name', got:\n{text}");
-        assert!(text.contains("Age"), "Should contain header 'Age', got:\n{text}");
-        assert!(text.contains("Alice"), "Should contain row data 'Alice', got:\n{text}");
-        assert!(text.contains("30"), "Should contain row data '30', got:\n{text}");
-        assert!(text.contains("Bob"), "Should contain row data 'Bob', got:\n{text}");
-        assert!(text.contains("25"), "Should contain row data '25', got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_table_has_separators() {
-        let md = "| Col1 | Col2 |\n|------|------|\n| a | b |";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        // Table should have some visual separator between header and body
-        assert!(text.contains("─") || text.contains("│") || text.contains("|"),
-            "Table should have separators, got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_table_header_styled() {
-        let md = "| Key | Value |\n|-----|-------|\n| a | 1 |";
-        let lines = render_markdown(md);
-        // The header row should have bold modifier
-        let header_line = lines.iter().find(|rl| {
-            let t: String = rl.spans.iter().map(|(t, _): &(String, Style)| t.as_str()).collect();
-            t.contains("Key") && t.contains("Value")
-        });
-        assert!(header_line.is_some(), "Should have a header line with Key and Value");
-        let spans = &header_line.unwrap().spans;
-        assert!(has_modifier(spans, Modifier::BOLD), "Table header should be bold");
-    }
-
-    #[test]
-    fn test_md_table_three_columns() {
-        let md = "| A | B | C |\n|---|---|---|\n| 1 | 2 | 3 |\n| x | y | z |";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        assert!(text.contains("A"), "got:\n{text}");
-        assert!(text.contains("B"), "got:\n{text}");
-        assert!(text.contains("C"), "got:\n{text}");
-        assert!(text.contains("1"), "got:\n{text}");
-        assert!(text.contains("z"), "got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_table_emoji_column_alignment() {
-        // Emojis like ✅ are 2 display columns wide.
-        // All rows of the same column must have equal display width.
-        let md = "| Status | Name |\n|---|---|\n| ✅ | Done |\n| ❌ | Fail |";
-        let lines = render_markdown(md);
-        // Collect all line display widths (border lines + content lines)
-        // Every line should have the SAME display width.
-        let widths: Vec<usize> = lines.iter()
-            .map(|rl| rl.display_width())
-            .filter(|&w| w > 0)
-            .collect();
-        assert!(!widths.is_empty(), "Should have rendered lines");
-        let first = widths[0];
-        for (i, w) in widths.iter().enumerate() {
-            assert_eq!(*w, first,
-                "Line {} has display_width {} but expected {} (same as line 0). Lines:\n{}",
-                i, w, first,
-                lines.iter().map(|rl| {
-                    rl.spans.iter().map(|(t, _): &(String, Style)| t.as_str()).collect::<String>()
-                }).collect::<Vec<_>>().join("\n")
-            );
-        }
-    }
-
-    // ── Code block language aliases ─────────────────────────────────
 
     #[test]
     fn test_highlight_code_typescript_alias() {
-        // typescript should be mapped to JavaScript syntax, not fall back to plain
         let lines = highlight_code("typescript", "const x: number = 42;");
-        // Should have Rgb colors (syntax highlighting), not just plain White
         let has_rgb = lines.iter().any(|rl| {
             rl.spans.iter().any(|(_, s)| matches!(s.fg, Some(Color::Rgb(_, _, _))))
         });
-        assert!(has_rgb, "typescript should be syntax-highlighted, not plain fallback. Spans: {:?}",
-            lines.iter().flat_map(|rl| rl.spans.iter().map(|(_, s)| s.fg)).collect::<Vec<_>>());
+        assert!(has_rgb, "typescript should be syntax-highlighted");
+    }
+
+    // ── lang_from_path ──────────────────────────────────────────────
+
+    #[test]
+    fn test_lang_from_path_rust() {
+        assert_eq!(lang_from_path("/tmp/test.rs"), "rust");
     }
 
     #[test]
-    fn test_highlight_code_ts_alias() {
-        let lines = highlight_code("ts", "let x = 1;");
-        let has_rgb = lines.iter().any(|rl| {
-            rl.spans.iter().any(|(_, s)| matches!(s.fg, Some(Color::Rgb(_, _, _))))
-        });
-        assert!(has_rgb, "ts should be syntax-highlighted via JavaScript");
+    fn test_lang_from_path_python() {
+        assert_eq!(lang_from_path("/tmp/test.py"), "python");
     }
 
     #[test]
-    fn test_highlight_code_tsx_alias() {
-        let lines = highlight_code("tsx", "const App = () => <div/>;");
-        let has_rgb = lines.iter().any(|rl| {
-            rl.spans.iter().any(|(_, s)| matches!(s.fg, Some(Color::Rgb(_, _, _))))
-        });
-        assert!(has_rgb, "tsx should be syntax-highlighted via JavaScript");
+    fn test_lang_from_path_typescript() {
+        let lang = lang_from_path("/tmp/test.ts");
+        assert_eq!(lang, "javascript");
     }
 
     #[test]
-    fn test_highlight_code_jsx_alias() {
-        let lines = highlight_code("jsx", "const x = <div/>;");
-        let has_rgb = lines.iter().any(|rl| {
-            rl.spans.iter().any(|(_, s)| matches!(s.fg, Some(Color::Rgb(_, _, _))))
-        });
-        assert!(has_rgb, "jsx should be syntax-highlighted via JavaScript");
+    fn test_lang_from_path_unknown() {
+        assert_eq!(lang_from_path("/tmp/data.zzz"), "");
     }
 
-    #[test]
-    fn test_highlight_code_bash_alias() {
-        // "bash" → syntect knows "sh" and "bash" via Bourne Again Shell
-        let lines = highlight_code("bash", "echo hello");
-        let has_rgb = lines.iter().any(|rl| {
-            rl.spans.iter().any(|(_, s)| matches!(s.fg, Some(Color::Rgb(_, _, _))))
-        });
-        assert!(has_rgb, "bash should be syntax-highlighted");
-    }
-
-    #[test]
-    fn test_highlight_code_shell_alias() {
-        let lines = highlight_code("shell", "echo hello");
-        let has_rgb = lines.iter().any(|rl| {
-            rl.spans.iter().any(|(_, s)| matches!(s.fg, Some(Color::Rgb(_, _, _))))
-        });
-        assert!(has_rgb, "shell should be syntax-highlighted via bash");
-    }
-
-    // ── Link rendering ──────────────────────────────────────────────
-
-    #[test]
-    fn test_md_link_text_shown() {
-        let lines = render_markdown("[click here](https://example.com)");
-        let text = text_of(&lines);
-        assert!(text.contains("click here"), "Link text should be shown, got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_link_url_shown() {
-        let lines = render_markdown("[docs](https://docs.rs)");
-        let text = text_of(&lines);
-        assert!(text.contains("https://docs.rs"), "Link URL should be shown, got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_link_text_underlined() {
-        let lines = render_markdown("[click](https://example.com)");
-        let spans = find_line_spans(&lines, "click").expect("Should have line with 'click'");
-        assert!(has_modifier(spans, Modifier::UNDERLINED),
-            "Link text should be underlined, spans: {spans:?}");
-    }
-
-    #[test]
-    fn test_md_link_url_dimmed() {
-        let lines = render_markdown("[click](https://example.com)");
-        // URL part should be DarkGray
-        let url_line = lines.iter().find(|rl| {
-            rl.spans.iter().any(|(t, _): &(String, Style)| t.contains("https://example.com"))
-        });
-        assert!(url_line.is_some(), "Should have a span containing the URL");
-        let url_span = url_line.unwrap().spans.iter()
-            .find(|(t, _): &&(String, Style)| t.contains("https://example.com"))
-            .unwrap();
-        assert_eq!(url_span.1.fg, Some(Color::DarkGray),
-            "URL should be DarkGray, got: {:?}", url_span.1);
-    }
-
-    #[test]
-    fn test_md_link_inline_with_text() {
-        let lines = render_markdown("See [the docs](https://docs.rs) for details.");
-        let text = text_of(&lines);
-        assert!(text.contains("the docs"), "got:\n{text}");
-        assert!(text.contains("https://docs.rs"), "got:\n{text}");
-        assert!(text.contains("for details"), "got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_autolink() {
-        // Bare URL in angle brackets: <https://example.com>
-        let lines = render_markdown("<https://example.com>");
-        let text = text_of(&lines);
-        assert!(text.contains("https://example.com"), "Autolink should show URL, got:\n{text}");
-    }
-
-    // ── Blockquote wrap tests ────────────────────────────────────────
+    // ── blockquote wrap prefix ──────────────────────────────────────
 
     #[test]
     fn test_md_blockquote_wrap_preserves_prefix() {
-        // A long blockquote line that wraps should have │ prefix on EVERY
-        // wrapped line, not just the first one.
-        let long_text = format!("> {}", "word ".repeat(30)); // ~150 chars
+        let long_text = format!("> {}", "word ".repeat(30));
         let lines = render_markdown(&long_text);
 
-        // Simulate wrapping at width 40 (like a narrow terminal)
         let mut wrapped: Vec<RenderedLine> = Vec::new();
         for line in &lines {
             wrapped.extend(line.wrap(40));
         }
 
-        // Every non-empty wrapped line that came from the blockquote
-        // should start with the │ prefix
         let blockquote_lines: Vec<String> = wrapped.iter()
-            .map(|rl| rl.spans.iter().map(|(t, _): &(String, Style)| t.as_str()).collect::<String>())
+            .map(|rl| rl.spans.iter().map(|(t, _)| t.as_str()).collect::<String>())
             .filter(|t| !t.is_empty())
             .collect();
 
-        assert!(blockquote_lines.len() >= 2,
-            "Long blockquote should wrap into multiple lines at width 40, got {} lines:\n{}",
-            blockquote_lines.len(), blockquote_lines.join("\n"));
-
+        assert!(blockquote_lines.len() >= 2);
         for (i, line_text) in blockquote_lines.iter().enumerate() {
             assert!(line_text.starts_with("│ "),
-                "Wrapped blockquote line {i} should start with '│ ', got: {:?}",
-                line_text);
+                "Wrapped blockquote line {i} should start with '│ ', got: {:?}", line_text);
         }
-    }
-
-    // ── Strikethrough rendering ─────────────────────────────────────
-
-    #[test]
-    fn test_md_strikethrough() {
-        let lines = render_markdown("~~deleted~~");
-        let text = text_of(&lines);
-        // With U+0336 combining strokes, plain "deleted" won't match —
-        // check that the base characters are present (with strokes).
-        assert!(text.contains("d\u{0336}e\u{0336}l\u{0336}e\u{0336}t\u{0336}e\u{0336}d\u{0336}"),
-            "Strikethrough text should be shown with combining strokes, got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_strikethrough_uses_combining_stroke() {
-        // U+0336 (Combining Long Stroke Overlay) works on every terminal,
-        // unlike SGR 9 which many terminals ignore.
-        let lines = render_markdown("~~ab~~");
-        let text = text_of(&lines);
-        // Each char should be followed by U+0336
-        assert!(text.contains("a\u{0336}b\u{0336}"),
-            "Strikethrough should use U+0336 combining overlay, got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_strikethrough_no_tildes() {
-        // No ~~ markers needed — U+0336 is the visual indicator.
-        let lines = render_markdown("~~removed~~");
-        let text = text_of(&lines);
-        assert!(!text.contains('~'),
-            "Strikethrough should NOT have tilde markers, got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_strikethrough_styled() {
-        let lines = render_markdown("~~removed~~");
-        let spans = find_line_spans(&lines, "r\u{0336}").expect("Should have line with stroked text");
-        // DarkGray color for de-emphasis
-        let has_gray = spans.iter().any(|(_, s)| s.fg == Some(Color::DarkGray));
-        assert!(has_gray, "Strikethrough should be DarkGray, spans: {spans:?}");
-    }
-
-    #[test]
-    fn test_md_strikethrough_with_other_text() {
-        let lines = render_markdown("keep ~~remove~~ keep");
-        let text = text_of(&lines);
-        assert!(text.contains("keep"), "got:\n{text}");
-        assert!(text.contains("r\u{0336}e\u{0336}m\u{0336}o\u{0336}v\u{0336}e\u{0336}"),
-            "Strikethrough text should have combining strokes, got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_strikethrough_unicode_input() {
-        // U+0336 must be inserted after each char, including multi-byte ones.
-        let lines = render_markdown("~~ä~~");
-        let text = text_of(&lines);
-        assert!(text.contains("ä\u{0336}"),
-            "Strikethrough should work with multi-byte chars, got:\n{text}");
-    }
-
-    // ── Ordered list with inline code at start ──────────────────────
-
-    #[test]
-    fn test_md_ordered_list_inline_code_first() {
-        // Bug: When a list item starts with inline code (backticks) inside bold,
-        // the list marker "10. " was injected AFTER the code span instead of before.
-        // e.g. "> 10. **`continue` inside**" rendered as "`continue`10. **inside**"
-        let md = "10. **`continue` inside drain loop**";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        // The number marker must come BEFORE the inline code
-        assert!(
-            text.contains("10. "),
-            "Should have '10. ' marker, got:\n{text}"
-        );
-        let marker_pos = text.find("10. ").unwrap();
-        let code_pos = text.find("continue").unwrap();
-        assert!(
-            marker_pos < code_pos,
-            "Marker '10. ' (pos {marker_pos}) must come before 'continue' (pos {code_pos}), got:\n{text}"
-        );
-    }
-
-    #[test]
-    fn test_md_ordered_list_double_digit_numbers() {
-        // Ensure double-digit list numbers (10, 11) render correctly
-        let md = "10. item ten\n11. item eleven";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        assert!(text.contains("10. item ten"), "Should have '10. item ten', got:\n{text}");
-        assert!(text.contains("11. item eleven"), "Should have '11. item eleven', got:\n{text}");
-    }
-
-    #[test]
-    fn test_md_blockquote_ordered_list_inline_code_first() {
-        // The exact scenario from the bug report:
-        // "> 10. **`continue` inside drain loop blocks**"
-        let md = "> 10. **`continue` inside drain loop blocks**";
-        let lines = render_markdown(md);
-        let text = text_of(&lines);
-        // Marker must come before inline code
-        let marker_pos = text.find("10. ");
-        let code_pos = text.find("continue");
-        assert!(marker_pos.is_some(), "Should have '10. ' marker, got:\n{text}");
-        assert!(code_pos.is_some(), "Should have 'continue', got:\n{text}");
-        assert!(
-            marker_pos.unwrap() < code_pos.unwrap(),
-            "Marker must come before code. got:\n{text}"
-        );
-    }
-
-    // ── Table cell wrapping ─────────────────────────────────────────
-
-    #[test]
-    fn test_md_table_wraps_long_cell_within_viewport() {
-        // A table with a very long cell text should not exceed the viewport width.
-        // Instead, the cell content should be wrapped within the column.
-        let md = "| Key | Description |\n|-----|-------------|\n| a | This is a very long description that should be wrapped within the table cell to fit the viewport width |\n| b | short |";
-        let lines = render_markdown_with_width(md, 50);
-        // Every rendered line must fit within 50 columns
-        for (i, rl) in lines.iter().enumerate() {
-            let dw = rl.display_width();
-            assert!(dw <= 50,
-                "Line {i} has display_width {dw}, exceeds viewport 50. Text: {:?}",
-                rl.spans.iter().map(|(t, _)| t.as_str()).collect::<String>());
-        }
-    }
-
-    #[test]
-    fn test_md_table_all_lines_same_width() {
-        // All table lines (borders + content rows) must have the same display width
-        // even when cells are wrapped into multiple visual rows.
-        let md = "| Name | Value |\n|------|-------|\n| short | This is a long value that must wrap inside the cell |\n| x | y |";
-        let lines = render_markdown_with_width(md, 40);
-        let widths: Vec<usize> = lines.iter()
-            .map(|rl| rl.display_width())
-            .filter(|&w| w > 0)
-            .collect();
-        assert!(!widths.is_empty());
-        let first = widths[0];
-        for (i, w) in widths.iter().enumerate() {
-            assert_eq!(*w, first,
-                "Line {i} has display_width {w} but expected {first}. Lines:\n{}",
-                lines.iter().map(|rl| {
-                    rl.spans.iter().map(|(t, _): &(String, Style)| t.as_str()).collect::<String>()
-                }).collect::<Vec<_>>().join("\n"));
-        }
-    }
-
-    #[test]
-    fn test_md_table_wrapped_row_preserves_borders() {
-        // When a cell wraps, every visual row of that logical row must have │ borders.
-        let md = "| A | B |\n|---|---|\n| x | This text is long enough to require wrapping inside the table cell |\n";
-        let lines = render_markdown_with_width(md, 40);
-        // Every non-empty line that isn't a horizontal border (─) should have │
-        for (i, rl) in lines.iter().enumerate() {
-            let line_text: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
-            if line_text.is_empty() { continue; }
-            // Border lines have ┌┬┐├┼┤└┴┘ — they don't use │ as cell separator
-            if line_text.contains('┌') || line_text.contains('├') || line_text.contains('└') {
-                continue;
-            }
-            // Content rows must start and end with │
-            assert!(line_text.starts_with('│') && line_text.ends_with('│'),
-                "Line {i} should be bordered with │: {:?}", line_text);
-        }
-    }
-
-    #[test]
-    fn test_md_table_narrow_viewport_still_renders() {
-        // Even with a very narrow viewport (e.g. 20 cols), the table should render
-        // without panicking or producing empty output.
-        let md = "| Column1 | Column2 |\n|---------|--------|\n| data1 | data2 |";
-        let lines = render_markdown_with_width(md, 20);
-        assert!(!lines.is_empty(), "Table should render even at narrow width");
-        let text = text_of(&lines);
-        assert!(text.contains("data1"), "Content should be present: {text}");
-    }
-
-    #[test]
-    fn test_md_table_without_width_uses_natural_width() {
-        // When no width is provided (render_markdown), table uses natural column widths
-        // (backward compatible behavior).
-        let md = "| A | B |\n|---|---|\n| x | y |";
-        let with_width = render_markdown_with_width(md, usize::MAX);
-        let without_width = render_markdown(md);
-        let text_w = text_of(&with_width);
-        let text_n = text_of(&without_width);
-        assert_eq!(text_w, text_n, "usize::MAX width should match no-width behavior");
-    }
-
-    #[test]
-    fn test_md_table_utf8_cell_wrap() {
-        // UTF-8 content (Umlaute, CJK) in cells should wrap correctly.
-        let md = "| Schlüssel | Wert |\n|-----------|------|\n| ä | Ünïcödé Tëxt dës ïst ëïn ländlïchësch Wört |\n";
-        let lines = render_markdown_with_width(md, 35);
-        for (i, rl) in lines.iter().enumerate() {
-            let dw = rl.display_width();
-            assert!(dw <= 35,
-                "Line {i} has display_width {dw}, exceeds viewport 35.");
-        }
-    }
-
-    #[test]
-    fn test_md_table_visual_output() {
-        // Visual check: table with wrapped cells should look correct
-        let md = "| Key | Description |\n|-----|-------------|\n| a | This is a very long description that should be wrapped within the table cell |\n| b | short |";
-        let lines = render_markdown_with_width(md, 50);
-        for rl in &lines {
-            let text: String = rl.spans.iter().map(|(t, _)| t.as_str()).collect();
-            let dw = rl.display_width();
-            println!("[w={:2}] {}", dw, text);
-        }
-        // All non-empty lines should have the same width
-        let widths: Vec<usize> = lines.iter()
-            .map(|rl| rl.display_width())
-            .filter(|&w| w > 0)
-            .collect();
-        let first = widths[0];
-        for (i, w) in widths.iter().enumerate() {
-            assert_eq!(*w, first, "Line {i} has width {w} != {first}");
-        }
-    }
-
-    #[test]
-    fn test_md_table_min_column_width_one_third() {
-        // When the second column has much more text, the first column
-        // should still get at least 1/3 of the available width (for 2 columns).
-        let md = "| K | Description |\n|---|---|\n| a | This is an extremely long description text that fills up the entire second column and pushes the first column to minimum |\n| b | short |";
-        let lines = render_markdown_with_width(md, 60);
-
-        // Find a data row line (starts with │)
-        let text: String = lines.iter()
-            .map(|rl| rl.spans.iter().map(|(t, _)| t.as_str()).collect::<String>())
-            .find(|t| t.starts_with('│') && t.contains("│") && !t.contains('─'))
-            .expect("should have at least one data row");
-
-        // Extract first column content (between first and second │)
-        let parts: Vec<&str> = text.split('│').collect();
-        // parts[0] = "" (before first │), parts[1] = first col, parts[2] = second col, ...
-        let first_col_content = parts[1];
-        let first_col_width = UnicodeWidthStr::width(first_col_content);
-
-        // border_overhead for 2 cols = 3*2+1 = 7
-        // available = 60 - 7 = 53
-        // 1/3 of 53 ≈ 17
-        // First column should be at least 1/3 of available
-        let border_overhead = 3 * 2 + 1;
-        let available = 60 - border_overhead;
-        let min_expected = available / 3;
-
-        assert!(
-            first_col_width >= min_expected,
-            "First column width {} should be at least 1/3 of available ({}) = {}",
-            first_col_width, available, min_expected,
-        );
-    }
-
-    #[test]
-    fn test_md_table_min_column_width_does_not_apply_when_natural_fits() {
-        // When the table fits naturally within the viewport, no shrinking happens
-        // and the min-width rule should NOT inflate small columns.
-        let md = "| K | Desc |\n|---|---|\n| a | hello |";
-        let lines = render_markdown_with_width(md, 120);
-
-        let text: String = lines.iter()
-            .map(|rl| rl.spans.iter().map(|(t, _)| t.as_str()).collect::<String>())
-            .find(|t| t.starts_with('│') && !t.contains('─'))
-            .expect("should have at least one data row");
-
-        let parts: Vec<&str> = text.split('│').collect();
-        let first_col_width = UnicodeWidthStr::width(parts[1]);
-
-        // Natural width of "K" with padding = 3 (" K "), should NOT be inflated to 1/3
-        assert!(
-            first_col_width <= 5,
-            "First column should stay at natural width, got {}",
-            first_col_width,
-        );
     }
 }

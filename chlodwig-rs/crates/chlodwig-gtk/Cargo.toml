@@ -1,0 +1,33 @@
+[package]
+name = "chlodwig-gtk"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = ["gtk-ui"]
+gtk-ui = ["dep:gtk4", "dep:libadwaita", "dep:tokio", "dep:async-trait"]
+
+[[bin]]
+name = "chlodwig-gtk"
+path = "src/main.rs"
+required-features = ["gtk-ui"]
+
+[dependencies]
+chlodwig-core = { path = "../chlodwig-core" }
+chlodwig-api = { path = "../chlodwig-api" }
+chlodwig-tools = { path = "../chlodwig-tools" }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+chrono = "0.4"
+dirs = "6"
+
+# GTK dependencies — only needed for the binary, not for lib unit tests.
+gtk4 = { version = "0.9", optional = true, features = ["v4_10"] }
+libadwaita = { version = "0.7", features = ["v1_4"], optional = true }
+tokio = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+
+[dev-dependencies]
+tempfile = "3"

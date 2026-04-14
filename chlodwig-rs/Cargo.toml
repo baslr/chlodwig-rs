@@ -6,6 +6,7 @@ members = [
     "crates/chlodwig-tools",
     "crates/chlodwig-tui",
     "crates/chlodwig-cli",
+    "crates/chlodwig-gtk",
     "tools/git-vanity",
 ]
 exclude = [

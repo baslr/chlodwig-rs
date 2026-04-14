@@ -1647,7 +1647,7 @@ pub async fn run_tui_with_permissions(
                     if name == "Edit" {
                         if let Some(diff_block) = build_edit_diff(&input) {
                             app.display_blocks.push(diff_block);
-                        } else if !input.is_null() {
+                        } else {
                             // Fallback: missing fields → generic display
                             app.display_blocks.push(DisplayBlock::ToolCall {
                                 name,
@@ -1655,7 +1655,7 @@ pub async fn run_tui_with_permissions(
                                     .unwrap_or_default(),
                             });
                         }
-                    } else if !input.is_null() {
+                    } else {
                         app.display_blocks.push(DisplayBlock::ToolCall {
                             name,
                             input_preview: serde_json::to_string_pretty(&input)

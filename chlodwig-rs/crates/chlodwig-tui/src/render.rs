@@ -186,15 +186,7 @@ pub(crate) fn render_input(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-pub(crate) fn format_tokens(n: u64) -> String {
-    if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
-    } else {
-        format!("{n}")
-    }
-}
+pub(crate) use chlodwig_core::format_tokens;
 
 pub(crate) fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
     let git_label = app.git_tab_label();
@@ -512,55 +504,24 @@ pub(crate) fn render_git_view(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub(crate) fn render_status_line(f: &mut Frame, app: &App, area: Rect) {
-    let context = app.context_window_size();
-    let cost_indicator = if context > 180_000 {
-        "▓▓▓▓" // danger
-    } else if context > 120_000 {
-        "▓▓▓░"
-    } else if context > 60_000 {
-        "▓▓░░"
-    } else if context > 10_000 {
-        "▓░░░"
-    } else {
-        "░░░░"
+    let spinner_str = app.spinner_char().to_string();
+    let d = chlodwig_core::StatusLineData {
+        model: &app.model,
+        turn_count: app.turn_count,
+        request_count: app.api_request_count,
+        total_input_tokens: app.total_input_tokens,
+        total_output_tokens: app.total_output_tokens,
+        turn_input_tokens: app.turn_input_tokens,
+        turn_output_tokens: app.turn_output_tokens,
+        stream_chunks: app.stream_chunks,
+        is_streaming: app.is_loading,
+        spinner: &spinner_str,
+        build_id: BUILD_ID,
+        build_time: BUILD_TIME,
     };
 
-    let now = chrono::Local::now().format("%H:%M").to_string();
-
-    let status_left = format!(
-        " {} │ turns: {} │ reqs: {} │ ctx: {} [{}] │ tx:{} rx:{}",
-        app.model,
-        app.turn_count,
-        app.api_request_count,
-        format_tokens(context),
-        cost_indicator,
-        format_tokens(app.total_input_tokens),
-        format_tokens(app.total_output_tokens),
-    );
-
-    let turn_info = if app.is_loading {
-        format!(
-            "{} turn tx:{} rx:{} │ streaming({})… │ build #{} {} │ {}",
-            app.spinner_char(),
-            format_tokens(app.turn_input_tokens),
-            format_tokens(app.turn_output_tokens),
-            app.stream_chunks,
-            BUILD_ID,
-            BUILD_TIME,
-            now,
-        )
-    } else if app.turn_count > 0 {
-        format!(
-            "last tx:{} rx:{} │ build #{} {} │ {}",
-            format_tokens(app.turn_input_tokens),
-            format_tokens(app.turn_output_tokens),
-            BUILD_ID,
-            BUILD_TIME,
-            now,
-        )
-    } else {
-        format!("build #{} {} │ {}", BUILD_ID, BUILD_TIME, now)
-    };
+    let status_left = format!(" {}", chlodwig_core::format_status_left(&d));
+    let turn_info = chlodwig_core::format_status_right(&d);
 
     // Pad to fill the line (use display width, not byte length — UTF-8 chars like │ are multi-byte)
     let width = area.width as usize;

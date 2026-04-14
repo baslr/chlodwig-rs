@@ -633,13 +633,10 @@ pub async fn run_turn(
                                     blocks.insert(index, BlockAcc::Text(String::new()));
                                 }
                                 ContentBlockStartInfo::ToolUse { id, name } => {
-                                    if !name.is_empty() {
-                                        let _ = event_tx.send(ConversationEvent::ToolUseStart {
-                                            id: id.clone(),
-                                            name: name.clone(),
-                                            input: serde_json::Value::Null,
-                                        });
-                                    }
+                                    // Don't send ToolUseStart here — the JSON input hasn't
+                                    // arrived yet (comes via InputJsonDelta events).
+                                    // The complete ToolUseStart is sent at ContentBlockStop
+                                    // once the full input has been accumulated.
                                     blocks.insert(index, BlockAcc::ToolUse { id, name, json: String::new() });
                                 }
                                 ContentBlockStartInfo::Thinking { .. } => {
@@ -1396,11 +1393,7 @@ mod tests {
         let tool_starts: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                ConversationEvent::ToolUseStart { name, input, .. }
-                    if *input != serde_json::Value::Null =>
-                {
-                    Some(name.as_str())
-                }
+                ConversationEvent::ToolUseStart { name, .. } => Some(name.as_str()),
                 _ => None,
             })
             .collect();

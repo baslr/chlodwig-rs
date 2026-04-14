@@ -842,24 +842,21 @@ impl App {
                     // Determine language from file extension for syntax highlighting
                     let lang = markdown::lang_from_path(file_path);
 
-                    // Parse each line: split "     1\tcontent" into line_num + code
-                    for line in content.lines() {
-                        if let Some(tab_pos) = line.find('\t') {
-                            let num_part = &line[..tab_pos];
-                            let code_part = &line[tab_pos + 1..];
-
+                    // Use the shared format_numbered_lines() for aligned gutters,
+                    // then syntax-highlight the code portion.
+                    let formatted = chlodwig_core::format_numbered_lines(content);
+                    for (gutter, code_text) in &formatted {
+                        if !gutter.is_empty() {
                             // Syntax-highlight the code portion
-                            let highlighted = markdown::highlight_code(lang, code_part);
+                            let highlighted = markdown::highlight_code(lang, code_text);
                             let code_spans = if let Some(rl) = highlighted.first() {
                                 rl.spans.clone()
                             } else {
-                                vec![(code_part.to_string(), Style::default())]
+                                vec![(code_text.to_string(), Style::default())]
                             };
 
-                            // Build: " {num} │ {highlighted_code}"
-                            let gutter = format!(" {} │ ", num_part.trim_start());
                             let mut spans = Vec::with_capacity(1 + code_spans.len());
-                            spans.push((gutter, Style::default().fg(Color::DarkGray)));
+                            spans.push((gutter.clone(), Style::default().fg(Color::DarkGray)));
                             for (text, mut style) in code_spans {
                                 // Remove CODE_BG — we use the terminal default bg
                                 style.bg = None;
@@ -869,7 +866,7 @@ impl App {
                         } else {
                             // Lines without tab (e.g. "(empty file)", "(no lines in range)")
                             logical_lines.push(RenderedLine::styled(
-                                &format!("  {line}"),
+                                &format!("  {code_text}"),
                                 Style::default().fg(Color::DarkGray),
                             ));
                         }
