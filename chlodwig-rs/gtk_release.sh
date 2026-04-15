@@ -43,4 +43,7 @@ if [[ -n "${ANTHROPIC_BASE_URL:-}" ]]; then
     OPEN_ARGS+=(--env ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL")
 fi
 
+# Set project directory to where the script is run from
+OPEN_ARGS+=(--env CHLODWIG_PROJECT_DIR="$(pwd)")
+
 open "${OPEN_ARGS[@]}"

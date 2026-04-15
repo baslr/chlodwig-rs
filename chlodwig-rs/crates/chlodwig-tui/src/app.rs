@@ -526,6 +526,34 @@ impl App {
         app
     }
 
+    /// Generate startup display blocks that show the current working directory.
+    /// Returns a `SystemMessage` with the project path label, followed by a
+    /// `BashOutput` with an actual `pwd` execution so the user sees the full
+    /// resolved path (symlinks, etc.).
+    pub(crate) fn startup_project_dir_blocks() -> Vec<DisplayBlock> {
+        let cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+
+        let mut blocks = Vec::new();
+
+        // 1. System message with directory label
+        blocks.push(DisplayBlock::SystemMessage(format!("cwd: {cwd}")));
+
+        // 2. Execute `pwd` and show as BashOutput
+        let pwd_output = std::process::Command::new("pwd")
+            .output()
+            .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
+            .unwrap_or_else(|e| format!("Error: {e}"));
+
+        blocks.push(DisplayBlock::BashOutput {
+            command: "pwd".to_string(),
+            raw_output: pwd_output,
+        });
+
+        blocks
+    }
+
     /// Advance the spinner frame (called on each poll tick while loading).
     pub(crate) fn tick_spinner(&mut self) {
         self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();

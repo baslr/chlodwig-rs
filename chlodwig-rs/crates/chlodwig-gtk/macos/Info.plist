@@ -24,5 +24,9 @@
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <!-- Explicitly declare no document types so macOS does NOT show
+         Chlodwig in "Open With" context menus for any file type. -->
+    <key>CFBundleDocumentTypes</key>
+    <array/>
 </dict>
 </plist>

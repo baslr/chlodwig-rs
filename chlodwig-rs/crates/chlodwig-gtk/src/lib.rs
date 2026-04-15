@@ -9,6 +9,9 @@ pub mod md_renderer;
 #[cfg(target_os = "macos")]
 pub mod notification;
 
+/// First-launch setup (Finder Quick Action, project directory).
+pub mod setup;
+
 // The window module depends on GTK4 at link-time. Only compile it when
 // building the binary (not during `cargo test --lib` on machines without
 // GTK4 runtime libraries). Tests for app_state are GTK-independent.

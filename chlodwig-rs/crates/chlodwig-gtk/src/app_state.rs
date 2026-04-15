@@ -425,10 +425,25 @@ pub fn delete_word_back(text: &str, cursor: usize) -> (String, usize) {
 
 /// Determine the project directory name from the current working directory.
 /// Returns the last path component (e.g. "chlodwig-rs" for "/Users/me/projects/chlodwig-rs").
-/// Falls back to "chlodwig" if the CWD can't be determined.
+/// Returns an empty string if CWD is `/` (launched via double-click without project dir)
+/// or can't be determined.
 pub fn project_dir_name() -> String {
     std::env::current_dir()
         .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "chlodwig".to_string())
+        .and_then(|p| {
+            // Root directory "/" has no file_name — return empty
+            p.file_name().map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_default()
+}
+
+/// Build the startup message that shows the current working directory.
+///
+/// Displayed as a `SystemMessage` in the output area when the GTK app
+/// launches, so the user immediately sees which project directory is active.
+pub fn startup_cwd_message() -> String {
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    format!("cwd: {cwd}")
 }

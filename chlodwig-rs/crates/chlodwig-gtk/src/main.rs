@@ -57,6 +57,13 @@ fn main() -> glib::ExitCode {
 
     tracing::info!("chlodwig-gtk starting");
 
+    // Set working directory: Finder marker > env var > CLI args
+    if chlodwig_gtk::setup::apply_project_dir_from_finder().is_none() {
+        if chlodwig_gtk::setup::apply_project_dir().is_none() {
+            chlodwig_gtk::setup::apply_project_dir_from_args();
+        }
+    }
+
     // Initialize Adwaita application
     let app = libadwaita::Application::builder()
         .application_id("rs.chlodwig.gtk")
@@ -91,6 +98,12 @@ fn activate(app: &libadwaita::Application) {
 
     // Set initial status
     window::update_status(&widgets.status_left_label, &widgets.status_right_label, &app_state.borrow());
+
+    // Show current working directory in the output area at startup
+    {
+        let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+        window::append_styled(&widgets.output_buffer, &format!("{cwd_msg}\n"), "system");
+    }
 
     // --- Wire up Send button ---
     let input_buf = widgets.input_buffer.clone();

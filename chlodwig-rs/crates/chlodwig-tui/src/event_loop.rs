@@ -641,6 +641,13 @@ pub async fn run_tui_with_permissions(
             format!("✓ Resumed session ({msg_count} messages)"),
         ));
         app.mark_dirty();
+    } else {
+        // Fresh session: show the current working directory and run `pwd`
+        // so the user immediately sees where Chlodwig is running.
+        for block in App::startup_project_dir_blocks() {
+            app.display_blocks.push(block);
+        }
+        app.mark_dirty();
     }
 
     // Restore constants from snapshot if provided (e.g. from --resume).
