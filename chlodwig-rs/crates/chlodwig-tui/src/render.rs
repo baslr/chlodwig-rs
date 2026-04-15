@@ -71,7 +71,7 @@ pub(crate) fn render_output(f: &mut Frame, app: &App, area: Rect) {
     let total = app.rendered_lines.len();
 
     // Compute scroll position
-    let scroll_pos = if app.auto_scroll {
+    let scroll_pos = if app.auto_scroll.is_active() {
         total.saturating_sub(view_height)
     } else {
         app.scroll.min(total.saturating_sub(view_height))

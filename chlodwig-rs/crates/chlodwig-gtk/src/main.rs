@@ -133,8 +133,12 @@ fn activate(app: &libadwaita::Application) {
         }
         input_buf.set_text("");
 
-        // Update AppState
-        state_for_submit.borrow_mut().submit_prompt(text.clone());
+        // Update AppState — force auto-scroll on (explicit user action)
+        {
+            let mut state = state_for_submit.borrow_mut();
+            state.submit_prompt(text.clone());
+            state.auto_scroll.scroll_to_bottom();
+        }
 
         // Render user message in output
         window::append_styled(&output_buf_for_submit, &format!("\n▶ {text}\n"), "user");
@@ -297,6 +301,24 @@ fn activate(app: &libadwaita::Application) {
         });
     });
 
+    // --- Detect user scroll to manage auto-scroll state ---
+    // When the user scrolls the output view manually (e.g. trackpad, scrollbar),
+    // we disable auto-scroll so new content doesn't yank them back to bottom.
+    // When they scroll back to the bottom, re-enable auto-scroll.
+    {
+        let adj = widgets.output_scroll.vadjustment();
+        let state_for_scroll = app_state.clone();
+        adj.connect_value_changed(move |adj| {
+            let at_bottom = (adj.value() + adj.page_size()) >= adj.upper() - 1.0;
+            let mut state = state_for_scroll.borrow_mut();
+            if at_bottom {
+                state.auto_scroll.user_reached_bottom();
+            } else {
+                state.auto_scroll.user_scrolled_away();
+            }
+        });
+    }
+
     // --- Poll conversation events on GTK main loop ---
     let state_for_events = app_state.clone();
     let output_buf = widgets.output_buffer.clone();
@@ -416,12 +438,19 @@ fn activate(app: &libadwaita::Application) {
         }
 
         if needs_scroll {
+            // Update auto_scroll state — incoming content should not yank
+            // the user back to bottom if they've scrolled up manually.
+            state_for_events.borrow_mut().auto_scroll.scroll_to_bottom_if_auto();
+
             window::update_status(&status_left_label, &status_right_label, &state_for_events.borrow());
-            // Schedule scroll after rendering settles
-            let scroll_clone = scroll.clone();
-            glib::idle_add_local_once(move || {
-                window::scroll_to_bottom(&scroll_clone);
-            });
+
+            // Only scroll if auto_scroll is still active
+            if state_for_events.borrow().auto_scroll.is_active() {
+                let scroll_clone = scroll.clone();
+                glib::idle_add_local_once(move || {
+                    window::scroll_to_bottom(&scroll_clone);
+                });
+            }
         } else if state_for_events.borrow().is_streaming {
             // No new events this tick, but still streaming — update status bar
             // so the spinner animation keeps rotating (~every 16ms tick).

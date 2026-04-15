@@ -2543,7 +2543,7 @@ mod tests {
         let mut state = ConversationState {
             messages: Vec::new(),
             model: "m".into(),
-            system_prompt: "s".into(),
+            system_prompt: vec![SystemBlock::text("s")],
             max_tokens: 1000,
             tools: Vec::new(),
             tool_context: crate::ToolContext {
@@ -2571,7 +2571,7 @@ mod tests {
                 Message { role: Role::Assistant, content: vec![ContentBlock::Text { text: "hi".into() }] },
             ],
             model: "m".into(),
-            system_prompt: "s".into(),
+            system_prompt: vec![SystemBlock::text("s")],
             max_tokens: 1000,
             tools: Vec::new(),
             tool_context: crate::ToolContext {
@@ -2584,18 +2584,18 @@ mod tests {
         let mock = MockApiClient {
             responses: std::sync::Mutex::new(vec![vec![
                 SseEvent::MessageStart {
-                    message: MessageStartData {
+                    message: MessageStartInfo {
                         id: "msg1".into(),
                         model: "m".into(),
-                        usage: Some(Usage { input_tokens: 100, output_tokens: 50,
+                        usage: Some(UsageInfo { input_tokens: 100, output_tokens: 50,
                             cache_creation_input_tokens: None, cache_read_input_tokens: None }),
                     },
                 },
-                SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockData::Text { text: String::new() } },
-                SseEvent::ContentBlockDelta { index: 0, delta: DeltaData::TextDelta { text: "Summary.".into() } },
+                SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockStartInfo::Text { text: Some(String::new()) } },
+                SseEvent::ContentBlockDelta { index: 0, delta: Delta::TextDelta { text: "Summary.".into() } },
                 SseEvent::ContentBlockStop { index: 0 },
-                SseEvent::MessageDelta { delta: MessageDeltaData { stop_reason: Some("end_turn".into()) },
-                    usage: Some(Usage { input_tokens: 100, output_tokens: 50,
+                SseEvent::MessageDelta { delta: MessageDeltaInfo { stop_reason: Some("end_turn".into()) },
+                    usage: Some(UsageInfo { input_tokens: 100, output_tokens: 50,
                         cache_creation_input_tokens: None, cache_read_input_tokens: None }) },
                 SseEvent::MessageStop,
             ]]),

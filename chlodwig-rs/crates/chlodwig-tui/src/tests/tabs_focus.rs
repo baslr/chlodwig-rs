@@ -273,7 +273,7 @@ fn test_tab_scroll_down_clamps_at_max() {
 fn test_tab_scroll_tab0_still_works() {
     let mut app = App::new("test".into());
     app.active_tab = 0;
-    app.auto_scroll = false;
+    app.auto_scroll.user_scrolled_away();
     app.scroll = 10;
     app.tab_scroll_up(3);
     assert_eq!(app.scroll, 7);

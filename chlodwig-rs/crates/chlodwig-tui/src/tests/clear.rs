@@ -23,12 +23,12 @@ fn test_clear_resets_display_blocks() {
 fn test_clear_resets_scroll() {
     let mut app = app_with_lines(100);
     app.scroll_up(50);
-    assert!(!app.auto_scroll);
+    assert!(!app.auto_scroll.is_active());
 
     app.clear_conversation();
 
     assert_eq!(app.scroll, 0);
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
 }
 
 #[test]

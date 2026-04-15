@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_initial_state_auto_scroll() {
     let app = app_with_lines(100);
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
     assert_eq!(app.scroll, 0);
 }
 
@@ -14,7 +14,7 @@ fn test_scroll_up_from_bottom_anchors_correctly() {
     assert!(total > 0);
 
     app.scroll_up(3);
-    assert!(!app.auto_scroll, "Should leave auto_scroll on scroll up");
+    assert!(!app.auto_scroll.is_active(), "Should leave auto_scroll on scroll up");
     assert_eq!(app.scroll, total - 3, "Should anchor at bottom minus 3");
 }
 
@@ -28,7 +28,7 @@ fn test_scroll_up_twice() {
 
     app.scroll_up(10);
     assert_eq!(app.scroll, total - 15);
-    assert!(!app.auto_scroll);
+    assert!(!app.auto_scroll.is_active());
 }
 
 #[test]
@@ -47,25 +47,25 @@ fn test_scroll_down_snaps_to_auto_scroll() {
     let view_height = 20;
 
     app.scroll_up(10);
-    assert!(!app.auto_scroll);
+    assert!(!app.auto_scroll.is_active());
     let _pos_after_up = app.scroll;
 
     app.scroll_down(10, view_height);
 
     let max_scroll = total.saturating_sub(view_height);
     assert_eq!(app.scroll, max_scroll);
-    assert!(app.auto_scroll, "Should snap back to auto_scroll at bottom");
+    assert!(app.auto_scroll.is_active(), "Should snap back to auto_scroll at bottom");
 }
 
 #[test]
 fn test_scroll_down_does_nothing_in_auto_scroll() {
     let mut app = app_with_lines(100);
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
     let scroll_before = app.scroll;
 
     app.scroll_down(10, 20);
     assert_eq!(app.scroll, scroll_before, "Should not change scroll in auto mode");
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
 }
 
 #[test]
@@ -78,7 +78,7 @@ fn test_scroll_down_partial() {
 
     app.scroll_down(10, view_height);
     assert_eq!(app.scroll, pos + 10);
-    assert!(!app.auto_scroll, "Should not snap to auto when not at bottom");
+    assert!(!app.auto_scroll.is_active(), "Should not snap to auto when not at bottom");
 }
 
 #[test]
@@ -100,10 +100,10 @@ fn test_scroll_up_then_scroll_to_bottom() {
     let mut app = app_with_lines(100);
 
     app.scroll_up(20);
-    assert!(!app.auto_scroll);
+    assert!(!app.auto_scroll.is_active());
 
     app.scroll_to_bottom();
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
 }
 
 #[test]
@@ -127,13 +127,13 @@ fn test_few_lines_less_than_viewport() {
     let _total = app.rendered_lines.len();
     let view_height = 40;
 
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
 
     app.scroll_up(1);
-    assert!(!app.auto_scroll);
+    assert!(!app.auto_scroll.is_active());
 
     app.scroll_down(100, view_height);
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
 }
 
 #[test]
@@ -170,10 +170,10 @@ fn test_scrollback_limit() {
 fn test_mouse_move_does_not_trigger_redraw() {
     let app = app_with_lines(50);
     let scroll_before = app.scroll;
-    let auto_before = app.auto_scroll;
+    let auto_before = app.auto_scroll.is_active();
 
     assert_eq!(app.scroll, scroll_before);
-    assert_eq!(app.auto_scroll, auto_before);
+    assert_eq!(app.auto_scroll.is_active(), auto_before);
 }
 
 /// When the user has manually scrolled up (auto_scroll=false), new streaming
@@ -185,7 +185,7 @@ fn test_new_content_does_not_override_manual_scroll() {
 
     // User scrolls up — leaves auto_scroll mode
     app.scroll_up(30);
-    assert!(!app.auto_scroll);
+    assert!(!app.auto_scroll.is_active());
     let scroll_pos = app.scroll;
 
     // Simulate incoming streaming content: call scroll_to_bottom_if_auto()
@@ -193,7 +193,7 @@ fn test_new_content_does_not_override_manual_scroll() {
     app.scroll_to_bottom_if_auto();
 
     // User's manual scroll position should be preserved
-    assert!(!app.auto_scroll, "auto_scroll should remain false when user has scrolled up");
+    assert!(!app.auto_scroll.is_active(), "auto_scroll should remain false when user has scrolled up");
     assert_eq!(app.scroll, scroll_pos, "scroll position should not change");
 }
 
@@ -202,8 +202,8 @@ fn test_new_content_does_not_override_manual_scroll() {
 #[test]
 fn test_new_content_follows_when_auto_scroll_active() {
     let mut app = app_with_lines(100);
-    assert!(app.auto_scroll);
+    assert!(app.auto_scroll.is_active());
 
     app.scroll_to_bottom_if_auto();
-    assert!(app.auto_scroll, "auto_scroll should stay true");
+    assert!(app.auto_scroll.is_active(), "auto_scroll should stay true");
 }

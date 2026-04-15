@@ -418,7 +418,7 @@ pub(crate) struct App {
     pub(crate) input: String,
     pub(crate) cursor: usize,
     pub(crate) scroll: usize,
-    pub(crate) auto_scroll: bool,
+    pub(crate) auto_scroll: chlodwig_core::AutoScroll,
     pub(crate) is_loading: bool,
     pub(crate) streaming_buffer: String,
     /// Timestamp shown above the streaming text, set on first TextDelta.
@@ -480,7 +480,7 @@ impl App {
             input: String::new(),
             cursor: 0,
             scroll: 0,
-            auto_scroll: true,
+            auto_scroll: chlodwig_core::AutoScroll::new(),
             is_loading: false,
             streaming_buffer: String::new(),
             streaming_timestamp: None,
@@ -1123,15 +1123,14 @@ impl App {
     /// Scroll to bottom (unconditional — forces auto_scroll on).
     /// Use only for explicit user actions (e.g. submitting a prompt).
     pub(crate) fn scroll_to_bottom(&mut self) {
-        self.auto_scroll = true;
+        self.auto_scroll.scroll_to_bottom();
     }
 
     /// Scroll to bottom only if auto_scroll is already active.
     /// Use for incoming content (streaming, tool results, etc.) so that
     /// a user who has manually scrolled up is not yanked back to the bottom.
     pub(crate) fn scroll_to_bottom_if_auto(&mut self) {
-        // If auto_scroll is already on, it stays on — render will follow.
-        // If user has scrolled up (auto_scroll=false), do nothing.
+        self.auto_scroll.scroll_to_bottom_if_auto();
     }
 
     // ── Streaming text (typewriter happens in conversation.rs, not here) ──
@@ -1790,17 +1789,17 @@ impl App {
 
     /// Scroll up by `n` lines. Leaves auto_scroll mode, anchors from current position.
     pub(crate) fn scroll_up(&mut self, n: usize) {
-        if self.auto_scroll {
+        if self.auto_scroll.is_active() {
             let total = self.rendered_lines.len();
             self.scroll = total;
-            self.auto_scroll = false;
+            self.auto_scroll.user_scrolled_away();
         }
         self.scroll = self.scroll.saturating_sub(n);
     }
 
     /// Scroll down by `n` lines. Snaps back to auto_scroll if near bottom.
     pub(crate) fn scroll_down(&mut self, n: usize, view_height: usize) {
-        if self.auto_scroll {
+        if self.auto_scroll.is_active() {
             return;
         }
         self.scroll += n;
@@ -1808,7 +1807,7 @@ impl App {
         let max_scroll = total.saturating_sub(view_height);
         if self.scroll >= max_scroll {
             self.scroll = max_scroll;
-            self.auto_scroll = true;
+            self.auto_scroll.user_reached_bottom();
         }
     }
 
@@ -1900,8 +1899,7 @@ impl App {
         self.streaming_timestamp = None;
         self.is_loading = false;
         self.scroll = 0;
-        self.auto_scroll = true;
-        self.total_input_tokens = 0;
+        self.auto_scroll.scroll_to_bottom();        self.total_input_tokens = 0;
         self.total_output_tokens = 0;
         self.turn_usage.reset();
         self.stream_chunks = 0;
@@ -2626,7 +2624,7 @@ impl App {
         let _ = writeln!(out);
         let _ = writeln!(out, "=== Flags ===");
         let _ = writeln!(out, "is_loading:          {}", self.is_loading);
-        let _ = writeln!(out, "auto_scroll:         {}", self.auto_scroll);
+        let _ = writeln!(out, "auto_scroll:         {}", self.auto_scroll.is_active());
         let _ = writeln!(out, "lines_dirty:         {}", self.lines_dirty);
         let _ = writeln!(out, "requests_dirty:      {}", self.requests_dirty);
         let _ = writeln!(out, "should_quit:         {}", self.should_quit);

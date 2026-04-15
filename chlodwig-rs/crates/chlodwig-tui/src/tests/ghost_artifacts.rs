@@ -26,7 +26,7 @@ fn test_every_cell_overwritten_after_scroll() {
     }
     app.mark_dirty();
     app.rebuild_lines();
-    app.auto_scroll = false;
+    app.auto_scroll.user_scrolled_away();
 
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).unwrap();
@@ -93,7 +93,7 @@ fn test_no_ghost_artifacts_after_scroll() {
     app.mark_dirty();
     app.rebuild_lines();
 
-    app.auto_scroll = false;
+    app.auto_scroll.user_scrolled_away();
     let total = app.rendered_lines.len();
 
     app.scroll = 0;
@@ -190,7 +190,7 @@ fn test_no_ghost_artifacts_with_tool_output() {
 
     app.mark_dirty();
     app.rebuild_lines();
-    app.auto_scroll = false;
+    app.auto_scroll.user_scrolled_away();
 
     let total = app.rendered_lines.len();
     let view_height = (height - 2) as usize;

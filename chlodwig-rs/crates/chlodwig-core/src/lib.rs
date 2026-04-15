@@ -1,5 +1,6 @@
 //! Chlodwig Core — shared types, traits, and the conversation loop.
 
+pub mod auto_scroll;
 pub mod config;
 pub mod conversation;
 pub mod highlight;
@@ -12,6 +13,7 @@ pub mod status_line;
 pub mod subagent;
 pub mod tools;
 
+pub use auto_scroll::*;
 pub use config::*;
 pub use conversation::*;
 pub use log_paths::*;

@@ -56,6 +56,9 @@ pub struct AppState {
     /// Set to `true` when a turn completes and the UI should consider sending
     /// a system notification. Cleared by `take_should_notify()`.
     pub should_notify: bool,
+    /// Auto-scroll state: follow new content unless user has scrolled up.
+    /// Shared logic with the TUI via `chlodwig_core::AutoScroll`.
+    pub auto_scroll: chlodwig_core::AutoScroll,
 }
 
 impl AppState {
@@ -74,6 +77,7 @@ impl AppState {
             model,
             copy_feedback: None,
             should_notify: false,
+            auto_scroll: chlodwig_core::AutoScroll::new(),
         }
     }
 
@@ -212,6 +216,7 @@ impl AppState {
         self.request_count = 0;
         self.copy_feedback = None;
         self.should_notify = false;
+        self.auto_scroll.scroll_to_bottom();
     }
 
     /// Set a transient copy-feedback message (e.g. "Copied!").

@@ -834,3 +834,68 @@ fn test_delete_word_back_three_words() {
     assert_eq!(text, "one two ");
     assert_eq!(cursor, 8);
 }
+
+// --- auto_scroll integration tests ---
+
+#[test]
+fn test_new_state_auto_scroll_is_active() {
+    let state = AppState::new("m".into());
+    assert!(state.auto_scroll.is_active(), "auto_scroll should be active by default");
+}
+
+#[test]
+fn test_clear_resets_auto_scroll_to_active() {
+    let mut state = AppState::new("m".into());
+    state.auto_scroll.user_scrolled_away();
+    assert!(!state.auto_scroll.is_active());
+
+    state.clear();
+    assert!(state.auto_scroll.is_active(), "clear should re-enable auto_scroll");
+}
+
+#[test]
+fn test_submit_prompt_does_not_change_auto_scroll_by_itself() {
+    // submit_prompt() only updates state — the GTK event handler calls
+    // auto_scroll.scroll_to_bottom() separately. This tests that submit_prompt
+    // does NOT accidentally disable it.
+    let mut state = AppState::new("m".into());
+    state.submit_prompt("hello".into());
+    assert!(state.auto_scroll.is_active());
+}
+
+#[test]
+fn test_auto_scroll_scroll_to_bottom_if_auto_noop_when_user_scrolled_away() {
+    let mut state = AppState::new("m".into());
+    state.auto_scroll.user_scrolled_away();
+    assert!(!state.auto_scroll.is_active());
+
+    // Simulate incoming content event
+    state.auto_scroll.scroll_to_bottom_if_auto();
+    assert!(!state.auto_scroll.is_active(), "should remain inactive when user scrolled up");
+}
+
+#[test]
+fn test_auto_scroll_incoming_content_follows_when_active() {
+    let mut state = AppState::new("m".into());
+    assert!(state.auto_scroll.is_active());
+
+    state.auto_scroll.scroll_to_bottom_if_auto();
+    assert!(state.auto_scroll.is_active(), "should stay active");
+}
+
+#[test]
+fn test_auto_scroll_user_scrolls_up_then_back() {
+    let mut state = AppState::new("m".into());
+    assert!(state.auto_scroll.is_active());
+
+    state.auto_scroll.user_scrolled_away();
+    assert!(!state.auto_scroll.is_active());
+
+    // Incoming content should NOT re-enable
+    state.auto_scroll.scroll_to_bottom_if_auto();
+    assert!(!state.auto_scroll.is_active());
+
+    // User scrolls back to bottom
+    state.auto_scroll.user_reached_bottom();
+    assert!(state.auto_scroll.is_active());
+}
