@@ -47,6 +47,23 @@ pub fn apply_project_dir() -> Option<std::path::PathBuf> {
 /// with the system clipboard or other apps.
 const FINDER_PASTEBOARD_NAME: &str = "rs.chlodwig.finder-open";
 
+/// Ensure AppKit framework is loaded so NSPasteboard is available.
+///
+/// GTK loads AppKit automatically when the app starts, but in unit tests
+/// or early startup the framework may not be loaded yet.  This uses
+/// `dlopen` via `Once` so the cost is zero after the first call.
+#[cfg(target_os = "macos")]
+fn ensure_appkit() {
+    use std::sync::Once;
+    static LOAD: Once = Once::new();
+    LOAD.call_once(|| unsafe {
+        libc::dlopen(
+            c"/System/Library/Frameworks/AppKit.framework/AppKit".as_ptr(),
+            libc::RTLD_LAZY,
+        );
+    });
+}
+
 /// Read the project directory from the FinderSync custom pasteboard.
 ///
 /// The FinderSync extension writes the target directory path to a custom
@@ -107,6 +124,11 @@ fn read_and_clear_finder_pasteboard() -> Option<String> {
     use objc2::{class, msg_send};
     use objc2_foundation::NSString;
 
+    // Ensure AppKit is loaded so `class!(NSPasteboard)` works.
+    // In the full app GTK loads AppKit automatically, but in unit tests
+    // or early startup the framework may not be loaded yet.
+    ensure_appkit();
+
     unsafe {
         // NSPasteboard *pboard = [NSPasteboard pasteboardWithName:@"rs.chlodwig.finder-open"];
         let name = NSString::from_str(FINDER_PASTEBOARD_NAME);
@@ -165,11 +187,17 @@ mod tests {
     use super::*;
 
     // Tests that touch CWD must be serialized because they share global state.
+    // Use `unwrap_or_else(|e| e.into_inner())` so a panic in one test doesn't
+    // poison the mutex and cascade-fail all subsequent tests.
     static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serial_lock() -> std::sync::MutexGuard<'static, ()> {
+        SERIAL.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     #[test]
     fn test_apply_project_dir_with_valid_dir() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
         let tmp = tempfile::tempdir().unwrap();
         // canonicalize to resolve macOS /var → /private/var symlink
         let dir = tmp.path().canonicalize().unwrap();
@@ -189,7 +217,7 @@ mod tests {
 
     #[test]
     fn test_apply_project_dir_nonexistent() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
         let original = std::env::current_dir().unwrap();
 
         std::env::set_var("CHLODWIG_PROJECT_DIR", "/nonexistent/path/abc123");
@@ -203,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_apply_project_dir_not_set() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
         std::env::remove_var("CHLODWIG_PROJECT_DIR");
         let result = apply_project_dir();
         assert!(result.is_none());
@@ -223,6 +251,7 @@ mod tests {
     /// Write a string to the custom FinderSync pasteboard (test helper).
     #[cfg(target_os = "macos")]
     fn write_finder_pasteboard(value: &str) {
+        ensure_appkit();
         use objc2::{class, msg_send};
         use objc2::rc::Retained;
         use objc2::runtime::AnyObject;
@@ -244,6 +273,7 @@ mod tests {
     /// Clear the custom FinderSync pasteboard (test helper).
     #[cfg(target_os = "macos")]
     fn clear_finder_pasteboard() {
+        ensure_appkit();
         use objc2::{class, msg_send};
         use objc2::rc::Retained;
         use objc2::runtime::AnyObject;
@@ -262,7 +292,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_apply_project_dir_from_finder_with_valid_pasteboard() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().canonicalize().unwrap();
         let original = std::env::current_dir().unwrap();
@@ -281,7 +311,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_apply_project_dir_from_finder_empty_pasteboard() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
         let original = std::env::current_dir().unwrap();
 
         clear_finder_pasteboard();
@@ -296,7 +326,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_apply_project_dir_from_finder_nonexistent_path() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
         let original = std::env::current_dir().unwrap();
 
         write_finder_pasteboard("/nonexistent/path/xyz789");
@@ -311,7 +341,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_apply_project_dir_from_finder_trims_whitespace() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().canonicalize().unwrap();
         let original = std::env::current_dir().unwrap();
@@ -330,7 +360,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_read_and_clear_finder_pasteboard_clears_after_read() {
-        let _lock = SERIAL.lock().unwrap();
+        let _lock = serial_lock();
 
         write_finder_pasteboard("/tmp");
 

@@ -564,6 +564,7 @@ dependencies = [
  "dirs",
  "gtk4",
  "libadwaita",
+ "libc",
  "objc2",
  "objc2-foundation",
  "objc2-user-notifications",

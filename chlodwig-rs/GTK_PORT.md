@@ -1,9 +1,10 @@
 # Chlodwig GTK4 Port — Roadmap
 
 > Status: **Functional prototype — basic conversation loop works.**
-> The GTK crate compiles, ~50 unit tests pass, and the binary runs on macOS
+> The GTK crate compiles, ~250 unit tests pass, and the binary runs on macOS
 > with MacPorts GTK4/libadwaita. Markdown streaming, emoji rendering (CoreText),
-> copy/paste, and standard macOS keybindings are working.
+> copy/paste, standard macOS keybindings, native notifications, and auto-scroll
+> suppression are working.
 
 ---
 
@@ -13,18 +14,25 @@
 
 | File | Lines | Content |
 |------|------:|---------|
-| `app_state.rs` | 414 | GTK-independent `AppState` + `DisplayBlock` enum, `handle_event()`, input editing helpers (`delete_to_line_start`, `line_start_pos`, `line_end_pos`, `word_left_pos`, `word_right_pos`, `delete_word_back`) |
-| `window.rs` | 753 | Window layout, TextTags, `append_styled()`, `scroll_to_bottom()`, emoji overlay rendering, context menu, DND disable |
-| `main.rs` | 780 | Entry point, Tokio↔GTK bridge, `render_event_to_buffer()`, `build_system_prompt()`, keyboard shortcuts (Cmd+V/C/X/A, Cmd+Enter, Cmd+Backspace, Cmd+←/→/↑/↓, Option+←/→/⌫) |
-| `md_renderer.rs` | 355 | Markdown → GtkTextBuffer renderer (headings, bold, italic, code blocks, lists, tables) |
+| `app_state.rs` | 458 | GTK-independent `AppState` + `DisplayBlock` enum, `handle_event()`, input editing helpers (`delete_to_line_start`, `line_start_pos`, `line_end_pos`, `word_left_pos`, `word_right_pos`, `delete_word_back`), `AutoScroll` delegation, `TurnUsage` context |
+| `window.rs` | 768 | Window layout, TextTags, `append_styled()`, `scroll_to_bottom()`, emoji overlay rendering, context menu, DND disable |
+| `main.rs` | 1118 | Entry point, Tokio↔GTK bridge, `render_event_to_buffer()`, `build_system_prompt()`, keyboard shortcuts (Cmd+V/C/X/A, Cmd+Enter, Cmd+Q, Cmd+Backspace, Cmd+←/→/↑/↓, Option+←/→/⌫), auto-scroll via `vadjustment`, syntax highlighting for Read/Write/Edit |
+| `md_renderer.rs` | 576 | Markdown → GtkTextBuffer renderer (headings, bold, italic, code blocks, lists, tables, syntax-highlighted fenced code) |
 | `emoji.rs` | 1243 | Emoji detection, CoreText bitmap rendering, ZWJ sequence handling |
 | `emoji_overlay.rs` | 417 | EmojiTextView subclass with overlay-based emoji rendering |
-| `lib.rs` | 204 | GSK/Pango backend selection, bundled emoji font, CSS |
-| `tests/app_state_tests.rs` | 763 | ~50 unit tests for AppState + input editing helpers |
+| `ansi.rs` | 249 | ANSI SGR escape sequence parser → GtkTextTag conversion for colored terminal output |
+| `lib.rs` | 212 | GSK/Pango backend selection, bundled emoji font, CSS |
+| `notification.rs` | 104 | Native macOS notifications via `UNUserNotificationCenter`, bundle detection, permission request |
+| `setup.rs` | 375 | First-launch setup: `CHLODWIG_PROJECT_DIR` env, FinderSync pasteboard IPC, CLI arg parsing, AppKit bootstrap |
+| `tests/app_state_tests.rs` | 963 | ~70 unit tests for AppState + input editing + event handling + auto-scroll |
 | `tests/emoji_tests.rs` | 198 | Emoji detection and segmentation tests |
-| `tests/copy_tests.rs` | 42 | Clipboard logic tests |
+| `tests/ansi_tests.rs` | 247 | ANSI escape sequence parser tests |
+| `tests/notification_tests.rs` | 130 | Notification helper tests |
 | `tests/line_number_tests.rs` | 90 | Line number formatting tests |
 | `tests/streaming_tests.rs` | 74 | Streaming buffer tests |
+| `tests/copy_tests.rs` | 42 | Clipboard logic tests |
+| `tests/startup_cwd_tests.rs` | 40 | Startup CWD message tests |
+| `tests/quit_shortcut_tests.rs` | 21 | Cmd+Q shortcut tests |
 
 ### What the TUI has (feature comparison)
 
@@ -61,8 +69,8 @@
 | Constants editor | ✅ inline editing + persistence | ❌ | — |
 | Git tab (branch + status) | ✅ | ❌ | — |
 | Prompt history (Up/Down) | ✅ | ❌ | — |
-| Scroll anchoring (manual scroll) | ✅ Gotcha #5, #14 | ⚠️ | GTK ScrolledWindow handles this natively, but manual scroll suppression logic needed |
-| Auto-scroll on new content | ✅ | ✅ | `scroll_to_bottom()` via `glib::idle_add_local_once` after content updates |
+| Scroll anchoring (manual scroll) | ✅ Gotcha #5, #14 | ✅ | `vadjustment.connect_value_changed()` + `chlodwig_core::AutoScroll` (Gotcha #34) |
+| Auto-scroll on new content | ✅ | ✅ | `scroll_to_bottom_if_auto()` — no-op when user scrolled away; `scroll_to_bottom()` for explicit actions |
 | Scrollbar | ✅ ratatui scrollbar | ✅ | Native GTK |
 | Input soft-wrapping | ✅ word-wrap matching ratatui | ✅ | `WrapMode::Word` built-in |
 | Multiline input (Ctrl+J / Shift+Enter) | ✅ | ✅ | Enter inserts newline (GTK default), Cmd+Enter submits |
@@ -189,7 +197,7 @@ The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK vers
 
 ### 3.2 Scroll Behavior
 - [x] **3.2.1** — Auto-scroll to bottom on new content (via `glib::idle_add_local_once`)
-- [ ] **3.2.2** — Detect manual scroll: monitor `vadjustment.value` vs `upper - page_size`
+- [x] **3.2.2** — Detect manual scroll: monitor `vadjustment.value` vs `upper - page_size` (with `AutoScroll` from `chlodwig-core`)
 - [ ] **3.2.3** — "Scroll to bottom" button (floating, shown when scrolled up)
 
 ### 3.3 Tabs / Sidebar
@@ -220,7 +228,7 @@ Most TUI keybindings are unnecessary in GTK (native text editing). Implemented s
 - [x] **3.5.0f** — `Option+←/→` — move cursor word left/right
 - [x] **3.5.0g** — `Option+Backspace` — delete word before cursor
 - [ ] **3.5.1** — `Cmd+K` / `Ctrl+L` — clear conversation
-- [ ] **3.5.2** — `Cmd+Q` — quit
+- [x] **3.5.2** — `Cmd+Q` — quit (via `app.set_accels_for_action("app.quit", &["<Meta>q"])`)
 - [ ] **3.5.3** — `Cmd+,` — open preferences/constants
 - [ ] **3.5.4** — `Cmd+S` — manual save
 - [ ] **3.5.5** — `Escape` — cancel streaming (stop current turn)
@@ -241,9 +249,9 @@ Most TUI keybindings are unnecessary in GTK (native text editing). Implemented s
 ## Phase 4: macOS App Bundle
 
 ### 4.1 `.app` Bundle
-- [ ] **4.1.1** — Create `Info.plist` with `CFBundleIdentifier = rs.chlodwig.gtk`
-- [ ] **4.1.2** — App icon (`.icns` file)
-- [ ] **4.1.3** — Build script or Makefile: compile release binary → copy into `.app/Contents/MacOS/`
+- [x] **4.1.1** — Create `Info.plist` with `CFBundleIdentifier = rs.chlodwig.gtk`
+- [x] **4.1.2** — App icon (`AppIcon.icns` in `macos/`)
+- [x] **4.1.3** — Build script: `macos/build_app.sh` — compile release binary → copy into `.app/Contents/MacOS/` (supports `--install`, `--run`, `--skip-build`)
 - [ ] **4.1.4** — Bundle GTK4/libadwaita dylibs inside the `.app` (or require Homebrew at runtime)
 - [ ] **4.1.5** — **Option A**: `gtk-mac-bundler` for automatic dylib bundling
 - [ ] **4.1.6** — **Option B**: Ship as Homebrew formula / cask (depends on system GTK4)
@@ -327,7 +335,7 @@ These 14 TUI gotchas from `CLAUDE.md` are **eliminated** by using GTK4:
 | 3 | `[DONE]` SSE terminator | Core API parsing — UI-independent |
 | 6 | Empty tool names | Core conversation logic — UI-independent |
 | 7 | Tracing crate names (underscores) | Build system — UI-independent |
-| 14 | New content must not override manual scroll | Need to implement scroll suppression in GTK too |
+| 14 | New content must not override manual scroll | ✅ **Fixed** — `AutoScroll` from `chlodwig-core` + `vadjustment` scroll detection |
 | 15 | Crash diagnostics | Different approach needed for GUI (no terminal to restore) |
 | 17 | SIGHUP silent death | Still applies to the GTK process |
 | 18 | Eager rebuild → 100% CPU | Lazy rendering pattern still important for requests tab |
@@ -379,7 +387,7 @@ cargo run -p chlodwig-gtk  # manual testing until automated GTK tests are feasib
 ### Workspace tests (must always pass)
 ```bash
 cargo test --workspace --exclude chlodwig-gtk  # existing tests
-cargo test -p chlodwig-gtk --lib --no-default-features  # ~50 GTK state tests
+cargo test -p chlodwig-gtk --lib --no-default-features  # ~250 GTK state tests
 ```
 
 ---
