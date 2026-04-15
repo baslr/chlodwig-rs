@@ -23,6 +23,12 @@ enum BackgroundCommand {
     Prompt { text: String, pre_turn_usage: chlodwig_core::TurnUsage },
     /// Clear the conversation (reset `ConversationState.messages`).
     ClearMessages,
+    /// Save the current session to disk.
+    SaveSession { started_at: String },
+    /// Restore messages from a loaded session into ConversationState.
+    RestoreMessages { messages: Vec<Message> },
+    /// Compact the conversation history.
+    Compact { instructions: Option<String> },
 }
 
 fn main() -> glib::ExitCode {
@@ -70,6 +76,9 @@ fn main() -> glib::ExitCode {
 
     tracing::info!("chlodwig-gtk starting");
 
+    // Check for --resume flag before GTK init
+    let resume_flag = std::env::args().any(|a| a == "--resume" || a == "-r");
+
     // Set working directory: Finder marker > env var > CLI args
     if chlodwig_gtk::setup::apply_project_dir_from_finder().is_none() {
         if chlodwig_gtk::setup::apply_project_dir().is_none() {
@@ -83,14 +92,25 @@ fn main() -> glib::ExitCode {
         .build();
 
     app.connect_activate(move |app| {
-        activate(app);
+        activate(app, resume_flag);
     });
 
     app.run()
 }
 
-fn activate(app: &libadwaita::Application) {
+fn activate(app: &libadwaita::Application, resume_flag: bool) {
     let (window, widgets) = window::build_window(app);
+
+    // --- Viewport width tracking for Markdown table rendering ---
+    // Tables use monospace font, so we need to know how many monospace
+    // columns fit in the output view. Computed lazily from the widget's
+    // current allocation. All render functions read this shared cell,
+    // which is updated before each render pass.
+    let viewport_cols: Rc<Cell<usize>> = Rc::new(Cell::new(120)); // sensible default
+
+    // Generate a unique session start timestamp — used as the filename
+    // for the per-session save file (YYYY_MM_DD_HH_MM_SS.json).
+    let session_started_at = chrono::Local::now().to_rfc3339();
 
     // Cmd+Q → quit application
     let quit_action = gtk4::gio::SimpleAction::new("quit", None);
@@ -136,6 +156,56 @@ fn activate(app: &libadwaita::Application) {
         window::append_styled(&widgets.output_buffer, &format!("{cwd_msg}\n"), "system");
     }
 
+    // --- Resume session if --resume flag was passed ---
+    let mut initial_messages: Vec<Message> = Vec::new();
+    if resume_flag {
+        match chlodwig_core::load_latest_session() {
+            Ok(Some(snapshot)) => {
+                let msg_count = snapshot.messages.len();
+                tracing::info!("Resuming session with {msg_count} messages");
+
+                // Restore display blocks into AppState
+                {
+                    let mut state = app_state.borrow_mut();
+                    state.restore_messages(&snapshot.messages);
+                }
+
+                // Render restored blocks into the output buffer
+                render_restored_blocks(
+                    &widgets.output_buffer,
+                    &app_state.borrow(),
+                    viewport_cols.get(),
+                );
+
+                window::append_styled(
+                    &widgets.output_buffer,
+                    &format!("✓ Resumed session ({msg_count} messages, saved at {})\n", snapshot.saved_at),
+                    "system",
+                );
+
+                // Remember messages to send to background thread
+                initial_messages = snapshot.messages;
+
+                window::scroll_to_bottom(&widgets.output_scroll);
+                window::update_status(&widgets.status_left_label, &widgets.status_right_label, &app_state.borrow());
+            }
+            Ok(None) => {
+                window::append_styled(
+                    &widgets.output_buffer,
+                    "No saved session found — starting fresh.\n",
+                    "system",
+                );
+            }
+            Err(e) => {
+                window::append_styled(
+                    &widgets.output_buffer,
+                    &format!("Failed to load session: {e}\n"),
+                    "error",
+                );
+            }
+        }
+    }
+
     // --- Wire up Send button ---
     let input_buf = widgets.input_buffer.clone();
     let prompt_tx_clone = prompt_tx.clone();
@@ -144,6 +214,9 @@ fn activate(app: &libadwaita::Application) {
     let scroll_for_submit = widgets.output_scroll.clone();
     let status_left_for_submit = widgets.status_left_label.clone();
     let status_right_for_submit = widgets.status_right_label.clone();
+    let session_started_at_for_submit = session_started_at.clone();
+    let viewport_cols_for_submit = viewport_cols.clone();
+    let output_view_for_submit = widgets.output_view.clone();
 
     let submit = move || {
         let start = input_buf.start_iter();
@@ -203,11 +276,129 @@ fn activate(app: &libadwaita::Application) {
                     }
                     return;
                 }
-                // Not yet implemented in GTK — show info message
-                Command::Compact(_) | Command::Sessions | Command::Resume(_) | Command::Save => {
+                Command::Compact(instructions) => {
+                    // Tell background thread to compact
+                    let _ = prompt_tx_clone.send(BackgroundCommand::Compact { instructions });
                     window::append_styled(
                         &output_buf_for_submit,
-                        &format!("\nCommand not yet available in GTK. Use the TUI version.\n"),
+                        "\n⏳ Compacting conversation…\n",
+                        "system",
+                    );
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    return;
+                }
+                Command::Sessions => {
+                    match chlodwig_core::list_sessions() {
+                        Ok(sessions) if sessions.is_empty() => {
+                            window::append_styled(
+                                &output_buf_for_submit,
+                                "\nNo saved sessions found.\n",
+                                "system",
+                            );
+                        }
+                        Ok(sessions) => {
+                            window::append_styled(
+                                &output_buf_for_submit,
+                                &format!("\n📋 {} saved session(s):\n", sessions.len()),
+                                "system",
+                            );
+                            for info in &sessions {
+                                let line = format!(
+                                    "  {} — {} ({} messages, {})\n",
+                                    info.filename.trim_end_matches(".json"),
+                                    info.model,
+                                    info.message_count,
+                                    info.saved_at,
+                                );
+                                window::append_styled(&output_buf_for_submit, &line, "result");
+                            }
+                        }
+                        Err(e) => {
+                            window::append_styled(
+                                &output_buf_for_submit,
+                                &format!("\n✗ Error listing sessions: {e}\n"),
+                                "error",
+                            );
+                        }
+                    }
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    return;
+                }
+                Command::Resume(prefix) => {
+                    let load_result = match &prefix {
+                        None => chlodwig_core::load_latest_session(),
+                        Some(p) => chlodwig_core::load_session_by_prefix(p),
+                    };
+                    match load_result {
+                        Ok(Some(snapshot)) => {
+                            let msg_count = snapshot.messages.len();
+                            // Clear current display
+                            {
+                                let mut state = state_for_submit.borrow_mut();
+                                state.clear();
+                            }
+                            let mut s = output_buf_for_submit.start_iter();
+                            let mut e = output_buf_for_submit.end_iter();
+                            chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf_for_submit, 0);
+                            output_buf_for_submit.delete(&mut s, &mut e);
+
+                            // Restore display blocks
+                            {
+                                let mut state = state_for_submit.borrow_mut();
+                                state.restore_messages(&snapshot.messages);
+                            }
+                            viewport_cols_for_submit.set(
+                                chlodwig_gtk::viewport::viewport_columns(
+                                    output_view_for_submit.upcast_ref::<gtk4::TextView>(),
+                                ),
+                            );
+                            render_restored_blocks(&output_buf_for_submit, &state_for_submit.borrow(), viewport_cols_for_submit.get());
+                            window::append_styled(
+                                &output_buf_for_submit,
+                                &format!(
+                                    "✓ Resumed session ({msg_count} messages, saved at {})\n",
+                                    snapshot.saved_at
+                                ),
+                                "system",
+                            );
+
+                            // Restore messages in background thread
+                            let _ = prompt_tx_clone.send(BackgroundCommand::RestoreMessages {
+                                messages: snapshot.messages,
+                            });
+                        }
+                        Ok(None) => {
+                            let msg = match &prefix {
+                                None => "No saved session found.".to_string(),
+                                Some(p) => format!(
+                                    "No session matching prefix '{p}' found. Use /sessions to list available sessions."
+                                ),
+                            };
+                            window::append_styled(
+                                &output_buf_for_submit,
+                                &format!("\n{msg}\n"),
+                                "system",
+                            );
+                        }
+                        Err(e) => {
+                            window::append_styled(
+                                &output_buf_for_submit,
+                                &format!("\n✗ Failed to load session: {e}\n"),
+                                "error",
+                            );
+                        }
+                    }
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
+                    return;
+                }
+                Command::Save => {
+                    let _ = prompt_tx_clone.send(BackgroundCommand::SaveSession {
+                        started_at: session_started_at_for_submit.clone(),
+                    });
+                    window::append_styled(
+                        &output_buf_for_submit,
+                        "\n✓ Session saved.\n",
                         "system",
                     );
                     window::scroll_to_bottom(&scroll_for_submit);
@@ -250,6 +441,8 @@ fn activate(app: &libadwaita::Application) {
     let state_for_toggle = app_state.clone();
     let output_buf_for_toggle = widgets.output_buffer.clone();
     let streaming_offset_for_toggle = streaming_start_offset.clone();
+    let viewport_cols_for_toggle = viewport_cols.clone();
+    let output_view_for_toggle = widgets.output_view.clone();
     widgets.toggle_tool_button.connect_clicked(move |btn| {
         let mut state = state_for_toggle.borrow_mut();
         state.show_tool_usage = !state.show_tool_usage;
@@ -258,7 +451,12 @@ fn activate(app: &libadwaita::Application) {
         // Re-render entire output from blocks (no scroll — user wants to keep reading).
         // Reset streaming_start_offset so the event loop doesn't use a stale offset
         // after we cleared and re-built the buffer.
-        rerender_all_blocks(&output_buf_for_toggle, &state);
+        viewport_cols_for_toggle.set(
+            chlodwig_gtk::viewport::viewport_columns(
+                output_view_for_toggle.upcast_ref::<gtk4::TextView>(),
+            ),
+        );
+        rerender_all_blocks(&output_buf_for_toggle, &state, viewport_cols_for_toggle.get());
         streaming_offset_for_toggle.set(-1);
     });
 
@@ -433,6 +631,10 @@ fn activate(app: &libadwaita::Application) {
     let status_right_label = widgets.status_right_label.clone();
     let window_for_notify = window.clone();
     let project_name = chlodwig_gtk::app_state::project_dir_name();
+    let prompt_tx_for_events = prompt_tx.clone();
+    let session_started_at_for_events = session_started_at.clone();
+    let viewport_cols_for_events = viewport_cols.clone();
+    let output_view_for_events = widgets.output_view.clone();
 
     // Use glib::timeout_add_local to periodically check for events
     // This bridges the async Tokio world with the GTK main loop.
@@ -457,6 +659,7 @@ fn activate(app: &libadwaita::Application) {
         let mut needs_scroll = false;
         let mut streaming_finalized = false; // TextComplete or ToolUseStart ended streaming
         let mut finalized_text: Option<String> = None; // TextComplete's full_text
+        let mut should_save_session = false; // TurnComplete or CompactionComplete → auto-save
         while let Ok(event) = rx.try_recv() {
             let should_update = {
                 let mut state = state_for_events.borrow_mut();
@@ -473,6 +676,11 @@ fn activate(app: &libadwaita::Application) {
                             streaming_finalized = true;
                             finalized_text = Some(state.streaming_buffer.clone());
                         }
+                    }
+                    // Auto-save on turn complete and compaction complete
+                    ConversationEvent::TurnComplete
+                    | ConversationEvent::CompactionComplete { .. } => {
+                        should_save_session = true;
                     }
                     _ => {}
                 }
@@ -492,6 +700,13 @@ fn activate(app: &libadwaita::Application) {
             }
         }
 
+        // Auto-save session after TurnComplete or CompactionComplete
+        if should_save_session {
+            let _ = prompt_tx_for_events.send(BackgroundCommand::SaveSession {
+                started_at: session_started_at_for_events.clone(),
+            });
+        }
+
         // --- Streaming Markdown rendering (once per tick) ---
         //
         // Three cases:
@@ -499,6 +714,12 @@ fn activate(app: &libadwaita::Application) {
         // 2. Streaming was finalized this tick (TextComplete/ToolUseStart) → render final text
         // 3. Neither → nothing to do
         {
+            // Update viewport columns from the current widget allocation
+            viewport_cols_for_events.set(
+                chlodwig_gtk::viewport::viewport_columns(
+                    output_view_for_events.upcast_ref::<gtk4::TextView>(),
+                ),
+            );
             let mut state = state_for_events.borrow_mut();
 
             // Case 1: ongoing streaming with new deltas
@@ -515,6 +736,7 @@ fn activate(app: &libadwaita::Application) {
                     &output_buf,
                     streaming_start_offset.get(),
                     &state.streaming_buffer,
+                    viewport_cols_for_events.get(),
                 );
                 last_streaming_snapshot = state.streaming_buffer.clone();
                 state.acknowledge_streaming_render();
@@ -532,7 +754,7 @@ fn activate(app: &libadwaita::Application) {
                 }
 
                 let final_text = finalized_text.as_deref().unwrap_or("");
-                rerender_streaming_markdown(&output_buf, streaming_start_offset.get(), final_text);
+                rerender_streaming_markdown(&output_buf, streaming_start_offset.get(), final_text, viewport_cols_for_events.get());
                 window::append_to_output(&output_buf, "\n");
 
                 streaming_start_offset.set(-1);
@@ -610,10 +832,55 @@ fn activate(app: &libadwaita::Application) {
 
             let permission = chlodwig_core::AutoApprovePrompter;
 
+            // If there are initial messages from --resume, restore them
+            if !initial_messages.is_empty() {
+                conv_state.messages = initial_messages;
+                tracing::info!("Background thread: restored {} messages", conv_state.messages.len());
+            }
+
             while let Some(bg_cmd) = prompt_rx.recv().await {
                 match bg_cmd {
                     BackgroundCommand::ClearMessages => {
                         conv_state.messages.clear();
+                        continue;
+                    }
+                    BackgroundCommand::SaveSession { started_at } => {
+                        let snapshot = chlodwig_core::SessionSnapshot {
+                            saved_at: chrono::Local::now().to_rfc3339(),
+                            started_at,
+                            model: conv_state.model.clone(),
+                            messages: conv_state.messages.clone(),
+                            system_prompt: conv_state.system_prompt.clone(),
+                            constants: None,
+                        };
+                        if let Err(e) = chlodwig_core::save_session(&snapshot) {
+                            tracing::warn!("Failed to auto-save session: {e}");
+                        }
+                        continue;
+                    }
+                    BackgroundCommand::RestoreMessages { messages } => {
+                        conv_state.messages = messages;
+                        tracing::info!(
+                            "Restored {} messages into ConversationState",
+                            conv_state.messages.len()
+                        );
+                        continue;
+                    }
+                    BackgroundCommand::Compact { instructions } => {
+                        let _ = event_tx_bg.send(ConversationEvent::CompactionStarted);
+                        if let Err(e) = chlodwig_core::compact_conversation(
+                            &mut conv_state,
+                            api_client.as_ref(),
+                            &event_tx_bg,
+                            instructions.as_deref(),
+                        )
+                        .await
+                        {
+                            tracing::error!("Compaction error: {e}");
+                            let _ = event_tx_bg.send(ConversationEvent::Error(
+                                format!("Compaction failed: {e}"),
+                            ));
+                        }
                         continue;
                     }
                     BackgroundCommand::Prompt { text: prompt, pre_turn_usage } => {
@@ -666,6 +933,7 @@ fn activate(app: &libadwaita::Application) {
 fn rerender_all_blocks(
     buffer: &gtk4::TextBuffer,
     state: &AppState,
+    viewport_width: usize,
 ) {
     use chlodwig_gtk::app_state::DisplayBlock;
 
@@ -686,7 +954,7 @@ fn rerender_all_blocks(
             }
             DisplayBlock::AssistantText(text) => {
                 window::append_to_output(buffer, "\n");
-                let lines = chlodwig_core::render_markdown(text);
+                let lines = chlodwig_core::render_markdown_with_width(text, viewport_width);
                 chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
                 window::append_to_output(buffer, "\n");
             }
@@ -744,8 +1012,95 @@ fn rerender_all_blocks(
     // If there's streaming text in progress, render it too
     if !state.streaming_buffer.is_empty() {
         window::append_to_output(buffer, "\n");
-        let lines = chlodwig_core::render_markdown(&state.streaming_buffer);
+        let lines = chlodwig_core::render_markdown_with_width(&state.streaming_buffer, viewport_width);
         chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+    }
+}
+
+/// Render all display blocks from AppState into the TextBuffer (append).
+///
+/// Used after session restore (--resume or /resume) to populate the output
+/// area with the restored conversation. Unlike `rerender_all_blocks`, this
+/// does NOT clear the buffer first — it appends to whatever is already there.
+fn render_restored_blocks(
+    buffer: &gtk4::TextBuffer,
+    state: &AppState,
+    viewport_width: usize,
+) {
+    use chlodwig_gtk::app_state::DisplayBlock;
+
+    for block in &state.blocks {
+        match block {
+            DisplayBlock::UserMessage(text) => {
+                window::append_styled(buffer, &format!("\n▶ {text}\n"), "user");
+            }
+            DisplayBlock::AssistantText(text) => {
+                window::append_to_output(buffer, "\n");
+                let lines = chlodwig_core::render_markdown_with_width(text, viewport_width);
+                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+                window::append_to_output(buffer, "\n");
+            }
+            DisplayBlock::ToolUseStart { name, input } => {
+                if !state.show_tool_usage {
+                    continue;
+                }
+                if name == "Edit" {
+                    // Show diff-style display
+                    let file_path = input["file_path"].as_str().unwrap_or("(unknown)");
+                    window::append_styled(
+                        buffer,
+                        &format!("── Edit: {file_path} ──\n"),
+                        "tool",
+                    );
+                    if let Some(old) = input["old_string"].as_str() {
+                        for line in old.lines() {
+                            window::append_styled(buffer, &format!("- {line}\n"), "diff_remove");
+                        }
+                    }
+                    if let Some(new) = input["new_string"].as_str() {
+                        for line in new.lines() {
+                            window::append_styled(buffer, &format!("+ {line}\n"), "diff_add");
+                        }
+                    }
+                } else {
+                    window::append_styled(
+                        buffer,
+                        &format!("── Tool: {name} ──\n"),
+                        "tool",
+                    );
+                    if let Ok(pretty) = serde_json::to_string_pretty(input) {
+                        for line in pretty.lines().take(5) {
+                            window::append_styled(buffer, &format!("  {line}\n"), "result");
+                        }
+                    }
+                }
+            }
+            DisplayBlock::ToolResult { output, is_error } => {
+                if !state.show_tool_usage {
+                    continue;
+                }
+                let (prefix, tag) = if *is_error {
+                    ("ERROR", "error")
+                } else {
+                    ("OK", "result_ok")
+                };
+                window::append_styled(
+                    buffer,
+                    &format!("── [{prefix}] ──\n"),
+                    tag,
+                );
+                let preview = chlodwig_core::truncate_preview(output, 500);
+                for line in preview.lines().take(10) {
+                    window::append_styled(buffer, &format!("  {line}\n"), "result");
+                }
+            }
+            DisplayBlock::SystemMessage(msg) => {
+                window::append_styled(buffer, &format!("{msg}\n"), "system");
+            }
+            DisplayBlock::Error(msg) => {
+                window::append_styled(buffer, &format!("\n✗ Error: {msg}\n"), "error");
+            }
+        }
     }
 }
 
@@ -757,6 +1112,7 @@ fn rerender_streaming_markdown(
     buffer: &gtk4::TextBuffer,
     start_offset: i32,
     markdown_text: &str,
+    viewport_width: usize,
 ) {
     // Remove emoji overlays in the streaming range BEFORE deleting text.
     // Without this, old overlays accumulate — their marks collapse to the
@@ -773,7 +1129,7 @@ fn rerender_streaming_markdown(
 
     // Re-render as Markdown. After deletion, buffer end == start_offset,
     // so append_styled_lines inserts exactly where we want.
-    let lines = chlodwig_core::render_markdown(markdown_text);
+    let lines = chlodwig_core::render_markdown_with_width(markdown_text, viewport_width);
     chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
 }
 

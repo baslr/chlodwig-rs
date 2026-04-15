@@ -223,6 +223,87 @@ impl AppState {
         self.auto_scroll.scroll_to_bottom();
     }
 
+    /// Restore saved messages into display blocks.
+    ///
+    /// Uses `chlodwig_core::restore_messages()` to convert `Message` → `RestoredBlock`,
+    /// then maps each to the GTK `DisplayBlock`. This is the GTK counterpart of
+    /// the TUI's `restore_messages_to_display()` — both use the same core logic.
+    pub fn restore_messages(&mut self, messages: &[chlodwig_core::Message]) {
+        use chlodwig_core::RestoredBlock;
+
+        for rb in chlodwig_core::restore_messages(messages) {
+            match rb {
+                RestoredBlock::UserMessage(text) => {
+                    self.blocks.push(DisplayBlock::UserMessage(text));
+                }
+                RestoredBlock::AssistantText(text) => {
+                    self.blocks.push(DisplayBlock::AssistantText(text));
+                }
+                RestoredBlock::Thinking(_) => {
+                    // GTK doesn't display thinking blocks (yet)
+                }
+                RestoredBlock::ToolCall { name, input } => {
+                    self.blocks.push(DisplayBlock::ToolUseStart { name, input });
+                }
+                RestoredBlock::EditDiff {
+                    file_path,
+                    old_string,
+                    new_string,
+                } => {
+                    // Represent as a ToolUseStart with the Edit input
+                    self.blocks.push(DisplayBlock::ToolUseStart {
+                        name: "Edit".into(),
+                        input: serde_json::json!({
+                            "file_path": file_path,
+                            "old_string": old_string,
+                            "new_string": new_string,
+                        }),
+                    });
+                }
+                RestoredBlock::BashOutput { command, output } => {
+                    // Represent as a ToolResult (the GTK render_event_to_buffer
+                    // handles Bash rendering separately during live streaming,
+                    // but for restore we store the output directly)
+                    self.blocks.push(DisplayBlock::ToolResult {
+                        output: format!("$ {command}\n{output}"),
+                        is_error: false,
+                    });
+                }
+                RestoredBlock::ReadOutput { file_path, content } => {
+                    self.blocks.push(DisplayBlock::ToolResult {
+                        output: format!("── Read: {file_path} ──\n{content}"),
+                        is_error: false,
+                    });
+                }
+                RestoredBlock::WriteOutput {
+                    file_path,
+                    content: _,
+                    summary,
+                } => {
+                    self.blocks.push(DisplayBlock::ToolResult {
+                        output: format!("── Write: {file_path} ──\n{summary}"),
+                        is_error: false,
+                    });
+                }
+                RestoredBlock::GrepOutput { content, .. } => {
+                    self.blocks.push(DisplayBlock::ToolResult {
+                        output: content,
+                        is_error: false,
+                    });
+                }
+                RestoredBlock::ToolResult { is_error, output } => {
+                    self.blocks.push(DisplayBlock::ToolResult {
+                        output,
+                        is_error,
+                    });
+                }
+                RestoredBlock::SystemMessage(text) => {
+                    self.blocks.push(DisplayBlock::SystemMessage(text));
+                }
+            }
+        }
+    }
+
     /// Set a transient copy-feedback message (e.g. "Copied!").
     pub fn set_copy_feedback(&mut self, msg: &str) {
         self.copy_feedback = Some(msg.to_string());

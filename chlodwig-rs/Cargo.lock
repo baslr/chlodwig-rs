@@ -561,6 +561,7 @@ dependencies = [
  "chlodwig-api",
  "chlodwig-core",
  "chlodwig-tools",
+ "chrono",
  "dirs",
  "gtk4",
  "libadwaita",

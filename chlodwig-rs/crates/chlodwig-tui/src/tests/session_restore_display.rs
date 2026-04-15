@@ -200,8 +200,8 @@ fn test_restore_tool_result_truncated_at_utf8_boundary() {
 
 #[test]
 fn test_restore_non_read_tool_result_truncated_at_utf8_boundary() {
-    // Gotcha #16 still applies for non-Read tools (e.g. Bash, Grep).
-    // Their results are still shown as ToolResult with truncated preview.
+    // Gotcha #16 still applies for non-Read tools.
+    // Bash results are now displayed as BashOutput with full content.
     let mut long_text = "x".repeat(498);
     long_text.push('├'); // 3 bytes, bytes 498..501
     long_text.push_str(&"y".repeat(100));
@@ -215,12 +215,12 @@ fn test_restore_non_read_tool_result_truncated_at_utf8_boundary() {
     // This must NOT panic
     app.restore_messages_to_display(&messages);
 
-    let results: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolResult { .. })).collect();
+    let results: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::BashOutput { .. })).collect();
     assert_eq!(results.len(), 1);
     match &results[0] {
-        DisplayBlock::ToolResult { preview, .. } => {
-            assert!(preview.ends_with("..."), "Long result should be truncated");
-            assert!(preview.len() <= 503, "Truncated preview should be max ~503 bytes");
+        DisplayBlock::BashOutput { command, raw_output } => {
+            assert_eq!(command, "cat big");
+            assert_eq!(raw_output, &long_text, "BashOutput should store full content");
         }
         _ => unreachable!(),
     }
@@ -261,11 +261,12 @@ fn test_restore_mixed_content_in_single_assistant_message() {
 
     let texts: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::AssistantText(_))).collect();
     let calls: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolCall { .. })).collect();
-    let results: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolResult { .. })).collect();
+    // Bash (non-error) now produces BashOutput, not generic ToolResult
+    let results: Vec<_> = app.display_blocks.iter().filter(|b| matches!(b, DisplayBlock::BashOutput { .. })).collect();
 
     assert_eq!(texts.len(), 1, "Should have the text part");
     assert_eq!(calls.len(), 1, "Should have the tool call");
-    assert_eq!(results.len(), 1, "Should have the tool result");
+    assert_eq!(results.len(), 1, "Should have the bash output");
 }
 
 #[test]

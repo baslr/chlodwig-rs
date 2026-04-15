@@ -9,6 +9,7 @@ pub mod log_paths;
 pub mod markdown;
 pub mod messages;
 pub mod permissions;
+pub mod restore;
 pub mod session;
 pub mod status_line;
 pub mod subagent;
@@ -25,6 +26,7 @@ pub use markdown::{
 };
 pub use messages::*;
 pub use permissions::*;
+pub use restore::*;
 pub use session::*;
 pub use status_line::*;
 pub use subagent::*;

@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ansi_to_tui::IntoText;
-use chlodwig_core::{ContentBlock, Message, Role, SystemBlock, ToolResultContent};
+use chlodwig_core::{Message, SystemBlock};
 use unicode_width::UnicodeWidthChar;
 
 use crate::markdown;
@@ -1929,179 +1929,98 @@ impl App {
     /// Restore saved messages into `display_blocks` so the user can scroll
     /// back through the conversation after `/resume` or `--resume`.
     ///
-    /// Converts each `Message` + `ContentBlock` into the appropriate
-    /// `DisplayBlock` variant, matching what the event loop produces during
-    /// live streaming.
+    /// Uses `chlodwig_core::restore_messages()` to convert `Message` → `RestoredBlock`,
+    /// then maps each `RestoredBlock` to the TUI-specific `DisplayBlock`.
     pub(crate) fn restore_messages_to_display(&mut self, messages: &[Message]) {
-        // Build a map of tool_use_id → (tool_name, input) from assistant ToolUse blocks
-        // so we can identify Read/Write tool results during restore.
-        let mut tool_id_map: std::collections::HashMap<&str, (&str, &serde_json::Value)> =
-            std::collections::HashMap::new();
-        for msg in messages {
-            if msg.role == Role::Assistant {
-                for block in &msg.content {
-                    if let ContentBlock::ToolUse { id, name, input } = block {
-                        tool_id_map.insert(id.as_str(), (name.as_str(), input));
+        use chlodwig_core::RestoredBlock;
+
+        for rb in chlodwig_core::restore_messages(messages) {
+            match rb {
+                RestoredBlock::UserMessage(text) => {
+                    self.display_blocks.push(DisplayBlock::UserMessage(text));
+                }
+                RestoredBlock::AssistantText(text) => {
+                    self.display_blocks.push(DisplayBlock::AssistantText(text));
+                }
+                RestoredBlock::Thinking(text) => {
+                    self.display_blocks.push(DisplayBlock::Thinking(text));
+                }
+                RestoredBlock::ToolCall { name, input } => {
+                    let input_preview = chlodwig_core::truncate_preview(
+                        &serde_json::to_string(&input).unwrap_or_default(),
+                        200,
+                    );
+                    self.display_blocks.push(DisplayBlock::ToolCall {
+                        name,
+                        input_preview,
+                    });
+                }
+                RestoredBlock::EditDiff {
+                    file_path,
+                    old_string,
+                    new_string,
+                } => {
+                    // Try to build a contextual diff from the file on disk;
+                    // fall back to plain ToolCall if the file is gone.
+                    let input = serde_json::json!({
+                        "file_path": file_path,
+                        "old_string": old_string,
+                        "new_string": new_string,
+                    });
+                    if let Some(diff_block) = crate::event_loop::build_edit_diff(&input) {
+                        self.display_blocks.push(diff_block);
+                    } else {
+                        let input_preview = chlodwig_core::truncate_preview(
+                            &serde_json::to_string(&input).unwrap_or_default(),
+                            200,
+                        );
+                        self.display_blocks.push(DisplayBlock::ToolCall {
+                            name: "Edit".into(),
+                            input_preview,
+                        });
                     }
                 }
-            }
-        }
-
-        for msg in messages {
-            match msg.role {
-                Role::User => {
-                    for block in &msg.content {
-                        match block {
-                            ContentBlock::Text { text } => {
-                                self.display_blocks
-                                    .push(DisplayBlock::UserMessage(text.clone()));
-                            }
-                            ContentBlock::ToolResult {
-                                tool_use_id, content, is_error,
-                            } => {
-                                // Check if this was a Read tool result
-                                let is_read = tool_id_map
-                                    .get(tool_use_id.as_str())
-                                    .map(|(name, _)| *name == "Read")
-                                    .unwrap_or(false);
-
-                                if is_read && !is_error.unwrap_or(false) {
-                                    if let ToolResultContent::Text(t) = content {
-                                        let file_path = tool_id_map
-                                            .get(tool_use_id.as_str())
-                                            .and_then(|(_, input)| input["file_path"].as_str())
-                                            .unwrap_or("(unknown)")
-                                            .to_string();
-                                        self.display_blocks.push(DisplayBlock::ReadOutput {
-                                            file_path,
-                                            content: t.clone(),
-                                        });
-                                        continue;
-                                    }
-                                }
-
-                                // Check if this was a Write tool result
-                                let is_write = tool_id_map
-                                    .get(tool_use_id.as_str())
-                                    .map(|(name, _)| *name == "Write")
-                                    .unwrap_or(false);
-
-                                if is_write && !is_error.unwrap_or(false) {
-                                    if let ToolResultContent::Text(summary) = content {
-                                        let (file_path, file_content) = tool_id_map
-                                            .get(tool_use_id.as_str())
-                                            .map(|(_, input)| {
-                                                let fp = input["file_path"]
-                                                    .as_str()
-                                                    .unwrap_or("(unknown)")
-                                                    .to_string();
-                                                let fc = input["content"]
-                                                    .as_str()
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                (fp, fc)
-                                            })
-                                            .unwrap_or_else(|| ("(unknown)".into(), String::new()));
-                                        self.display_blocks.push(DisplayBlock::WriteOutput {
-                                            file_path,
-                                            content: file_content,
-                                            summary: summary.clone(),
-                                        });
-                                        continue;
-                                    }
-                                }
-
-                                // Check if this was a Grep tool result
-                                let is_grep = tool_id_map
-                                    .get(tool_use_id.as_str())
-                                    .map(|(name, _)| *name == "Grep")
-                                    .unwrap_or(false);
-
-                                if is_grep && !is_error.unwrap_or(false) {
-                                    if let ToolResultContent::Text(t) = content {
-                                        let output_mode = tool_id_map
-                                            .get(tool_use_id.as_str())
-                                            .and_then(|(_, input)| input["output_mode"].as_str())
-                                            .unwrap_or("files_with_matches")
-                                            .to_string();
-                                        self.display_blocks.push(DisplayBlock::GrepOutput {
-                                            content: t.clone(),
-                                            output_mode,
-                                        });
-                                        continue;
-                                    }
-                                }
-
-                                // Fallback: generic ToolResult display
-                                let preview = match content {
-                                    ToolResultContent::Text(t) => {
-                                        Self::truncate_preview(t, 500)
-                                    }
-                                    ToolResultContent::Blocks(blocks) => {
-                                        let text: String = blocks
-                                            .iter()
-                                            .filter_map(|b| match b {
-                                                chlodwig_core::ToolResultBlock::Text { text } => {
-                                                    Some(text.as_str())
-                                                }
-                                                _ => None,
-                                            })
-                                            .collect::<Vec<_>>()
-                                            .join("\n");
-                                        Self::truncate_preview(&text, 500)
-                                    }
-                                };
-                                self.display_blocks.push(DisplayBlock::ToolResult {
-                                    is_error: is_error.unwrap_or(false),
-                                    preview,
-                                });
-                            }
-                            // Image blocks in user messages are not displayed in restore
-                            _ => {}
-                        }
-                    }
+                RestoredBlock::BashOutput { command, output } => {
+                    self.display_blocks.push(DisplayBlock::BashOutput {
+                        command,
+                        raw_output: output,
+                    });
                 }
-                Role::Assistant => {
-                    for block in &msg.content {
-                        match block {
-                            ContentBlock::Text { text } => {
-                                self.display_blocks
-                                    .push(DisplayBlock::AssistantText(text.clone()));
-                            }
-                            ContentBlock::ToolUse { name, input, .. } => {
-                                if name == "Edit" {
-                                    // Try to build a diff display (file may no longer exist
-                                    // on restore, so fall back to generic ToolCall).
-                                    if let Some(diff_block) = crate::event_loop::build_edit_diff(input) {
-                                        self.display_blocks.push(diff_block);
-                                    } else {
-                                        let input_preview = Self::truncate_preview(
-                                            &serde_json::to_string(input).unwrap_or_default(),
-                                            200,
-                                        );
-                                        self.display_blocks.push(DisplayBlock::ToolCall {
-                                            name: name.clone(),
-                                            input_preview,
-                                        });
-                                    }
-                                } else {
-                                    let input_preview = Self::truncate_preview(
-                                        &serde_json::to_string(input).unwrap_or_default(),
-                                        200,
-                                    );
-                                    self.display_blocks.push(DisplayBlock::ToolCall {
-                                        name: name.clone(),
-                                        input_preview,
-                                    });
-                                }
-                            }
-                            ContentBlock::Thinking { thinking } => {
-                                self.display_blocks
-                                    .push(DisplayBlock::Thinking(thinking.clone()));
-                            }
-                            _ => {}
-                        }
-                    }
+                RestoredBlock::ReadOutput { file_path, content } => {
+                    self.display_blocks.push(DisplayBlock::ReadOutput {
+                        file_path,
+                        content,
+                    });
+                }
+                RestoredBlock::WriteOutput {
+                    file_path,
+                    content,
+                    summary,
+                } => {
+                    self.display_blocks.push(DisplayBlock::WriteOutput {
+                        file_path,
+                        content,
+                        summary,
+                    });
+                }
+                RestoredBlock::GrepOutput {
+                    content,
+                    output_mode,
+                } => {
+                    self.display_blocks.push(DisplayBlock::GrepOutput {
+                        content,
+                        output_mode,
+                    });
+                }
+                RestoredBlock::ToolResult { is_error, output } => {
+                    let preview = chlodwig_core::truncate_preview(&output, 500);
+                    self.display_blocks.push(DisplayBlock::ToolResult {
+                        is_error,
+                        preview,
+                    });
+                }
+                RestoredBlock::SystemMessage(text) => {
+                    self.display_blocks.push(DisplayBlock::SystemMessage(text));
                 }
             }
         }
@@ -2111,14 +2030,7 @@ impl App {
     /// Truncate a string at a safe UTF-8 char boundary.
     /// Gotcha #16: never slice at a hardcoded byte offset — always use `is_char_boundary()`.
     fn truncate_preview(s: &str, max_bytes: usize) -> String {
-        if s.len() <= max_bytes {
-            return s.to_string();
-        }
-        let mut end = max_bytes;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}...", &s[..end])
+        chlodwig_core::truncate_preview(s, max_bytes)
     }
 
     /// Build rendered lines for the system prompt view from stored blocks.

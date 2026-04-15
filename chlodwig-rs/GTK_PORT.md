@@ -54,14 +54,14 @@
 | Adaptive typewriter effect | ✅ char-by-char queue | ❌ | Could skip — GTK TextBuffer updates are smooth enough |
 | Permission dialog | ✅ modal overlay | ❌ | Need `GtkMessageDialog` or `AdwAlertDialog` |
 | UserQuestion dialog | ✅ modal with options + free-text | ❌ | Need `AdwAlertDialog` or custom dialog |
-| `/clear`, `/reset`, `/new` | ✅ | ❌ | — |
-| `/compact` | ✅ | ❌ | — |
-| `/help` | ✅ | ❌ | — |
-| `/sessions`, `/resume` | ✅ | ❌ | — |
-| `/save` | ✅ | ❌ | — |
+| `/clear`, `/reset`, `/new` | ✅ | ✅ | — |
+| `/compact` | ✅ | ✅ | Via `BackgroundCommand::Compact` → `compact_conversation()` |
+| `/help` | ✅ | ✅ | — |
+| `/sessions`, `/resume` | ✅ | ✅ | Via shared `chlodwig_core::restore_messages()` |
+| `/save` | ✅ | ✅ | Via `BackgroundCommand::SaveSession` |
 | `!` shell command | ✅ PTY-wrapped | ❌ | — |
-| Session persistence (auto-save) | ✅ atomic rename | ❌ | — |
-| Session resume (`--resume`) | ✅ CLI flag + TUI command | ❌ | — |
+| Session persistence (auto-save) | ✅ atomic rename | ✅ | Auto-save on `TurnComplete`/`CompactionComplete` via `BackgroundCommand::SaveSession` |
+| Session resume (`--resume`) | ✅ CLI flag + TUI command | ✅ | `--resume` flag + `/resume` command, shared `chlodwig_core::restore_messages()` |
 | `--print` headless mode | ✅ | n/a | Not applicable for GUI |
 | Tab bar (Prompt/Sys-Prompt/Requests/Constants/Git) | ✅ 5 tabs | ❌ | — |
 | System prompt viewer | ✅ | ❌ | — |
@@ -126,20 +126,20 @@ The LLM can call the `UserQuestion` tool to ask the user a question with optiona
 - [ ] **1.3.4** — Test: model calls `UserQuestion` → dialog appears → user responds → tool returns
 
 ### 1.4 Session Persistence
-- [ ] **1.4.1** — Auto-save on `TurnComplete` and `CompactionComplete` (via `chlodwig_core::save_session()`)
-- [ ] **1.4.2** — Generate `session_started_at` timestamp at startup
-- [ ] **1.4.3** — `--resume` CLI flag for `chlodwig-gtk` binary
-- [ ] **1.4.4** — Restore messages into display on resume (convert `Message` → `DisplayBlock`)
-- [ ] **1.4.5** — `/resume` command (typed in input, or menu action)
+- [x] **1.4.1** — Auto-save on `TurnComplete` and `CompactionComplete` (via `BackgroundCommand::SaveSession` → `chlodwig_core::save_session()`)
+- [x] **1.4.2** — Generate `session_started_at` timestamp at startup
+- [x] **1.4.3** — `--resume` CLI flag for `chlodwig-gtk` binary
+- [x] **1.4.4** — Restore messages into display on resume (convert `Message` → `DisplayBlock` via shared `chlodwig_core::restore_messages()`)
+- [x] **1.4.5** — `/resume` command (typed in input)
 
 ### 1.5 Commands
 - [x] **1.5.1** — Command parser: detect `/clear`, `/compact`, `/help`, `/sessions`, `/resume`, `/save`, `! <cmd>`, `exit`/`quit` before sending to API
 - [x] **1.5.2** — `/clear` — clear conversation + `ConversationState.messages`
-- [ ] **1.5.3** — `/compact [instructions]` — call `chlodwig_core::compact_conversation()`, display progress
+- [x] **1.5.3** — `/compact [instructions]` — call `chlodwig_core::compact_conversation()`, display progress
 - [x] **1.5.4** — `/help` — show commands + keybindings (in output area)
-- [ ] **1.5.5** — `/sessions` — list sessions in output area
-- [ ] **1.5.6** — `/resume`, `/resume <prefix>` — load session
-- [ ] **1.5.7** — `/save` — manual save
+- [x] **1.5.5** — `/sessions` — list sessions in output area
+- [x] **1.5.6** — `/resume`, `/resume <prefix>` — load session
+- [x] **1.5.7** — `/save` — manual save
 - [x] **1.5.8** — `! <cmd>` — execute shell command, display output (ANSI colors via `render_ansi_output`)
 - [x] **1.5.9** — `exit` / `quit` / `/exit` / `/quit` — close window
 

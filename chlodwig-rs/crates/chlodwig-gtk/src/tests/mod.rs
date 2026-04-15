@@ -6,6 +6,8 @@ mod copy_tests;
 mod emoji_tests;
 mod line_number_tests;
 mod notification_tests;
+mod session_restore_tests;
 mod streaming_tests;
 mod quit_shortcut_tests;
 mod startup_cwd_tests;
+mod table_viewport_tests;
