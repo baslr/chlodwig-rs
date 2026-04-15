@@ -4,9 +4,10 @@ set -euo pipefail
 # Build a macOS .app bundle for chlodwig-gtk.
 #
 # Usage:
-#   ./crates/chlodwig-gtk/macos/build_app.sh           # Build only
-#   ./crates/chlodwig-gtk/macos/build_app.sh --run      # Build and launch
-#   ./crates/chlodwig-gtk/macos/build_app.sh --skip-build  # Bundle only (binary already compiled)
+#   ./crates/chlodwig-gtk/macos/build_app.sh                    # Build only
+#   ./crates/chlodwig-gtk/macos/build_app.sh --install           # Build + copy to ~/Applications/
+#   ./crates/chlodwig-gtk/macos/build_app.sh --run               # Build and launch
+#   ./crates/chlodwig-gtk/macos/build_app.sh --skip-build        # Bundle only (binary already compiled)
 #
 # Creates: target/Chlodwig.app/
 #   Contents/
@@ -32,11 +33,13 @@ BINARY="$PROJECT_ROOT/target/release/chlodwig-gtk"
 
 SKIP_BUILD=false
 RUN_AFTER=false
+INSTALL=false
 
 for arg in "$@"; do
     case "$arg" in
         --skip-build) SKIP_BUILD=true ;;
         --run)        RUN_AFTER=true ;;
+        --install)    INSTALL=true ;;
         *)            echo "Unknown arg: $arg"; exit 1 ;;
     esac
 done
@@ -73,6 +76,16 @@ echo "==> Code signing (ad-hoc)..."
 codesign --force --sign - "$APP_DIR"
 
 echo "==> Done: $APP_DIR"
+
+# Install to ~/Applications/
+if [ "$INSTALL" = true ]; then
+    INSTALL_DIR="$HOME/Applications"
+    mkdir -p "$INSTALL_DIR"
+    echo "==> Installing to $INSTALL_DIR/${APP_NAME}.app..."
+    rm -rf "$INSTALL_DIR/${APP_NAME}.app"
+    cp -R "$APP_DIR" "$INSTALL_DIR/${APP_NAME}.app"
+    echo "==> Installed."
+fi
 
 # Optionally run
 if [ "$RUN_AFTER" = true ]; then
