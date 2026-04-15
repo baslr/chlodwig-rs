@@ -71,6 +71,19 @@ if [ -f "$SCRIPT_DIR/AppIcon.icns" ]; then
     cp "$SCRIPT_DIR/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 fi
 
+# Preserve FinderSync extension from installed app (if present).
+# build_app.sh doesn't know how to build the extension (install_finder_extension.sh does),
+# so we save it before overwriting and restore it after.
+INSTALL_DIR="$HOME/Applications"
+INSTALLED_APP="$INSTALL_DIR/${APP_NAME}.app"
+SAVED_APPEX=""
+if [ -d "$INSTALLED_APP/Contents/PlugIns/ChlodwigFinderSync.appex" ]; then
+    SAVED_APPEX="/tmp/chlodwig-saved-appex"
+    rm -rf "$SAVED_APPEX"
+    cp -R "$INSTALLED_APP/Contents/PlugIns/ChlodwigFinderSync.appex" "$SAVED_APPEX"
+    echo "==> Saved existing FinderSync extension for re-embedding."
+fi
+
 # Ad-hoc code sign (required for UNUserNotificationCenter on modern macOS)
 echo "==> Code signing (ad-hoc)..."
 codesign --force --sign - "$APP_DIR"
@@ -79,11 +92,28 @@ echo "==> Done: $APP_DIR"
 
 # Install to ~/Applications/
 if [ "$INSTALL" = true ]; then
-    INSTALL_DIR="$HOME/Applications"
     mkdir -p "$INSTALL_DIR"
     echo "==> Installing to $INSTALL_DIR/${APP_NAME}.app..."
     rm -rf "$INSTALL_DIR/${APP_NAME}.app"
     cp -R "$APP_DIR" "$INSTALL_DIR/${APP_NAME}.app"
+
+    # Restore FinderSync extension if we saved one
+    if [ -n "$SAVED_APPEX" ] && [ -d "$SAVED_APPEX" ]; then
+        echo "==> Re-embedding FinderSync extension..."
+        mkdir -p "$INSTALLED_APP/Contents/PlugIns"
+        cp -R "$SAVED_APPEX" "$INSTALLED_APP/Contents/PlugIns/ChlodwigFinderSync.appex"
+        rm -rf "$SAVED_APPEX"
+
+        # Re-sign with the Chlodwig CodeSign cert if available, else ad-hoc
+        CERT_NAME="Chlodwig CodeSign"
+        if security find-identity -v -p codesigning 2>/dev/null | grep -q "$CERT_NAME"; then
+            codesign --force --sign "$CERT_NAME" "$INSTALLED_APP"
+        else
+            codesign --force --sign - "$INSTALLED_APP"
+        fi
+        echo "==> FinderSync extension restored."
+    fi
+
     echo "==> Installed."
 fi
 
