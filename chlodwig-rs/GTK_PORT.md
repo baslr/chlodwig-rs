@@ -133,15 +133,15 @@ The LLM can call the `UserQuestion` tool to ask the user a question with optiona
 - [ ] **1.4.5** — `/resume` command (typed in input, or menu action)
 
 ### 1.5 Commands
-- [ ] **1.5.1** — Command parser: detect `/clear`, `/compact`, `/help`, `/sessions`, `/resume`, `/save`, `! <cmd>`, `exit`/`quit` before sending to API
-- [ ] **1.5.2** — `/clear` — clear conversation + `ConversationState.messages`
+- [x] **1.5.1** — Command parser: detect `/clear`, `/compact`, `/help`, `/sessions`, `/resume`, `/save`, `! <cmd>`, `exit`/`quit` before sending to API
+- [x] **1.5.2** — `/clear` — clear conversation + `ConversationState.messages`
 - [ ] **1.5.3** — `/compact [instructions]` — call `chlodwig_core::compact_conversation()`, display progress
-- [ ] **1.5.4** — `/help` — show commands + keybindings (in output area or dialog)
+- [x] **1.5.4** — `/help` — show commands + keybindings (in output area)
 - [ ] **1.5.5** — `/sessions` — list sessions in output area
 - [ ] **1.5.6** — `/resume`, `/resume <prefix>` — load session
 - [ ] **1.5.7** — `/save` — manual save
-- [ ] **1.5.8** — `! <cmd>` — execute shell command, display output (ANSI → plain text for now)
-- [ ] **1.5.9** — `exit` / `quit` / `/exit` / `/quit` — close window
+- [x] **1.5.8** — `! <cmd>` — execute shell command, display output (ANSI colors via `render_ansi_output`)
+- [x] **1.5.9** — `exit` / `quit` / `/exit` / `/quit` — close window
 
 ### 1.6 Error Handling & Robustness
 - [ ] **1.6.1** — Display spawned-task panics in the UI (don't silently hang — Gotcha #19)

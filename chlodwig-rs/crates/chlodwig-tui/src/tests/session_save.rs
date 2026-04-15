@@ -271,8 +271,8 @@ fn test_event_loop_has_sessions_command() {
 fn test_event_loop_has_resume_with_prefix() {
     let src = include_str!("../event_loop.rs");
     assert!(
-        src.contains("starts_with(\"/resume \")"),
-        "event_loop.rs must match /resume with a prefix argument"
+        src.contains("Command::Resume"),
+        "event_loop.rs must handle Command::Resume for /resume <prefix>"
     );
     assert!(
         src.contains("load_session_by_prefix"),
@@ -284,7 +284,7 @@ fn test_event_loop_has_resume_with_prefix() {
 fn test_event_loop_has_help_command() {
     let src = include_str!("../event_loop.rs");
     assert!(
-        src.contains("/help"),
-        "event_loop.rs must handle the /help command"
+        src.contains("Command::Help"),
+        "event_loop.rs must handle Command::Help"
     );
 }

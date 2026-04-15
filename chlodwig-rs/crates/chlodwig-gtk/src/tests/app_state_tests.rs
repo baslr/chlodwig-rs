@@ -961,3 +961,118 @@ fn test_tool_use_start_block_persists_for_rerender() {
     let tool_start_count = state.blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolUseStart { .. })).count();
     assert_eq!(tool_start_count, 1, "ToolUseStart must survive toggle");
 }
+
+// ── Command parser tests ──────────────────────────────────────────
+
+use crate::app_state::Command;
+
+#[test]
+fn test_parse_command_clear() {
+    assert_eq!(Command::parse("/clear"), Some(Command::Clear));
+    assert_eq!(Command::parse("/reset"), Some(Command::Clear));
+    assert_eq!(Command::parse("/new"), Some(Command::Clear));
+    assert_eq!(Command::parse("  /clear  "), Some(Command::Clear));
+}
+
+#[test]
+fn test_parse_command_help() {
+    assert_eq!(Command::parse("/help"), Some(Command::Help));
+    assert_eq!(Command::parse("/h"), Some(Command::Help));
+    assert_eq!(Command::parse("/?"), Some(Command::Help));
+    assert_eq!(Command::parse("help"), Some(Command::Help));
+    assert_eq!(Command::parse("  /help  "), Some(Command::Help));
+}
+
+#[test]
+fn test_parse_command_shell() {
+    assert_eq!(Command::parse("! ls -la"), Some(Command::Shell("ls -la".into())));
+    assert_eq!(Command::parse("!ls"), Some(Command::Shell("ls".into())));
+    assert_eq!(Command::parse("  ! echo hello  "), Some(Command::Shell("echo hello".into())));
+}
+
+#[test]
+fn test_parse_command_shell_empty() {
+    // "!" alone without a command is not a valid shell command
+    assert_eq!(Command::parse("!"), None);
+    assert_eq!(Command::parse("!  "), None);
+}
+
+#[test]
+fn test_parse_command_quit() {
+    assert_eq!(Command::parse("exit"), Some(Command::Quit));
+    assert_eq!(Command::parse("quit"), Some(Command::Quit));
+    assert_eq!(Command::parse("/exit"), Some(Command::Quit));
+    assert_eq!(Command::parse("/quit"), Some(Command::Quit));
+    assert_eq!(Command::parse("  exit  "), Some(Command::Quit));
+    assert_eq!(Command::parse("EXIT"), Some(Command::Quit));
+}
+
+#[test]
+fn test_parse_command_none_for_regular_text() {
+    assert_eq!(Command::parse("hello world"), None);
+    assert_eq!(Command::parse("what is rust?"), None);
+    assert_eq!(Command::parse(""), None);
+    assert_eq!(Command::parse("   "), None);
+}
+
+#[test]
+fn test_parse_command_case_insensitive() {
+    assert_eq!(Command::parse("/CLEAR"), Some(Command::Clear));
+    assert_eq!(Command::parse("/Help"), Some(Command::Help));
+    assert_eq!(Command::parse("QUIT"), Some(Command::Quit));
+}
+
+#[test]
+fn test_parse_command_shell_preserves_case() {
+    // Shell commands should preserve original case
+    assert_eq!(Command::parse("! Echo Hello"), Some(Command::Shell("Echo Hello".into())));
+}
+
+#[test]
+fn test_help_text_contains_commands() {
+    let help = crate::app_state::help_text();
+    assert!(help.contains("/clear"), "help must mention /clear");
+    assert!(help.contains("/help"), "help must mention /help");
+    assert!(help.contains("! <cmd>"), "help must mention shell");
+    assert!(help.contains("exit"), "help must mention exit");
+    assert!(help.contains("Cmd+Enter"), "help must mention Cmd+Enter");
+}
+
+#[test]
+fn test_execute_shell_command_ls() {
+    let (output, is_error) = crate::app_state::execute_shell_pty("echo hello");
+    assert!(!is_error);
+    assert!(output.contains("hello"), "output should contain 'hello', got: {output}");
+}
+
+#[test]
+fn test_execute_shell_command_failing() {
+    let (output, is_error) = crate::app_state::execute_shell_pty("false");
+    // `false` exits with 1 — not an execution error, but exit code != 0
+    // The output should contain the exit code
+    let _ = (output, is_error); // just verify no panic
+}
+
+#[test]
+fn test_execute_shell_command_nonexistent() {
+    let (output, is_error) = crate::app_state::execute_shell_pty("nonexistent_command_xyz_12345");
+    // Should not panic, should return some error output
+    assert!(!output.is_empty(), "error output should not be empty");
+    let _ = is_error;
+}
+
+#[test]
+fn test_clear_resets_state() {
+    let mut state = AppState::new("m".into());
+    state.handle_event(ConversationEvent::TextComplete("hello".into()));
+    state.input_tokens = 100;
+    state.output_tokens = 200;
+    state.turn_count = 5;
+    assert!(!state.blocks.is_empty());
+
+    state.clear();
+    assert!(state.blocks.is_empty());
+    assert_eq!(state.input_tokens, 0);
+    assert_eq!(state.output_tokens, 0);
+    assert_eq!(state.turn_count, 0);
+}

@@ -456,3 +456,25 @@ pub fn startup_cwd_message() -> String {
         .unwrap_or_else(|_| "unknown".to_string());
     format!("cwd: {cwd}")
 }
+
+// ── Command parser ────────────────────────────────────────────────
+// Re-exported from chlodwig-core to avoid duplication with the TUI.
+pub use chlodwig_core::{Command, COMMANDS_HELP, execute_shell_pty};
+
+/// GTK-specific help text: shared command list + GTK keybindings.
+pub fn help_text() -> String {
+    format!(
+        "{COMMANDS_HELP}
+
+⌨ Key Bindings:
+  Cmd+Enter             Submit input
+  Enter                 Insert newline
+  Cmd+Backspace         Delete to start of line
+  Option+Backspace      Delete word backward
+  Cmd+←/→               Move cursor to line start/end
+  Cmd+↑/↓               Move cursor to document start/end
+  Option+←/→            Move cursor word left/right
+  Cmd+V/C/X/A           Paste/Copy/Cut/Select All
+  Cmd+Q                 Quit"
+    )
+}

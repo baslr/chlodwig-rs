@@ -855,15 +855,15 @@ pub async fn run_tui_with_permissions(
                         app.history_index = None;
                         app.saved_input.clear();
 
-                        // Exit commands
-                        let trimmed = prompt.trim().to_lowercase();
-                        if trimmed == "exit" || trimmed == "quit" || trimmed == "/exit" || trimmed == "/quit" {
+                        // Parse commands via shared parser (chlodwig-core)
+                        if let Some(cmd) = chlodwig_core::Command::parse(&prompt) {
+                            use chlodwig_core::Command;
+                            match cmd {
+                                Command::Quit => {
                             app.should_quit = true;
                             break; // exit inner drain loop immediately
-                        }
-
-                        // /clear command (aliases: /reset, /new)
-                        if trimmed == "/clear" || trimmed == "/reset" || trimmed == "/new" {
+                                }
+                                Command::Clear => {
                             app.clear_conversation();
                             // Also clear ConversationState messages so the API starts fresh
                             let state_clone = state.clone();
@@ -874,21 +874,10 @@ pub async fn run_tui_with_permissions(
                             // Do NOT auto-save here — keeps the previous session
                             // intact so the user can /resume to get it back.
                             break; // exit inner drain loop
-                        }
-
-                        // /help command — show available commands and keybindings
-                        if trimmed == "/help" || trimmed == "/h" || trimmed == "help" || trimmed == "/?" {
-                            let help_text = "\
-📖 Commands:
-  /help, /?             Show this help
-  /sessions             List all saved sessions
-  /resume               Load the most recent session
-  /resume <prefix>      Load session by timestamp prefix (e.g. 2026_04_13)
-  /save                 Manually save the current session
-  /compact [instr]      Compact conversation history
-  /clear, /reset, /new  Clear conversation, start fresh
-  ! <cmd>               Execute shell command
-  exit, quit            Exit
+                                }
+                                Command::Help => {
+                            let help_text = format!(
+                                "{}
 
 ⌨ Key Bindings:
   Enter                 Submit input
@@ -901,17 +890,17 @@ pub async fn run_tui_with_permissions(
   Alt+d                 Delete word forward
   Ctrl+K                Delete word backward
   Ctrl+L                Delete word forward
-  Ctrl+C                Quit";
+  Ctrl+C                Quit",
+                                chlodwig_core::COMMANDS_HELP
+                            );
                             app.display_blocks.push(DisplayBlock::SystemMessage(
-                                help_text.into(),
+                                help_text,
                             ));
                             app.mark_dirty();
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
-                        }
-
-                        // /sessions command — list all saved sessions
-                        if trimmed == "/sessions" {
+                                }
+                                Command::Sessions => {
                             match chlodwig_core::list_sessions() {
                                 Ok(sessions_list) => {
                                     if sessions_list.is_empty() {
@@ -953,17 +942,11 @@ pub async fn run_tui_with_permissions(
                             app.mark_dirty();
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
-                        }
-
-                        // /resume command — load a saved session
-                        // /resume        → load the most recent session
-                        // /resume PREFIX → load session matching the prefix
-                        if trimmed == "/resume" || trimmed.starts_with("/resume ") {
-                            let prefix = trimmed.strip_prefix("/resume").unwrap().trim();
-                            let load_result = if prefix.is_empty() {
-                                chlodwig_core::load_latest_session()
-                            } else {
-                                chlodwig_core::load_session_by_prefix(prefix)
+                                }
+                                Command::Resume(prefix) => {
+                            let load_result = match &prefix {
+                                None => chlodwig_core::load_latest_session(),
+                                Some(p) => chlodwig_core::load_session_by_prefix(p),
                             };
                             match load_result {
                                 Ok(Some(snapshot)) => {
@@ -992,10 +975,9 @@ pub async fn run_tui_with_permissions(
                                     });
                                 }
                                 Ok(None) => {
-                                    let msg = if prefix.is_empty() {
-                                        "No saved session found.".to_string()
-                                    } else {
-                                        format!("No session matching prefix '{prefix}' found. Use /sessions to list available sessions.")
+                                    let msg = match &prefix {
+                                        None => "No saved session found.".to_string(),
+                                        Some(p) => format!("No session matching prefix '{p}' found. Use /sessions to list available sessions."),
                                     };
                                     app.display_blocks.push(DisplayBlock::SystemMessage(msg));
                                 }
@@ -1008,10 +990,8 @@ pub async fn run_tui_with_permissions(
                             app.mark_dirty();
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
-                        }
-
-                        // /save command — manually persist the current session
-                        if trimmed == "/save" {
+                                }
+                                Command::Save => {
                             trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at);
                             app.display_blocks.push(DisplayBlock::SystemMessage(
                                 "✓ Session saved.".into(),
@@ -1019,16 +999,8 @@ pub async fn run_tui_with_permissions(
                             app.mark_dirty();
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
-                        }
-
-                        // /compact command
-                        if trimmed == "/compact" || trimmed.starts_with("/compact ") {
-                            let custom_instructions = if trimmed.len() > 8 {
-                                Some(prompt.trim()[8..].trim().to_string())
-                            } else {
-                                None
-                            };
-
+                                }
+                                Command::Compact(custom_instructions) => {
                             app.is_loading = true;
                             app.scroll_to_bottom();
                             app.mark_dirty();
@@ -1054,74 +1026,28 @@ pub async fn run_tui_with_permissions(
                                 let _ = tx.send(ConversationEvent::TurnComplete);
                             });
                             break; // exit inner drain loop
-                        }
-
-                        // ! shell command — execute bash and show output
-                        if trimmed.starts_with("! ") {
-                            let cmd = prompt.trim()[2..].trim();
-                            if !cmd.is_empty() {
-                                app.prompt_history.push(prompt.clone());
-                                let now = chrono::Local::now()
-                                    .format("%d.%m.%Y  %H:%M:%S")
-                                    .to_string();
-                                app.display_blocks
-                                    .push(DisplayBlock::Timestamp(now));
-
-                                // Wrap in `script` to provide a PTY so
-                                // programs emit ANSI color codes.
-                                let mut command = std::process::Command::new("script");
-                                if cfg!(target_os = "macos") {
-                                    command
-                                        .arg("-q")
-                                        .arg("/dev/null")
-                                        .arg("bash")
-                                        .arg("-c")
-                                        .arg(cmd);
-                                } else {
-                                    command
-                                        .arg("-q")
-                                        .arg("-c")
-                                        .arg(format!(
-                                            "bash -c '{}'",
-                                            cmd.replace('\'', "'\\''")
-                                        ))
-                                        .arg("/dev/null");
                                 }
-                                command.env("GIT_PAGER", "cat");
-                                let output = command.output();
+                                Command::Shell(cmd_str) => {
+                            app.prompt_history.push(prompt.clone());
+                            let now = chrono::Local::now()
+                                .format("%d.%m.%Y  %H:%M:%S")
+                                .to_string();
+                            app.display_blocks
+                                .push(DisplayBlock::Timestamp(now));
 
-                                let raw_output = match output {
-                                    Ok(out) => {
-                                        // With PTY, stderr is merged into stdout
-                                        let stdout =
-                                            String::from_utf8_lossy(&out.stdout);
-                                        if stdout.is_empty() {
-                                            let stderr =
-                                                String::from_utf8_lossy(&out.stderr);
-                                            if stderr.is_empty() {
-                                                format!(
-                                                    "(exit code: {})",
-                                                    out.status.code().unwrap_or(-1)
-                                                )
-                                            } else {
-                                                stderr.into_owned()
-                                            }
-                                        } else {
-                                            stdout.into_owned()
-                                        }
-                                    }
-                                    Err(e) => format!("Error: {e}"),
-                                };
+                            let (raw_output, _is_error) = chlodwig_core::execute_shell_pty(&cmd_str);
 
-                                app.display_blocks.push(DisplayBlock::BashOutput {
-                                    command: cmd.to_string(),
-                                    raw_output,
-                                });
-                                app.mark_dirty();
-                                app.scroll_to_bottom();
-                            }
+                            app.display_blocks.push(DisplayBlock::BashOutput {
+                                command: cmd_str,
+                                raw_output,
+                            });
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
                             break; // exit inner drain loop
-                        }
+                                }
+                            } // match cmd
+                        } else {
+                        // --- Not a command: regular prompt ---
 
                         // Save prompt to history (not for commands)
                         app.prompt_history.push(prompt.clone());
@@ -1173,7 +1099,8 @@ pub async fn run_tui_with_permissions(
                             let _ = tx.send(ConversationEvent::TurnComplete);
                         });
                         conversation_handle = Some(handle);
-                    }
+                        } // else (regular prompt)
+                    } // KeyCode::Enter
 
                     // Permission dialog keys
                     KeyCode::Char('y') if app.pending_permission.is_some() => {

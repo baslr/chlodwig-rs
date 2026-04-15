@@ -17,6 +17,14 @@ use chlodwig_core::{
 use chlodwig_gtk::app_state::AppState;
 use chlodwig_gtk::window;
 
+/// Commands sent from the GTK main loop to the background conversation task.
+enum BackgroundCommand {
+    /// Submit a user prompt to the API.
+    Prompt { text: String, pre_turn_usage: chlodwig_core::TurnUsage },
+    /// Clear the conversation (reset `ConversationState.messages`).
+    ClearMessages,
+}
+
 fn main() -> glib::ExitCode {
     // Extend PATH with well-known directories (MacPorts, Homebrew, Cargo, etc.)
     // so child processes (git, rg, cargo, ...) can be found in restricted
@@ -116,8 +124,8 @@ fn activate(app: &libadwaita::Application) {
     let (event_tx, event_rx) = mpsc::unbounded_channel::<ConversationEvent>();
     let event_rx = Rc::new(RefCell::new(Some(event_rx)));
 
-    // Channel: submit prompt from GTK → background task
-    let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<(String, chlodwig_core::TurnUsage)>();
+    // Channel: commands from GTK → background task
+    let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<BackgroundCommand>();
 
     // Set initial status
     window::update_status(&widgets.status_left_label, &widgets.status_right_label, &app_state.borrow());
@@ -147,6 +155,69 @@ fn activate(app: &libadwaita::Application) {
         }
         input_buf.set_text("");
 
+        // --- Command parsing (intercept before sending to API) ---
+        if let Some(cmd) = chlodwig_gtk::app_state::Command::parse(&text) {
+            use chlodwig_gtk::app_state::Command;
+            match cmd {
+                Command::Clear => {
+                    // Clear UI state
+                    {
+                        let mut state = state_for_submit.borrow_mut();
+                        state.clear();
+                    }
+                    // Clear the output buffer
+                    let mut s = output_buf_for_submit.start_iter();
+                    let mut e = output_buf_for_submit.end_iter();
+                    chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf_for_submit, 0);
+                    output_buf_for_submit.delete(&mut s, &mut e);
+                    // Show CWD again
+                    let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+                    window::append_styled(&output_buf_for_submit, &format!("{cwd_msg}\n"), "system");
+                    // Tell background task to clear ConversationState.messages
+                    let _ = prompt_tx_clone.send(BackgroundCommand::ClearMessages);
+                    window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
+                    return;
+                }
+                Command::Help => {
+                    let help = chlodwig_gtk::app_state::help_text();
+                    window::append_styled(&output_buf_for_submit, &format!("\n{help}\n"), "system");
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    return;
+                }
+                Command::Shell(cmd_str) => {
+                    // Show the command
+                    window::append_styled(&output_buf_for_submit, &format!("\n$ {cmd_str}\n"), "user");
+
+                    // Execute synchronously (blocking — fine for simple commands)
+                    let (output, _is_error) = chlodwig_gtk::app_state::execute_shell_pty(&cmd_str);
+
+                    // Render output with ANSI colors
+                    render_ansi_output(&output_buf_for_submit, &output);
+
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    return;
+                }
+                Command::Quit => {
+                    if let Some(app) = gtk4::gio::Application::default() {
+                        app.quit();
+                    }
+                    return;
+                }
+                // Not yet implemented in GTK — show info message
+                Command::Compact(_) | Command::Sessions | Command::Resume(_) | Command::Save => {
+                    window::append_styled(
+                        &output_buf_for_submit,
+                        &format!("\nCommand not yet available in GTK. Use the TUI version.\n"),
+                        "system",
+                    );
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    return;
+                }
+            }
+        }
+
+        // --- Regular prompt (send to API) ---
+
         // Update AppState — force auto-scroll on (explicit user action)
         {
             let mut state = state_for_submit.borrow_mut();
@@ -161,7 +232,7 @@ fn activate(app: &libadwaita::Application) {
 
         // Send to background conversation loop (include turn_usage for auto-compact check)
         let turn_usage = state_for_submit.borrow().turn_usage.clone();
-        let _ = prompt_tx_clone.send((text, turn_usage));
+        let _ = prompt_tx_clone.send(BackgroundCommand::Prompt { text, pre_turn_usage: turn_usage });
     };
 
     // Send button click
@@ -539,7 +610,13 @@ fn activate(app: &libadwaita::Application) {
 
             let permission = chlodwig_core::AutoApprovePrompter;
 
-            while let Some((prompt, pre_turn_usage)) = prompt_rx.recv().await {
+            while let Some(bg_cmd) = prompt_rx.recv().await {
+                match bg_cmd {
+                    BackgroundCommand::ClearMessages => {
+                        conv_state.messages.clear();
+                        continue;
+                    }
+                    BackgroundCommand::Prompt { text: prompt, pre_turn_usage } => {
                 // Auto-compact if context is too large
                 chlodwig_core::auto_compact_if_needed(
                     &pre_turn_usage,
@@ -572,6 +649,8 @@ fn activate(app: &libadwaita::Application) {
                         let _ = event_tx_bg.send(ConversationEvent::Error(e.to_string()));
                     }
                 }
+                    } // BackgroundCommand::Prompt
+                } // match bg_cmd
             }
         });
     });
