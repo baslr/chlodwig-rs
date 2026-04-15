@@ -808,7 +808,9 @@ fn render_highlighted_line(
                 if span.text.is_empty() {
                     continue;
                 }
-                let tag_name = highlight_tag_name(span.fg, span.bold, span.italic);
+                let tag_name = chlodwig_gtk::md_renderer::highlight_tag_name_for(
+                    span.fg, span.bold, span.italic,
+                );
                 if tag_table.lookup(&tag_name).is_none() {
                     let mut builder = gtk4::TextTag::builder()
                         .name(&tag_name)
@@ -837,21 +839,6 @@ fn render_highlighted_line(
             window::append_styled(buffer, line, fallback_tag);
         }
     }
-}
-
-/// Generate a unique tag name for a syntax highlight span.
-fn highlight_tag_name(fg: Option<(u8, u8, u8)>, bold: bool, italic: bool) -> String {
-    let color_part = match fg {
-        Some((r, g, b)) => format!("{r}_{g}_{b}"),
-        None => "def".into(),
-    };
-    let style_part = match (bold, italic) {
-        (true, true) => "_bi",
-        (true, false) => "_b",
-        (false, true) => "_i",
-        (false, false) => "",
-    };
-    format!("hl_{color_part}{style_part}")
 }
 
 /// Render ANSI-colored text into a GtkTextBuffer.

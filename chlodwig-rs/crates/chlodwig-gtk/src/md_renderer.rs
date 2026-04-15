@@ -71,6 +71,40 @@ pub fn heading_scale(level: u8) -> f64 {
     }
 }
 
+// ── Syntax highlighting for code blocks (GTK-independent) ──────────
+
+use chlodwig_core::highlight::HighlightSpan;
+
+/// Check whether a `StyledLine` is a code block content line that should
+/// receive syntax highlighting. True when `code_info` is set and the line
+/// has at least 2 spans (border + code text).
+pub fn should_highlight_code_line(line: &StyledLine) -> bool {
+    line.code_info.is_some() && line.spans.len() >= 2
+}
+
+/// Highlight a single line of code using the shared syntect highlighter.
+/// Returns `None` if the language is not recognized.
+pub fn highlight_code_line(lang: &str, code: &str) -> Option<Vec<HighlightSpan>> {
+    chlodwig_core::highlight::highlight_line(lang, code)
+}
+
+/// Generate a unique tag name for a syntax highlight span.
+/// Used by both the GTK code-block highlighter and `render_highlighted_line`
+/// in `main.rs`.
+pub fn highlight_tag_name_for(fg: Option<(u8, u8, u8)>, bold: bool, italic: bool) -> String {
+    let color_part = match fg {
+        Some((r, g, b)) => format!("{r}_{g}_{b}"),
+        None => "def".into(),
+    };
+    let style_part = match (bold, italic) {
+        (true, true) => "_bi",
+        (true, false) => "_b",
+        (false, true) => "_i",
+        (false, false) => "",
+    };
+    format!("hl_{color_part}{style_part}")
+}
+
 // ── GTK-dependent rendering ─────────────────────────────────────────
 
 #[cfg(feature = "gtk-ui")]
@@ -122,6 +156,10 @@ mod gtk_impl {
     /// Render a slice of `StyledLine`s into a GTK TextBuffer at the end.
     /// Each span gets its own TextTag based on its MdStyle.
     /// Emoji characters are rendered as CoreText bitmaps and inserted as paintables.
+    ///
+    /// Lines with `code_info` set (fenced code block content) get syntect-based
+    /// syntax highlighting: the border span is kept as-is, the code spans are
+    /// replaced with per-token colored tags.
     pub fn append_styled_lines(buffer: &gtk4::TextBuffer, lines: &[StyledLine]) {
         for (line_idx, line) in lines.iter().enumerate() {
             if line_idx > 0 {
@@ -129,10 +167,85 @@ mod gtk_impl {
                 buffer.insert(&mut end, "\n");
             }
 
-            for span in &line.spans {
-                let tag_name = ensure_tag(buffer, &span.style);
-                insert_text_with_emoji_and_tag(buffer, &span.text, &tag_name, span.style.monospace);
+            if should_highlight_code_line(line) {
+                let lang = line.code_info.as_deref().unwrap_or("");
+                // spans[0] is the border ("  │ "), spans[1..] is the code text
+                let border_span = &line.spans[0];
+                let border_tag = ensure_tag(buffer, &border_span.style);
+                insert_text_with_emoji_and_tag(
+                    buffer,
+                    &border_span.text,
+                    &border_tag,
+                    border_span.style.monospace,
+                );
+
+                // Concatenate all code spans
+                let code_text: String =
+                    line.spans[1..].iter().map(|s| s.text.as_str()).collect();
+
+                // Try syntax highlighting
+                match highlight_code_line(lang, &code_text) {
+                    Some(spans) if !spans.is_empty() => {
+                        insert_highlighted_spans(buffer, &spans);
+                    }
+                    _ => {
+                        // Fallback: render as plain monospace code
+                        for span in &line.spans[1..] {
+                            let tag_name = ensure_tag(buffer, &span.style);
+                            insert_text_with_emoji_and_tag(
+                                buffer,
+                                &span.text,
+                                &tag_name,
+                                span.style.monospace,
+                            );
+                        }
+                    }
+                }
+            } else {
+                for span in &line.spans {
+                    let tag_name = ensure_tag(buffer, &span.style);
+                    insert_text_with_emoji_and_tag(
+                        buffer,
+                        &span.text,
+                        &tag_name,
+                        span.style.monospace,
+                    );
+                }
             }
+        }
+    }
+
+    /// Insert syntax-highlighted spans into the buffer.
+    /// Each span gets a dynamically created monospace tag with the appropriate
+    /// foreground color, bold, and italic attributes.
+    fn insert_highlighted_spans(
+        buffer: &gtk4::TextBuffer,
+        spans: &[HighlightSpan],
+    ) {
+        let tag_table = buffer.tag_table();
+        for span in spans {
+            if span.text.is_empty() {
+                continue;
+            }
+            let tag_name = highlight_tag_name_for(span.fg, span.bold, span.italic);
+            if tag_table.lookup(&tag_name).is_none() {
+                let mut builder = gtk4::TextTag::builder()
+                    .name(&tag_name)
+                    .family("monospace");
+                if let Some((r, g, b)) = span.fg {
+                    builder =
+                        builder.foreground(&format!("#{r:02x}{g:02x}{b:02x}"));
+                }
+                if span.bold {
+                    builder = builder.weight(700);
+                }
+                if span.italic {
+                    builder = builder.style(gtk4::pango::Style::Italic);
+                }
+                tag_table.add(&builder.build());
+            }
+            // Insert text with emoji support (code can contain emoji in strings)
+            insert_text_with_emoji_and_tag(buffer, &span.text, &tag_name, true);
         }
     }
 
@@ -351,5 +464,113 @@ mod tests {
         assert!(md_color_to_hex(MdColor::DarkGray).is_some());
         assert!(md_color_to_hex(MdColor::Yellow).is_some());
         assert!(md_color_to_hex(MdColor::Magenta).is_some());
+    }
+
+    // ── Syntax highlighting in code blocks ───────────────────────────
+
+    #[test]
+    fn test_highlight_code_line_returns_spans_for_known_lang() {
+        let spans = highlight_code_line("rust", "let x = 42;");
+        assert!(spans.is_some(), "rust should produce highlighted spans");
+        let spans = spans.unwrap();
+        assert!(!spans.is_empty());
+        // At least one span should have a foreground color
+        assert!(
+            spans.iter().any(|s| s.fg.is_some()),
+            "should have colored spans"
+        );
+    }
+
+    #[test]
+    fn test_highlight_code_line_returns_none_for_unknown_lang() {
+        let spans = highlight_code_line("nonexistent_xyz_lang", "hello world");
+        assert!(spans.is_none());
+    }
+
+    #[test]
+    fn test_highlight_code_line_returns_none_for_empty_lang() {
+        let spans = highlight_code_line("", "hello");
+        assert!(spans.is_none());
+    }
+
+    #[test]
+    fn test_highlight_code_line_python_def() {
+        let spans = highlight_code_line("python", "def foo():");
+        assert!(spans.is_some());
+        let spans = spans.unwrap();
+        // "def" keyword should be present in the text
+        let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(full_text.contains("def"), "should contain 'def': {full_text}");
+    }
+
+    #[test]
+    fn test_highlight_code_line_preserves_text_content() {
+        let input = "fn main() { println!(\"hello\"); }";
+        let spans = highlight_code_line("rust", input);
+        assert!(spans.is_some());
+        let full_text: String = spans.unwrap().iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(full_text, input, "highlighted text must match input exactly");
+    }
+
+    #[test]
+    fn test_should_highlight_code_line_true_for_code_info() {
+        use chlodwig_core::markdown::{StyledSpan, StyledLine};
+        let line = StyledLine {
+            spans: vec![
+                StyledSpan { text: "  │ ".into(), style: MdStyle::default() },
+                StyledSpan { text: "let x = 42;".into(), style: MdStyle::default().monospace() },
+            ],
+            wrap_prefix: None,
+            code_info: Some("rust".into()),
+        };
+        assert!(should_highlight_code_line(&line));
+    }
+
+    #[test]
+    fn test_should_highlight_code_line_false_without_code_info() {
+        use chlodwig_core::markdown::StyledLine;
+        let line = StyledLine::plain("hello");
+        assert!(!should_highlight_code_line(&line));
+    }
+
+    #[test]
+    fn test_should_highlight_code_line_false_with_single_span() {
+        use chlodwig_core::markdown::{StyledSpan, StyledLine};
+        // code_info set but only 1 span (header/footer) → don't highlight
+        let line = StyledLine {
+            spans: vec![
+                StyledSpan { text: "  ┌─ rust ─".into(), style: MdStyle::default() },
+            ],
+            wrap_prefix: None,
+            code_info: Some("rust".into()),
+        };
+        assert!(!should_highlight_code_line(&line));
+    }
+
+    #[test]
+    fn test_highlight_tag_name_format() {
+        let name = highlight_tag_name_for(Some((255, 128, 0)), true, false);
+        assert!(name.starts_with("hl_"), "should start with hl_: {name}");
+        assert!(name.contains("255"), "should contain red: {name}");
+        assert!(name.contains("128"), "should contain green: {name}");
+        assert!(name.contains("_b"), "should contain bold marker: {name}");
+    }
+
+    #[test]
+    fn test_highlight_tag_name_no_color() {
+        let name = highlight_tag_name_for(None, false, false);
+        assert!(name.contains("def"), "should contain 'def' for default: {name}");
+    }
+
+    #[test]
+    fn test_highlight_tag_name_italic() {
+        let name = highlight_tag_name_for(Some((0, 0, 0)), false, true);
+        assert!(name.contains("_i"), "should contain italic marker: {name}");
+    }
+
+    #[test]
+    fn test_highlight_tag_name_bold_italic() {
+        let name = highlight_tag_name_for(Some((0, 0, 0)), true, true);
+        assert!(name.contains("_bi"), "should contain bold+italic marker: {name}");
     }
 }
