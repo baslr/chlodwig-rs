@@ -24,20 +24,20 @@ struct Cli {
     #[arg(long = "print", short = 'p')]
     print_mode: Option<String>,
 
-    /// Model to use (defaults to config.json or github/claude-opus-4.6)
+    /// Model to use (defaults to env CHLODWIG_MODEL, config.json, or github/claude-opus-4.6)
     #[arg(long)]
     model: Option<String>,
 
     /// Max tokens for response
-    #[arg(long, default_value = "16384")]
-    max_tokens: u32,
+    #[arg(long)]
+    max_tokens: Option<u32>,
 
     /// System prompt override
     #[arg(long)]
     system_prompt: Option<String>,
 
-    /// API key (defaults to ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN env var)
-    #[arg(long, env = "ANTHROPIC_API_KEY", hide_env_values = true)]
+    /// API key (defaults to ANTHROPIC_API_KEY env var or config.json)
+    #[arg(long, hide_env_values = true)]
     api_key: Option<String>,
 
     /// Skip tool permission prompts (auto-approve all)
@@ -49,7 +49,7 @@ struct Cli {
     resume: bool,
 
     /// API base URL override
-    #[arg(long, env = "ANTHROPIC_BASE_URL")]
+    #[arg(long)]
     base_url: Option<String>,
 }
 
@@ -247,14 +247,20 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    let api_key = chlodwig_core::resolve_api_key(cli.api_key.clone())
-        .unwrap_or_else(|msg| {
-            eprintln!("{msg}");
-            std::process::exit(1);
-        });
+    // Resolve configuration: config.json → env vars → CLI args
+    let config = chlodwig_core::resolve_config(chlodwig_core::ConfigOverrides {
+        api_key: cli.api_key.clone(),
+        model: cli.model.clone(),
+        base_url: cli.base_url.clone(),
+        max_tokens: cli.max_tokens,
+    })
+    .unwrap_or_else(|msg| {
+        eprintln!("{msg}");
+        std::process::exit(1);
+    });
 
-    let mut client = AnthropicClient::new(api_key);
-    if let Some(ref base_url) = cli.base_url {
+    let mut client = AnthropicClient::new(config.api_key);
+    if let Some(ref base_url) = config.base_url {
         client = client.with_base_url(base_url.clone());
     }
 
@@ -268,15 +274,11 @@ async fn main() -> Result<()> {
         system_prompt.iter().map(|b| b.text.len()).sum::<usize>()
     );
 
-    let default_model = "github/claude-opus-4.6".to_string();
-    let model = chlodwig_core::resolve_model(cli.model.clone())
-        .unwrap_or(default_model);
-
     let state = ConversationState {
         messages: Vec::new(),
-        model,
+        model: config.model,
         system_prompt,
-        max_tokens: cli.max_tokens,
+        max_tokens: config.max_tokens,
         tools,
         tool_context: ToolContext {
             working_directory: std::env::current_dir()?,

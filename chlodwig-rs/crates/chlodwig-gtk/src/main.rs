@@ -83,10 +83,19 @@ fn activate(app: &libadwaita::Application) {
     #[cfg(target_os = "macos")]
     chlodwig_gtk::notification::request_notification_permission();
 
+    // --- Resolve configuration (config.json → env vars → no CLI args for GTK) ---
+    let resolved_config = match chlodwig_core::resolve_config(chlodwig_core::ConfigOverrides::default()) {
+        Ok(cfg) => cfg,
+        Err(msg) => {
+            eprintln!("Configuration error: {msg}");
+            // Show error in a dialog? For now, just fail.
+            return;
+        }
+    };
+
     // --- Shared state ---
     let app_state = Rc::new(RefCell::new(AppState::new(
-        std::env::var("CHLODWIG_MODEL")
-            .unwrap_or_else(|_| "github/claude-opus-4.6".into()),
+        resolved_config.model.clone(),
     )));
 
     // Channel: conversation events from background task → GTK main loop
@@ -433,27 +442,15 @@ fn activate(app: &libadwaita::Application) {
 
     // --- Start background conversation loop ---
     let event_tx_bg = event_tx.clone();
+    let bg_config = resolved_config; // move into background thread
 
     // Spawn the background task that runs the conversation loop.
     // The Tokio runtime is created inside the thread (not shared with GTK).
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
         rt.block_on(async move {
-            let api_key = match chlodwig_core::resolve_api_key(None) {
-                Ok(key) => key,
-                Err(msg) => {
-                    let _ = event_tx_bg.send(ConversationEvent::Error(msg));
-                    return;
-                }
-            };
-            let default_model = "github/claude-opus-4.6".to_string();
-            let model = std::env::var("CHLODWIG_MODEL").ok();
-            let model = chlodwig_core::resolve_model(model)
-                .unwrap_or(default_model);
-            let base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
-
-            let mut client = chlodwig_api::AnthropicClient::new(api_key);
-            if let Some(url) = base_url {
+            let mut client = chlodwig_api::AnthropicClient::new(bg_config.api_key);
+            if let Some(url) = bg_config.base_url {
                 client = client.with_base_url(url);
             }
             let api_client: Arc<dyn chlodwig_core::ApiClient> = Arc::new(client);
@@ -463,9 +460,9 @@ fn activate(app: &libadwaita::Application) {
 
             let mut conv_state = ConversationState {
                 messages: Vec::new(),
-                model,
+                model: bg_config.model,
                 system_prompt,
-                max_tokens: 16384,
+                max_tokens: bg_config.max_tokens,
                 tools,
                 tool_context: ToolContext {
                     working_directory: std::env::current_dir().unwrap_or_default(),
