@@ -343,6 +343,28 @@ fn format_summary(text: &str) -> String {
     re_blanks.replace_all(result.trim(), "\n\n").to_string()
 }
 
+/// Auto-compact the conversation if the context window exceeds `AUTO_COMPACT_THRESHOLD`.
+///
+/// Returns `true` if compaction was performed, `false` if skipped.
+/// Errors from compaction are logged but not propagated — the caller
+/// should continue with the turn anyway.
+pub async fn auto_compact_if_needed(
+    turn_usage: &crate::TurnUsage,
+    state: &mut ConversationState,
+    api_client: &dyn ApiClient,
+    event_tx: &mpsc::UnboundedSender<ConversationEvent>,
+) -> bool {
+    if turn_usage.context_window_size() <= AUTO_COMPACT_THRESHOLD {
+        return false;
+    }
+    tracing::info!("Auto-compacting: context {} tokens exceeds threshold {}",
+        turn_usage.context_window_size(), AUTO_COMPACT_THRESHOLD);
+    if let Err(e) = compact_conversation(state, api_client, event_tx, None).await {
+        tracing::warn!("Auto-compaction failed: {e}");
+    }
+    true
+}
+
 /// Compact the conversation history by summarizing it via the API.
 ///
 /// Replaces `state.messages` with a summary user message + acknowledgement.
@@ -2509,5 +2531,83 @@ mod tests {
             // Duration should be very small in a mock (sub-millisecond), but non-negative
             assert!(*duration_ms < 5000, "Duration should be reasonable, got: {duration_ms}ms");
         }
+    }
+
+    #[tokio::test]
+    async fn test_auto_compact_if_needed_skips_when_below_threshold() {
+        let turn_usage = crate::TurnUsage {
+            input_tokens: 10_000,
+            output_tokens: 1_000,
+            cache_tokens: 0,
+        };
+        let mut state = ConversationState {
+            messages: Vec::new(),
+            model: "m".into(),
+            system_prompt: "s".into(),
+            max_tokens: 1000,
+            tools: Vec::new(),
+            tool_context: crate::ToolContext {
+                working_directory: std::path::PathBuf::new(),
+                timeout: std::time::Duration::from_secs(1),
+            },
+        };
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let mock = MockApiClient { responses: std::sync::Mutex::new(vec![]) };
+        let compacted = auto_compact_if_needed(&turn_usage, &mut state, &mock, &tx).await;
+        assert!(!compacted, "should not compact when below threshold");
+    }
+
+    #[tokio::test]
+    async fn test_auto_compact_if_needed_triggers_when_above_threshold() {
+        let turn_usage = crate::TurnUsage {
+            input_tokens: AUTO_COMPACT_THRESHOLD + 1,
+            output_tokens: 0,
+            cache_tokens: 0,
+        };
+        // Need at least 2 messages for compaction to proceed
+        let mut state = ConversationState {
+            messages: vec![
+                Message { role: Role::User, content: vec![ContentBlock::Text { text: "hello".into() }] },
+                Message { role: Role::Assistant, content: vec![ContentBlock::Text { text: "hi".into() }] },
+            ],
+            model: "m".into(),
+            system_prompt: "s".into(),
+            max_tokens: 1000,
+            tools: Vec::new(),
+            tool_context: crate::ToolContext {
+                working_directory: std::path::PathBuf::new(),
+                timeout: std::time::Duration::from_secs(1),
+            },
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        // Mock returns a summary response for the compaction call
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![vec![
+                SseEvent::MessageStart {
+                    message: MessageStartData {
+                        id: "msg1".into(),
+                        model: "m".into(),
+                        usage: Some(Usage { input_tokens: 100, output_tokens: 50,
+                            cache_creation_input_tokens: None, cache_read_input_tokens: None }),
+                    },
+                },
+                SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockData::Text { text: String::new() } },
+                SseEvent::ContentBlockDelta { index: 0, delta: DeltaData::TextDelta { text: "Summary.".into() } },
+                SseEvent::ContentBlockStop { index: 0 },
+                SseEvent::MessageDelta { delta: MessageDeltaData { stop_reason: Some("end_turn".into()) },
+                    usage: Some(Usage { input_tokens: 100, output_tokens: 50,
+                        cache_creation_input_tokens: None, cache_read_input_tokens: None }) },
+                SseEvent::MessageStop,
+            ]]),
+        };
+        let compacted = auto_compact_if_needed(&turn_usage, &mut state, &mock, &tx).await;
+        assert!(compacted, "should compact when above threshold");
+
+        // Should have emitted CompactionStarted and CompactionComplete
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(events.iter().any(|e| matches!(e, ConversationEvent::CompactionStarted)),
+            "should emit CompactionStarted");
+        assert!(events.iter().any(|e| matches!(e, ConversationEvent::CompactionComplete { .. })),
+            "should emit CompactionComplete");
     }
 }

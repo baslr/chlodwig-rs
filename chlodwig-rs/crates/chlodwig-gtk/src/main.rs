@@ -103,7 +103,7 @@ fn activate(app: &libadwaita::Application) {
     let event_rx = Rc::new(RefCell::new(Some(event_rx)));
 
     // Channel: submit prompt from GTK → background task
-    let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<String>();
+    let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<(String, chlodwig_core::TurnUsage)>();
 
     // Set initial status
     window::update_status(&widgets.status_left_label, &widgets.status_right_label, &app_state.borrow());
@@ -141,8 +141,9 @@ fn activate(app: &libadwaita::Application) {
         window::scroll_to_bottom(&scroll_for_submit);
         window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
 
-        // Send to background conversation loop
-        let _ = prompt_tx_clone.send(text);
+        // Send to background conversation loop (include turn_usage for auto-compact check)
+        let turn_usage = state_for_submit.borrow().turn_usage.clone();
+        let _ = prompt_tx_clone.send((text, turn_usage));
     };
 
     // Send button click
@@ -472,7 +473,15 @@ fn activate(app: &libadwaita::Application) {
 
             let permission = chlodwig_core::AutoApprovePrompter;
 
-            while let Some(prompt) = prompt_rx.recv().await {
+            while let Some((prompt, pre_turn_usage)) = prompt_rx.recv().await {
+                // Auto-compact if context is too large
+                chlodwig_core::auto_compact_if_needed(
+                    &pre_turn_usage,
+                    &mut conv_state,
+                    api_client.as_ref(),
+                    &event_tx_bg,
+                ).await;
+
                 // Add user message
                 conv_state.messages.push(Message {
                     role: Role::User,

@@ -576,7 +576,7 @@ impl App {
     }
 
     pub(crate) fn context_window_size(&self) -> u64 {
-        self.total_input_tokens + self.total_output_tokens
+        self.turn_usage.context_window_size()
     }
 
     /// Format a Duration as a human-readable timer string.

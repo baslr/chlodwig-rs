@@ -193,9 +193,9 @@ impl AppState {
         self.streaming_dirty = false;
     }
 
-    /// Total context window size (input + output tokens).
+    /// Total context window size (input + output + cache tokens from the last API response).
     pub fn context_window_size(&self) -> u64 {
-        self.input_tokens + self.output_tokens
+        self.turn_usage.context_window_size()
     }
 
     /// Clear the conversation.

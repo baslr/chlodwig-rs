@@ -1134,11 +1134,9 @@ pub async fn run_tui_with_permissions(
                         app.scroll_to_bottom(); // auto-scroll
                         app.mark_dirty();
                         app.turn_count += 1;
+                        let pre_turn_usage = app.turn_usage.clone();
                         app.turn_usage.reset();
                         app.stream_chunks = 0;
-
-                        // Check if auto-compact is needed before the turn
-                        let needs_compact = app.total_input_tokens > chlodwig_core::AUTO_COMPACT_THRESHOLD;
 
                         // Spawn conversation turn
                         let state_clone = state.clone();
@@ -1150,22 +1148,12 @@ pub async fn run_tui_with_permissions(
                             let mut state_guard = state_clone.lock().await;
 
                             // Auto-compact if context is too large
-                            if needs_compact {
-                                tracing::info!(
-                                    "Auto-compacting: context tokens exceed threshold"
-                                );
-                                if let Err(e) = chlodwig_core::compact_conversation(
-                                    &mut state_guard,
-                                    api_clone.as_ref(),
-                                    &tx,
-                                    None,
-                                )
-                                .await
-                                {
-                                    tracing::warn!("Auto-compaction failed: {e}");
-                                    // Continue anyway — the turn might still work
-                                }
-                            }
+                            chlodwig_core::auto_compact_if_needed(
+                                &pre_turn_usage,
+                                &mut state_guard,
+                                api_clone.as_ref(),
+                                &tx,
+                            ).await;
 
                             state_guard.messages.push(chlodwig_core::Message {
                                 role: chlodwig_core::Role::User,
