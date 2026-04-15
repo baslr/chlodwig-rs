@@ -36,12 +36,12 @@
 | Tool call display | ✅ | ✅ | GTK shows tool name + JSON preview, Edit shows red/green diff |
 | Tool result display | ✅ | ✅ | Specialized rendering for Bash, Read, Write, Grep + generic fallback |
 | Markdown rendering | ✅ pulldown-cmark + syntect | ✅ | `md_renderer.rs` — headings, bold, italic, code, lists, tables |
-| Syntax highlighting (code blocks) | ✅ syntect → ratatui styles | ❌ | Need syntect → GtkTextTag or GtkSourceView |
-| Syntax highlighting (Read output) | ✅ per-file extension | ❌ | — |
-| Syntax highlighting (Write output) | ✅ per-file extension | ❌ | — |
+| Syntax highlighting (code blocks) | ✅ syntect → ratatui styles | ⚠️ | Shared `highlight.rs` in core; not yet wired into Markdown fenced code blocks |
+| Syntax highlighting (Read output) | ✅ per-file extension | ✅ | Via `chlodwig_core::highlight::lang_from_path` + `render_highlighted_line` |
+| Syntax highlighting (Write output) | ✅ per-file extension | ✅ | Via `chlodwig_core::highlight::lang_from_path` + `render_highlighted_line` |
 | Syntax highlighting (Grep output) | ✅ content mode | ❌ | — |
-| Edit diff display (red/green) | ✅ side-by-side diff | ✅ | `render_event_to_buffer` shows `-`/`+` lines with `diff_remove`/`diff_add` tags |
-| Bash output (ANSI colors) | ✅ `ansi_to_tui` | ❌ | Need ANSI→Pango or VTE widget |
+| Edit diff display (red/green) | ✅ side-by-side diff | ✅ | Diff lines syntax-highlighted per file extension |
+| Bash output (ANSI colors) | ✅ `ansi_to_tui` | ✅ | `ansi.rs` parser + dynamic GtkTextTags; PAGER=cat prevents pager tofu |
 | Timestamps | ✅ per-message | ❌ | — |
 | Adaptive typewriter effect | ✅ char-by-char queue | ❌ | Could skip — GTK TextBuffer updates are smooth enough |
 | Permission dialog | ✅ modal overlay | ❌ | Need `GtkMessageDialog` or `AdwAlertDialog` |
@@ -156,10 +156,10 @@ The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK vers
 - [x] **2.1.6** — Test: send AssistantText with markdown, verify styled output
 
 ### 2.2 Syntax Highlighting
-- [ ] **2.2.1** — **Option A**: `syntect` → `GtkTextTag` per highlighted region (same highlighter as TUI)
+- [x] **2.2.1** — **Option A**: `syntect` via shared `chlodwig_core::highlight` module (same highlighter as TUI)
 - [ ] **2.2.2** — **Option B**: `GtkSourceView` with `GtkSourceBuffer` — built-in language support
-- [ ] **2.2.3** — Apply to fenced code blocks in assistant responses
-- [ ] **2.2.4** — Apply to Read/Write tool output (per file extension)
+- [ ] **2.2.3** — Apply to fenced code blocks in assistant responses (Markdown renderer)
+- [x] **2.2.4** — Apply to Read/Write tool output (per file extension)
 - [ ] **2.2.5** — Apply to Grep content-mode output
 
 ### 2.3 Edit Diff Display

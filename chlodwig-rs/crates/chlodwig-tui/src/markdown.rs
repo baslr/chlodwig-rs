@@ -107,84 +107,16 @@ fn styled_line_to_rendered(line: &StyledLine) -> RenderedLine {
 
 // ── Code highlighting ────────────────────────────────────────────────
 
-/// Map common language aliases to tokens that syntect's default bundle knows.
-fn resolve_lang_alias(lang: &str) -> &str {
-    match lang {
-        "typescript" | "ts" | "tsx" | "jsx" => "javascript",
-        "shell" | "zsh" | "fish" => "bash",
-        "yml" => "yaml",
-        "dockerfile" => "bash",
-        "toml" => "yaml",
-        "jsonc" => "json",
-        "cxx" | "cpp" | "cc" | "c++" | "hpp" => "c++",
-        "cs" | "csharp" => "c#",
-        "kt" | "kotlin" => "java",
-        "swift" => "objective-c",
-        other => other,
-    }
-}
-
-/// Derive a syntax-highlighting language token from a file path's extension.
-pub(crate) fn lang_from_path(path: &str) -> &'static str {
-    let ext = match std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
-        Some(e) => e,
-        None => return "",
-    };
-
-    let ss = syntax_set();
-
-    if let Some(syn) = ss.find_syntax_by_extension(ext) {
-        return match syn.name.as_str() {
-            "Rust" => "rust",
-            "Python" => "python",
-            "JavaScript" | "JavaScript (Babel)" => "javascript",
-            "JSON" => "json",
-            "YAML" => "yaml",
-            "HTML" => "html",
-            "CSS" => "css",
-            "C" => "c",
-            "C++" => "c++",
-            "C#" => "c#",
-            "Java" => "java",
-            "Go" => "go",
-            "Ruby" => "ruby",
-            "Shell-Unix-Generic" | "Bourne Again Shell (bash)" => "bash",
-            "SQL" => "sql",
-            "Markdown" => "markdown",
-            "XML" => "xml",
-            "Perl" => "perl",
-            "PHP" => "php",
-            "Lua" => "lua",
-            "Scala" => "scala",
-            "Haskell" => "haskell",
-            "Erlang" => "erlang",
-            "Clojure" => "clojure",
-            "R" => "r",
-            "Makefile" => "makefile",
-            "Objective-C" => "objective-c",
-            _ => "plain",
-        };
-    }
-
-    match ext {
-        "ts" | "tsx" | "jsx" => "javascript",
-        "toml" => "yaml",
-        "dockerfile" | "zsh" | "fish" => "bash",
-        "kt" | "kotlin" => "java",
-        "swift" => "objective-c",
-        "jsonc" => "json",
-        "cxx" | "cc" | "hpp" => "c++",
-        "cs" | "csharp" => "c#",
-        _ => "",
-    }
-}
+// Language alias resolution and path-based language detection are shared
+// with the GTK backend via chlodwig_core::highlight.
+pub(crate) use chlodwig_core::highlight::lang_from_path;
 
 /// Highlight a code block with syntect. Falls back to plain styling for unknown languages.
 pub(crate) fn highlight_code(lang: &str, code: &str) -> Vec<RenderedLine> {
     let ss = syntax_set();
     let th = theme();
 
-    let resolved = if lang.is_empty() { "" } else { resolve_lang_alias(lang) };
+    let resolved = if lang.is_empty() { "" } else { chlodwig_core::highlight::resolve_lang_alias(lang) };
     let syntax = if resolved.is_empty() {
         None
     } else {

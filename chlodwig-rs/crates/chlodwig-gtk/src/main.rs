@@ -522,22 +522,27 @@ fn render_event_to_buffer(
             tool_id_to_info.insert(id.clone(), (name.clone(), input.clone()));
 
             if name == "Edit" {
-                // Special Edit rendering: show diff-style header
+                // Special Edit rendering: show diff-style header with syntax highlighting
                 let file_path = input["file_path"].as_str().unwrap_or("(unknown)");
+                let lang = chlodwig_core::highlight::lang_from_path(file_path);
                 window::append_styled(
                     buffer,
                     &format!("── Edit: {file_path} ──\n"),
                     "tool",
                 );
-                // Show old → new context
+                // Show old → new context with syntax highlighting
                 if let Some(old) = input["old_string"].as_str() {
                     for line in old.lines() {
-                        window::append_styled(buffer, &format!("- {line}\n"), "diff_remove");
+                        window::append_styled(buffer, "- ", "diff_remove");
+                        render_highlighted_line(buffer, lang, line, "diff_remove");
+                        window::append_to_output(buffer, "\n");
                     }
                 }
                 if let Some(new) = input["new_string"].as_str() {
                     for line in new.lines() {
-                        window::append_styled(buffer, &format!("+ {line}\n"), "diff_add");
+                        window::append_styled(buffer, "+ ", "diff_add");
+                        render_highlighted_line(buffer, lang, line, "diff_add");
+                        window::append_to_output(buffer, "\n");
                     }
                 }
             } else {
@@ -576,11 +581,12 @@ fn render_event_to_buffer(
                     window::append_to_output(buffer, "\n");
                     return;
                 }
-                // Read → ── Read: path ── + numbered lines (monospace, aligned)
+                // Read → ── Read: path ── + numbered lines with syntax highlighting
                 if tool_name == "Read" && !is_error {
                     let file_path = tool_input["file_path"]
                         .as_str()
                         .unwrap_or("(unknown)");
+                    let lang = chlodwig_core::highlight::lang_from_path(file_path);
                     window::append_styled(
                         buffer,
                         &format!("── Read: {file_path} ──\n"),
@@ -590,7 +596,8 @@ fn render_event_to_buffer(
                     for (gutter, code) in &formatted {
                         if !gutter.is_empty() {
                             window::append_styled(buffer, gutter, "line_number");
-                            window::append_styled(buffer, &format!("{code}\n"), "code");
+                            render_highlighted_line(buffer, lang, code, "code");
+                            window::append_to_output(buffer, "\n");
                         } else {
                             window::append_styled(buffer, &format!("  {code}\n"), "result");
                         }
@@ -598,11 +605,12 @@ fn render_event_to_buffer(
                     window::append_to_output(buffer, "\n");
                     return;
                 }
-                // Write → ── Write: path ── + summary + numbered lines
+                // Write → ── Write: path ── + summary + numbered lines with syntax highlighting
                 if tool_name == "Write" && !is_error {
                     let file_path = tool_input["file_path"]
                         .as_str()
                         .unwrap_or("(unknown)");
+                    let lang = chlodwig_core::highlight::lang_from_path(file_path);
                     let content = tool_input["content"]
                         .as_str()
                         .unwrap_or("");
@@ -616,7 +624,7 @@ fn render_event_to_buffer(
                         &format!("  {text}\n"),
                         "result",
                     );
-                    // Show file content with line numbers (monospace)
+                    // Show file content with line numbers + syntax highlighting
                     let line_count = content.lines().count();
                     let num_width = if line_count == 0 {
                         1
@@ -630,7 +638,8 @@ fn render_event_to_buffer(
                             &format!(" {:>width$} │ ", line_num, width = num_width),
                             "line_number",
                         );
-                        window::append_styled(buffer, &format!("{code_line}\n"), "code");
+                        render_highlighted_line(buffer, lang, code_line, "code");
+                        window::append_to_output(buffer, "\n");
                     }
                     window::append_to_output(buffer, "\n");
                     return;
@@ -775,6 +784,74 @@ fn load_claude_md() -> Option<String> {
     }
 
     if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
+}
+
+/// Render a single line with syntax highlighting into a GtkTextBuffer.
+///
+/// If the language is recognized by syntect, each token gets a dynamically
+/// created GtkTextTag with the appropriate foreground color. Falls back to
+/// the `fallback_tag` (e.g. "code") for unrecognized languages.
+///
+/// `fallback_tag` is also applied as a base style (monospace, diff color, etc.)
+/// when no syntax highlighting is available.
+fn render_highlighted_line(
+    buffer: &gtk4::TextBuffer,
+    lang: &str,
+    line: &str,
+    fallback_tag: &str,
+) {
+    let spans = chlodwig_core::highlight::highlight_line(lang, line);
+    match spans {
+        Some(spans) if !spans.is_empty() => {
+            let tag_table = buffer.tag_table();
+            for span in &spans {
+                if span.text.is_empty() {
+                    continue;
+                }
+                let tag_name = highlight_tag_name(span.fg, span.bold, span.italic);
+                if tag_table.lookup(&tag_name).is_none() {
+                    let mut builder = gtk4::TextTag::builder()
+                        .name(&tag_name)
+                        .family("monospace");
+                    if let Some((r, g, b)) = span.fg {
+                        builder = builder.foreground(&format!("#{r:02x}{g:02x}{b:02x}"));
+                    }
+                    if span.bold {
+                        builder = builder.weight(700);
+                    }
+                    if span.italic {
+                        builder = builder.style(gtk4::pango::Style::Italic);
+                    }
+                    tag_table.add(&builder.build());
+                }
+                let mut end_iter = buffer.end_iter();
+                let start_offset = end_iter.offset();
+                buffer.insert(&mut end_iter, &span.text);
+                let start_iter = buffer.iter_at_offset(start_offset);
+                let end_iter = buffer.end_iter();
+                buffer.apply_tag_by_name(&tag_name, &start_iter, &end_iter);
+            }
+        }
+        _ => {
+            // Fallback: no highlighting, use the base tag
+            window::append_styled(buffer, line, fallback_tag);
+        }
+    }
+}
+
+/// Generate a unique tag name for a syntax highlight span.
+fn highlight_tag_name(fg: Option<(u8, u8, u8)>, bold: bool, italic: bool) -> String {
+    let color_part = match fg {
+        Some((r, g, b)) => format!("{r}_{g}_{b}"),
+        None => "def".into(),
+    };
+    let style_part = match (bold, italic) {
+        (true, true) => "_bi",
+        (true, false) => "_b",
+        (false, true) => "_i",
+        (false, false) => "",
+    };
+    format!("hl_{color_part}{style_part}")
 }
 
 /// Render ANSI-colored text into a GtkTextBuffer.

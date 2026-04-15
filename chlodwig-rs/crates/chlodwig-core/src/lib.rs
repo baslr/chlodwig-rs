@@ -2,6 +2,7 @@
 
 pub mod config;
 pub mod conversation;
+pub mod highlight;
 pub mod log_paths;
 pub mod markdown;
 pub mod messages;
