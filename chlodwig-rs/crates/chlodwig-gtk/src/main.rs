@@ -84,6 +84,15 @@ fn main() -> glib::ExitCode {
 fn activate(app: &libadwaita::Application) {
     let (window, widgets) = window::build_window(app);
 
+    // Cmd+Q → quit application
+    let quit_action = gtk4::gio::SimpleAction::new("quit", None);
+    let app_for_quit = app.clone();
+    quit_action.connect_activate(move |_, _| {
+        app_for_quit.quit();
+    });
+    app.add_action(&quit_action);
+    app.set_accels_for_action("app.quit", &["<Meta>q"]);
+
     // Request notification permission on macOS (shows system dialog on first launch).
     #[cfg(target_os = "macos")]
     chlodwig_gtk::notification::request_notification_permission();
