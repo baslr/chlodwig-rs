@@ -5,19 +5,24 @@
 
 use gtk4::prelude::*;
 use gtk4::glib;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 use chlodwig_core::{
-    ConversationEvent, ConversationState, ContentBlock, Message, Role, SystemBlock, ToolContext,
+    ConversationEvent, ConversationState, ContentBlock, Message, Role, ToolContext,
 };
 use chlodwig_gtk::app_state::AppState;
 use chlodwig_gtk::window;
 
 fn main() -> glib::ExitCode {
+    // Extend PATH with well-known directories (MacPorts, Homebrew, Cargo, etc.)
+    // so child processes (git, rg, cargo, ...) can be found in restricted
+    // environments (e.g. macOS GUI launch, minimal login shells).
+    chlodwig_core::enrich_path();
+
     // Force the Cairo GSK renderer on macOS. The default GskNglRenderer has a
     // texture-loading bug ("GLD_TEXTURE_INDEX_2D is unloadable") that makes
     // glyphs invisible. The Cairo renderer bypasses OpenGL and renders text
@@ -154,6 +159,27 @@ fn activate(app: &libadwaita::Application) {
     let submit_clone = submit.clone();
     widgets.send_button.connect_clicked(move |_| {
         submit_clone();
+    });
+
+    // Char offset in the TextBuffer where the current streaming Markdown starts.
+    // -1 means "no streaming in progress".
+    // Shared with the toggle button handler so it can reset when re-rendering.
+    let streaming_start_offset: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
+
+    // --- Wire up Toggle Tool Usage button ---
+    let state_for_toggle = app_state.clone();
+    let output_buf_for_toggle = widgets.output_buffer.clone();
+    let streaming_offset_for_toggle = streaming_start_offset.clone();
+    widgets.toggle_tool_button.connect_clicked(move |btn| {
+        let mut state = state_for_toggle.borrow_mut();
+        state.show_tool_usage = !state.show_tool_usage;
+        btn.set_label(if state.show_tool_usage { "Hide Tools" } else { "Show Tools" });
+
+        // Re-render entire output from blocks (no scroll — user wants to keep reading).
+        // Reset streaming_start_offset so the event loop doesn't use a stale offset
+        // after we cleared and re-built the buffer.
+        rerender_all_blocks(&output_buf_for_toggle, &state);
+        streaming_offset_for_toggle.set(-1);
     });
 
     // Cmd+Enter (macOS) or Ctrl+Enter (Linux/Windows) to send.
@@ -334,9 +360,6 @@ fn activate(app: &libadwaita::Application) {
     // Track tool_use_id → (tool_name, input) so ToolResult can identify Read/Bash/Write/Grep
     let mut tool_id_to_info: std::collections::HashMap<String, (String, serde_json::Value)> =
         std::collections::HashMap::new();
-    // Char offset in the TextBuffer where the current streaming Markdown starts.
-    // -1 means "no streaming in progress".
-    let mut streaming_start_offset: i32 = -1;
     // Snapshot of the streaming buffer text for Markdown rendering.
     // Filled from AppState on each tick; used for the per-tick re-render.
     let mut last_streaming_snapshot = String::new();
@@ -375,10 +398,12 @@ fn activate(app: &libadwaita::Application) {
                 }
 
                 // Render non-streaming events into the TextBuffer
+                let show_tools = state.show_tool_usage;
                 render_event_to_buffer(
                     &output_buf,
                     &event,
                     &mut tool_id_to_info,
+                    show_tools,
                 );
                 state.handle_event(event)
             };
@@ -399,16 +424,16 @@ fn activate(app: &libadwaita::Application) {
             // Case 1: ongoing streaming with new deltas
             if state.streaming_dirty && !streaming_finalized {
                 // First delta in this streaming run: record start offset
-                if streaming_start_offset < 0 {
+                if streaming_start_offset.get() < 0 {
                     if output_buf.end_iter().offset() > 0 {
                         window::append_to_output(&output_buf, "\n");
                     }
-                    streaming_start_offset = output_buf.end_iter().offset();
+                    streaming_start_offset.set(output_buf.end_iter().offset());
                 }
 
                 rerender_streaming_markdown(
                     &output_buf,
-                    streaming_start_offset,
+                    streaming_start_offset.get(),
                     &state.streaming_buffer,
                 );
                 last_streaming_snapshot = state.streaming_buffer.clone();
@@ -418,19 +443,19 @@ fn activate(app: &libadwaita::Application) {
 
             // Case 2: streaming was finalized this tick
             if streaming_finalized {
-                if streaming_start_offset < 0 {
+                if streaming_start_offset.get() < 0 {
                     // Edge case: TextComplete arrived in the same tick as the first delta
                     if output_buf.end_iter().offset() > 0 {
                         window::append_to_output(&output_buf, "\n");
                     }
-                    streaming_start_offset = output_buf.end_iter().offset();
+                    streaming_start_offset.set(output_buf.end_iter().offset());
                 }
 
                 let final_text = finalized_text.as_deref().unwrap_or("");
-                rerender_streaming_markdown(&output_buf, streaming_start_offset, final_text);
+                rerender_streaming_markdown(&output_buf, streaming_start_offset.get(), final_text);
                 window::append_to_output(&output_buf, "\n");
 
-                streaming_start_offset = -1;
+                streaming_start_offset.set(-1);
                 last_streaming_snapshot.clear();
                 state.acknowledge_streaming_render();
                 needs_scroll = true;
@@ -485,7 +510,10 @@ fn activate(app: &libadwaita::Application) {
             }
             let api_client: Arc<dyn chlodwig_core::ApiClient> = Arc::new(client);
 
-            let system_prompt = build_system_prompt();
+            let system_prompt = chlodwig_core::build_system_prompt(
+                None,
+                chlodwig_core::UiContext::Gui,
+            );
             let tools = chlodwig_tools::builtin_tools();
 
             let mut conv_state = ConversationState {
@@ -542,6 +570,97 @@ fn activate(app: &libadwaita::Application) {
     window.present();
 }
 
+/// Re-render all display blocks from AppState into the TextBuffer.
+///
+/// Called when the user toggles "Hide/Show Tools" to rebuild the entire output.
+/// Clears the buffer (including emoji overlays) and re-renders each block,
+/// skipping `ToolUseStart` and `ToolResult` when `state.show_tool_usage` is false.
+fn rerender_all_blocks(
+    buffer: &gtk4::TextBuffer,
+    state: &AppState,
+) {
+    use chlodwig_gtk::app_state::DisplayBlock;
+
+    // Clear the entire buffer including emoji overlays
+    chlodwig_gtk::emoji_overlay::clear_overlays_from(buffer, 0);
+    let mut start = buffer.start_iter();
+    let mut end = buffer.end_iter();
+    buffer.delete(&mut start, &mut end);
+
+    // Show CWD at the top (same as startup)
+    let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+    window::append_styled(buffer, &format!("{cwd_msg}\n"), "system");
+
+    for block in &state.blocks {
+        match block {
+            DisplayBlock::UserMessage(text) => {
+                window::append_styled(buffer, &format!("\n▶ {text}\n"), "user");
+            }
+            DisplayBlock::AssistantText(text) => {
+                window::append_to_output(buffer, "\n");
+                let lines = chlodwig_core::render_markdown(text);
+                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+                window::append_to_output(buffer, "\n");
+            }
+            DisplayBlock::ToolUseStart { name, input } => {
+                if !state.show_tool_usage {
+                    continue;
+                }
+                window::append_styled(
+                    buffer,
+                    &format!("── Tool: {name} ──\n"),
+                    "tool",
+                );
+                if let Ok(pretty) = serde_json::to_string_pretty(input) {
+                    for line in pretty.lines().take(5) {
+                        window::append_styled(buffer, &format!("  {line}\n"), "result");
+                    }
+                }
+            }
+            DisplayBlock::ToolResult { output, is_error } => {
+                if !state.show_tool_usage {
+                    continue;
+                }
+                let (prefix, tag) = if *is_error {
+                    ("ERROR", "error")
+                } else {
+                    ("OK", "result_ok")
+                };
+                window::append_styled(
+                    buffer,
+                    &format!("── [{prefix}] ──\n"),
+                    tag,
+                );
+                let preview = if output.len() > 500 {
+                    let mut end = 500;
+                    while end > 0 && !output.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    format!("{}...", &output[..end])
+                } else {
+                    output.clone()
+                };
+                for line in preview.lines().take(10) {
+                    window::append_styled(buffer, &format!("  {line}\n"), "result");
+                }
+            }
+            DisplayBlock::SystemMessage(msg) => {
+                window::append_styled(buffer, &format!("{msg}\n"), "system");
+            }
+            DisplayBlock::Error(msg) => {
+                window::append_styled(buffer, &format!("\n✗ Error: {msg}\n"), "error");
+            }
+        }
+    }
+
+    // If there's streaming text in progress, render it too
+    if !state.streaming_buffer.is_empty() {
+        window::append_to_output(buffer, "\n");
+        let lines = chlodwig_core::render_markdown(&state.streaming_buffer);
+        chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+    }
+}
+
 /// Delete the Markdown-rendered streaming range and re-render with new text.
 ///
 /// Called once per tick to update the live-streaming Markdown view.
@@ -575,10 +694,14 @@ fn rerender_streaming_markdown(
 /// This handles all non-streaming events: tool calls, tool results, errors, etc.
 /// **TextDelta and TextComplete are handled by the per-tick streaming re-render
 /// in the main event loop** — they are no-ops here.
+///
+/// When `show_tool_usage` is false, `ToolUseStart` and `ToolResult` events
+/// are still tracked in `tool_id_to_info` but not rendered to the buffer.
 fn render_event_to_buffer(
     buffer: &gtk4::TextBuffer,
     event: &ConversationEvent,
     tool_id_to_info: &mut std::collections::HashMap<String, (String, serde_json::Value)>,
+    show_tool_usage: bool,
 ) {
     match event {
         // Streaming events are handled by the per-tick Markdown re-render.
@@ -586,6 +709,10 @@ fn render_event_to_buffer(
         ConversationEvent::ToolUseStart { id, name, input } => {
             // Track tool id → (name, input) for ToolResult matching
             tool_id_to_info.insert(id.clone(), (name.clone(), input.clone()));
+
+            if !show_tool_usage {
+                return;
+            }
 
             if name == "Edit" {
                 // Special Edit rendering: show diff-style header with syntax highlighting
@@ -629,6 +756,11 @@ fn render_event_to_buffer(
             id, output, is_error,
         } => {
             let tool_info = tool_id_to_info.remove(id);
+
+            if !show_tool_usage {
+                return;
+            }
+
             let text = extract_tool_result_text(output);
 
             if let Some((ref tool_name, ref tool_input)) = tool_info {
@@ -789,68 +921,7 @@ fn extract_tool_result_text(output: &chlodwig_core::ToolResultContent) -> String
     }
 }
 
-fn build_system_prompt() -> Vec<SystemBlock> {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "unknown".into());
-    let date = chrono::Local::now().format("%Y-%m-%d");
-
-    let base = format!(
-        r#"You are Claude, an AI assistant made by Anthropic. You are helping a user via a GUI application.
-
-You have access to tools that let you interact with the user's computer:
-- Bash: Execute shell commands
-- Read: Read file contents with line numbers
-- Write: Write files (creates parent directories)
-- Edit: Find and replace in files
-- Glob: Find files by pattern
-- Grep: Search file contents with regex
-- ListDir: List directory contents
-
-Current working directory: {cwd}
-Current date: {date}
-
-When using tools:
-- Use absolute paths for file operations
-- Be careful with destructive operations
-- Explain what you're doing before using tools
-
-Be concise and helpful. When asked to make changes, use tools directly rather than just showing code."#
-    );
-
-    let mut blocks = vec![SystemBlock::cached(base)];
-
-    // Load CLAUDE.md
-    if let Some(claude_md) = load_claude_md() {
-        blocks.push(SystemBlock::cached(claude_md));
-    }
-
-    blocks
-}
-
-fn load_claude_md() -> Option<String> {
-    let mut parts = Vec::new();
-
-    if let Some(home) = dirs::home_dir() {
-        let global = home.join(".claude").join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&global) {
-            if !content.trim().is_empty() {
-                parts.push(format!("# Global CLAUDE.md\n{content}"));
-            }
-        }
-    }
-
-    if let Ok(cwd) = std::env::current_dir() {
-        let local = cwd.join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&local) {
-            if !content.trim().is_empty() {
-                parts.push(format!("# Project CLAUDE.md ({})\n{content}", local.display()));
-            }
-        }
-    }
-
-    if parts.is_empty() { None } else { Some(parts.join("\n\n")) }
-}
+// System prompt, CLAUDE.md loading, and git context are in chlodwig_core::system_prompt.
 
 /// Render a single line with syntax highlighting into a GtkTextBuffer.
 ///

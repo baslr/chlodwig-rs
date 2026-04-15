@@ -39,6 +39,7 @@ pub struct UiWidgets {
     pub input_view: TextView,
     pub input_buffer: gtk4::TextBuffer,
     pub send_button: Button,
+    pub toggle_tool_button: Button,
     pub status_left_label: Label,
     pub status_right_label: Label,
 }
@@ -105,8 +106,22 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
     let send_button = Button::builder()
         .label("Send")
         .css_classes(["suggested-action"])
+        .width_request(90)
+        .build();
+
+    let toggle_tool_button = Button::builder()
+        .label("Hide Tools")
+        .width_request(90)
+        .build();
+
+    // Stack toggle button above send button in a vertical box
+    let button_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(4)
         .valign(gtk4::Align::End)
         .build();
+    button_box.append(&toggle_tool_button);
+    button_box.append(&send_button);
 
     let input_row = GtkBox::builder()
         .orientation(Orientation::Horizontal)
@@ -117,7 +132,7 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
         .margin_bottom(8)
         .build();
     input_row.append(&input_scroll);
-    input_row.append(&send_button);
+    input_row.append(&button_box);
 
     // --- Status bar ---
     let status_left_label = Label::builder()
@@ -173,6 +188,7 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
         input_view,
         input_buffer,
         send_button,
+        toggle_tool_button,
         status_left_label,
         status_right_label,
     };

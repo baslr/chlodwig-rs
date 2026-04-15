@@ -11,6 +11,7 @@ pub mod permissions;
 pub mod session;
 pub mod status_line;
 pub mod subagent;
+pub mod system_prompt;
 pub mod tools;
 
 pub use auto_scroll::*;
@@ -25,6 +26,7 @@ pub use permissions::*;
 pub use session::*;
 pub use status_line::*;
 pub use subagent::*;
+pub use system_prompt::*;
 pub use tools::*;
 
 /// Format `cat -n`-style output into `(gutter, code)` pairs with aligned line numbers.

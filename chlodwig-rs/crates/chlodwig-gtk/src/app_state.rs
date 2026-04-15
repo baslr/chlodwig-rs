@@ -59,6 +59,9 @@ pub struct AppState {
     /// Auto-scroll state: follow new content unless user has scrolled up.
     /// Shared logic with the TUI via `chlodwig_core::AutoScroll`.
     pub auto_scroll: chlodwig_core::AutoScroll,
+    /// Whether tool usage blocks (ToolUseStart, ToolResult) are visible in the output.
+    /// UI preference — survives `clear()`.
+    pub show_tool_usage: bool,
 }
 
 impl AppState {
@@ -78,6 +81,7 @@ impl AppState {
             copy_feedback: None,
             should_notify: false,
             auto_scroll: chlodwig_core::AutoScroll::new(),
+            show_tool_usage: true,
         }
     }
 

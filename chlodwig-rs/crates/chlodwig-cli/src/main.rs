@@ -5,7 +5,7 @@ use clap::Parser;
 use chlodwig_api::AnthropicClient;
 use chlodwig_core::{
     AutoApprovePrompter, ContentBlock, ConversationEvent, ConversationState, Message,
-    PermissionDecision, PermissionPrompter, Role, SessionSnapshot, SystemBlock, ToolContext,
+    PermissionDecision, PermissionPrompter, Role, SessionSnapshot, ToolContext,
     ToolResultContent,
 };
 use std::io::Write;
@@ -53,167 +53,7 @@ struct Cli {
     base_url: Option<String>,
 }
 
-fn default_system_prompt() -> String {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "unknown".into());
-    let date = chrono::Local::now().format("%Y-%m-%d");
-
-    format!(
-        r#"You are Claude, an AI assistant made by Anthropic. You are helping a user via a CLI tool.
-
-You have access to tools that let you interact with the user's computer:
-- Bash: Execute shell commands
-- Read: Read file contents with line numbers
-- Write: Write files (creates parent directories)
-- Edit: Find and replace in files
-- Glob: Find files by pattern
-- Grep: Search file contents with regex
-- ListDir: List directory contents
-
-Current working directory: {cwd}
-Current date: {date}
-
-When using tools:
-- Use absolute paths for file operations
-- Be careful with destructive operations
-- Explain what you're doing before using tools
-
-Be concise and helpful. When asked to make changes, use tools directly rather than just showing code."#
-    )
-}
-
-/// Load CLAUDE.md files from global (~/.claude/CLAUDE.md), local (./CLAUDE.md),
-/// and project config (./.claude/CLAUDE.md). Returns None if none exist.
-fn load_claude_md() -> Option<String> {
-    let mut parts = Vec::new();
-
-    // 1. Global: ~/.claude/CLAUDE.md
-    if let Some(home) = dirs::home_dir() {
-        let global = home.join(".claude").join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&global) {
-            if !content.trim().is_empty() {
-                parts.push(format!("# Global CLAUDE.md (~/.claude/CLAUDE.md)\n{content}"));
-            }
-        }
-    }
-
-    // 2. Project root: ./CLAUDE.md
-    if let Ok(cwd) = std::env::current_dir() {
-        let local = cwd.join("CLAUDE.md");
-        if let Ok(content) = std::fs::read_to_string(&local) {
-            if !content.trim().is_empty() {
-                parts.push(format!(
-                    "# Project CLAUDE.md ({})\n{content}",
-                    local.display()
-                ));
-            }
-        }
-
-        // 3. Project config: ./.claude/CLAUDE.md
-        let dot_claude = cwd.join(".claude").join("CLAUDE.md");
-        if dot_claude.exists() && dot_claude != local {
-            if let Ok(content) = std::fs::read_to_string(&dot_claude) {
-                if !content.trim().is_empty() {
-                    parts.push(format!(
-                        "# Project .claude/CLAUDE.md ({})\n{content}",
-                        dot_claude.display()
-                    ));
-                }
-            }
-        }
-    }
-
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("\n\n"))
-    }
-}
-
-/// Collect git context: branch, status, recent commits.
-/// Returns None if not in a git repository.
-fn git_context() -> Option<String> {
-    use std::process::Command;
-    let cwd = std::env::current_dir().ok()?;
-
-    // Check if we're in a git repo
-    let branch_output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(&cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-        .ok()?;
-
-    if !branch_output.status.success() {
-        return None;
-    }
-
-    let branch = String::from_utf8_lossy(&branch_output.stdout)
-        .trim()
-        .to_string();
-
-    let mut ctx = format!("Git branch: {branch}");
-
-    // git status --short
-    if let Ok(output) = Command::new("git")
-        .args(["status", "--short"])
-        .current_dir(&cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-    {
-        let status = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
-        if !status.is_empty() {
-            ctx.push_str(&format!("\nGit status:\n{status}"));
-        }
-    }
-
-    // git log --oneline -5
-    if let Ok(output) = Command::new("git")
-        .args(["log", "--oneline", "-5"])
-        .current_dir(&cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .output()
-    {
-        let log = String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .to_string();
-        if !log.is_empty() {
-            ctx.push_str(&format!("\nRecent commits:\n{log}"));
-        }
-    }
-
-    Some(ctx)
-}
-
-/// Build the system prompt as structured blocks with cache control.
-fn build_system_prompt(custom: Option<&str>) -> Vec<SystemBlock> {
-    if let Some(custom) = custom {
-        return vec![SystemBlock::text(custom)];
-    }
-
-    let mut blocks = Vec::new();
-
-    // Block 1: Static system prompt (cached — rarely changes)
-    blocks.push(SystemBlock::cached(default_system_prompt()));
-
-    // Block 2: CLAUDE.md contents (cached — rarely changes during session)
-    if let Some(claude_md) = load_claude_md() {
-        blocks.push(SystemBlock::cached(claude_md));
-    }
-
-    // Block 3: Git context (NOT cached — changes between turns)
-    if let Some(git_ctx) = git_context() {
-        blocks.push(SystemBlock::text(git_ctx));
-    }
-
-    blocks
-}
+// System prompt, CLAUDE.md loading, and git context are in chlodwig_core::system_prompt.
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -221,6 +61,11 @@ async fn main() -> Result<()> {
     if std::env::var("RUST_BACKTRACE").is_err() {
         unsafe { std::env::set_var("RUST_BACKTRACE", "full") };
     }
+
+    // Extend PATH with well-known directories (MacPorts, Homebrew, Cargo, etc.)
+    // so child processes (git, rg, cargo, ...) can be found in restricted
+    // environments (e.g. macOS GUI launch, minimal login shells).
+    chlodwig_core::enrich_path();
 
     // Initialize tracing
     // Log to ~/.chlodwig-rs/debug_YYYY-MM-DD_HH-MM-SS.log
@@ -266,7 +111,10 @@ async fn main() -> Result<()> {
 
     let tools = chlodwig_tools::builtin_tools();
 
-    let system_prompt = build_system_prompt(cli.system_prompt.as_deref());
+    let system_prompt = chlodwig_core::build_system_prompt(
+        cli.system_prompt.as_deref(),
+        chlodwig_core::UiContext::Cli,
+    );
 
     tracing::info!(
         "System prompt: {} blocks, {} total chars",

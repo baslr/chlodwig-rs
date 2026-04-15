@@ -180,6 +180,72 @@ pub fn resolve_config_with_path(
     })
 }
 
+/// Extend `PATH` with well-known directories that may not be present in
+/// restricted environments (e.g. macOS GUI apps, launchd services, SSH
+/// sessions with minimal login shells).
+///
+/// Directories are only added when they exist **and** are not already in PATH.
+/// The original PATH entries come first (preserving user priority), new
+/// directories are appended at the end.
+///
+/// Call this once at process startup, before spawning any child processes.
+/// After this, `std::process::Command` and `tokio::process::Command` inherit
+/// the enriched PATH automatically — no per-tool plumbing needed.
+pub fn enrich_path() {
+    let current = std::env::var("PATH").unwrap_or_default();
+    let current_dirs: std::collections::HashSet<&str> = current.split(':').collect();
+
+    let home = std::env::var("HOME").unwrap_or_default();
+
+    let candidates: &[String] = &[
+        // MacPorts
+        "/opt/local/bin".into(),
+        "/opt/local/sbin".into(),
+        // Homebrew (macOS arm64)
+        "/opt/homebrew/bin".into(),
+        "/opt/homebrew/sbin".into(),
+        // Homebrew (macOS x86_64 / Linux)
+        "/usr/local/bin".into(),
+        "/usr/local/sbin".into(),
+        // Cargo (Rust)
+        format!("{home}/.cargo/bin"),
+        // Go
+        format!("{home}/go/bin"),
+        // Local user binaries
+        format!("{home}/.local/bin"),
+        // nix single-user
+        format!("{home}/.nix-profile/bin"),
+        // nix multi-user
+        "/nix/var/nix/profiles/default/bin".into(),
+    ];
+
+    let mut additions = Vec::new();
+    for dir in candidates {
+        if !current_dirs.contains(dir.as_str()) && std::path::Path::new(dir).is_dir() {
+            additions.push(dir.clone());
+        }
+    }
+
+    if additions.is_empty() {
+        return;
+    }
+
+    let new_path = if current.is_empty() {
+        additions.join(":")
+    } else {
+        format!("{current}:{}", additions.join(":"))
+    };
+
+    tracing::info!(
+        "PATH enriched with {} dir(s): {}",
+        additions.len(),
+        additions.join(", ")
+    );
+
+    // SAFETY: single-threaded at startup, before any tool execution.
+    unsafe { std::env::set_var("PATH", &new_path) };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,5 +684,130 @@ mod tests {
     #[test]
     fn test_default_max_tokens_is_positive() {
         assert!(DEFAULT_MAX_TOKENS > 0);
+    }
+
+    // ── enrich_path tests ──────────────────────────────────────
+    //
+    // These tests mutate global state (PATH env var) and must be serialized.
+    // Use a shared mutex to prevent parallel execution.
+
+    use std::sync::Mutex;
+    static PATH_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn test_enrich_path_does_not_duplicate_existing_dirs() {
+        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let before = std::env::var("PATH").unwrap_or_default();
+
+        enrich_path();
+        let after = std::env::var("PATH").unwrap_or_default();
+
+        // Count occurrences of each dir — no dir should appear more than once
+        let dirs: Vec<&str> = after.split(':').filter(|s| !s.is_empty()).collect();
+        let unique: std::collections::HashSet<&str> = dirs.iter().copied().collect();
+        assert_eq!(
+            dirs.len(),
+            unique.len(),
+            "PATH should not contain duplicate entries"
+        );
+
+        // Restore
+        unsafe { std::env::set_var("PATH", &before) };
+    }
+
+    #[test]
+    fn test_enrich_path_preserves_original_entries() {
+        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let before = std::env::var("PATH").unwrap_or_default();
+
+        enrich_path();
+        let after = std::env::var("PATH").unwrap_or_default();
+
+        // Every entry from before should still be in after, in the same order
+        assert!(
+            after.starts_with(&before) || before.is_empty(),
+            "Original PATH entries must be preserved at the start"
+        );
+
+        // Restore
+        unsafe { std::env::set_var("PATH", &before) };
+    }
+
+    #[test]
+    fn test_enrich_path_adds_existing_dirs() {
+        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let before = std::env::var("PATH").unwrap_or_default();
+
+        // Set a minimal PATH that's missing common dirs
+        unsafe { std::env::set_var("PATH", "/usr/bin:/bin") };
+
+        enrich_path();
+        let after = std::env::var("PATH").unwrap_or_default();
+
+        // /usr/bin and /bin should still be there
+        assert!(after.contains("/usr/bin"));
+        assert!(after.contains("/bin"));
+
+        // If /opt/local/bin exists (MacPorts), it should have been added
+        if std::path::Path::new("/opt/local/bin").is_dir() {
+            assert!(
+                after.contains("/opt/local/bin"),
+                "enrich_path should add /opt/local/bin when it exists"
+            );
+        }
+
+        // If /opt/homebrew/bin exists (Homebrew arm64), it should have been added
+        if std::path::Path::new("/opt/homebrew/bin").is_dir() {
+            assert!(
+                after.contains("/opt/homebrew/bin"),
+                "enrich_path should add /opt/homebrew/bin when it exists"
+            );
+        }
+
+        // Restore
+        unsafe { std::env::set_var("PATH", &before) };
+    }
+
+    #[test]
+    fn test_enrich_path_skips_nonexistent_dirs() {
+        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let before = std::env::var("PATH").unwrap_or_default();
+
+        unsafe { std::env::set_var("PATH", "/usr/bin") };
+
+        enrich_path();
+        let after = std::env::var("PATH").unwrap_or_default();
+
+        // A completely fake dir should never appear
+        assert!(
+            !after.contains("/this/dir/does/not/exist/at/all"),
+            "Non-existent directories must not be added"
+        );
+
+        // Restore
+        unsafe { std::env::set_var("PATH", &before) };
+    }
+
+    #[test]
+    fn test_enrich_path_idempotent() {
+        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let before = std::env::var("PATH").unwrap_or_default();
+
+        // Start from a known minimal state
+        unsafe { std::env::set_var("PATH", "/usr/bin:/bin") };
+
+        enrich_path();
+        let after_first = std::env::var("PATH").unwrap_or_default();
+
+        enrich_path();
+        let after_second = std::env::var("PATH").unwrap_or_default();
+
+        assert_eq!(
+            after_first, after_second,
+            "Calling enrich_path twice should produce the same result"
+        );
+
+        // Restore
+        unsafe { std::env::set_var("PATH", &before) };
     }
 }

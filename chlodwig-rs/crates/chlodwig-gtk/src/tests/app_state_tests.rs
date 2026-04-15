@@ -899,3 +899,65 @@ fn test_auto_scroll_user_scrolls_up_then_back() {
     state.auto_scroll.user_reached_bottom();
     assert!(state.auto_scroll.is_active());
 }
+
+// --- show_tool_usage toggle tests ---
+
+#[test]
+fn test_show_tool_usage_default_true() {
+    let state = AppState::new("m".into());
+    assert!(state.show_tool_usage, "show_tool_usage should default to true");
+}
+
+#[test]
+fn test_toggle_tool_usage() {
+    let mut state = AppState::new("m".into());
+    assert!(state.show_tool_usage);
+
+    state.show_tool_usage = false;
+    assert!(!state.show_tool_usage);
+
+    state.show_tool_usage = true;
+    assert!(state.show_tool_usage);
+}
+
+#[test]
+fn test_clear_preserves_show_tool_usage() {
+    let mut state = AppState::new("m".into());
+    state.show_tool_usage = false;
+    state.clear();
+    // show_tool_usage is a UI preference, not conversation state — should survive clear
+    assert!(!state.show_tool_usage, "clear should preserve show_tool_usage preference");
+}
+
+#[test]
+fn test_tool_use_start_block_persists_for_rerender() {
+    // Simulate: model calls a tool → ToolUseStart + ToolResult both in blocks
+    // Then toggle show_tool_usage off and back on — both blocks must be present.
+    let mut state = AppState::new("m".into());
+    state.submit_prompt("find files".into());
+    state.handle_event(ConversationEvent::TextDelta("Looking...".into()));
+    state.handle_event(ConversationEvent::ToolUseStart {
+        id: "t1".into(),
+        name: "Glob".into(),
+        input: serde_json::json!({"pattern": "*.rs"}),
+    });
+    state.handle_event(ConversationEvent::ToolResult {
+        id: "t1".into(),
+        output: chlodwig_core::ToolResultContent::Text("No files found".into()),
+        is_error: false,
+    });
+    state.handle_event(ConversationEvent::TextComplete("Done.".into()));
+    state.handle_event(ConversationEvent::TurnComplete);
+
+    // Both ToolUseStart and ToolResult must be in blocks
+    let tool_start_count = state.blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolUseStart { .. })).count();
+    let tool_result_count = state.blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolResult { .. })).count();
+    assert_eq!(tool_start_count, 1, "ToolUseStart must be in blocks");
+    assert_eq!(tool_result_count, 1, "ToolResult must be in blocks");
+
+    // Toggle off and back on — blocks unchanged
+    state.show_tool_usage = false;
+    state.show_tool_usage = true;
+    let tool_start_count = state.blocks.iter().filter(|b| matches!(b, DisplayBlock::ToolUseStart { .. })).count();
+    assert_eq!(tool_start_count, 1, "ToolUseStart must survive toggle");
+}
