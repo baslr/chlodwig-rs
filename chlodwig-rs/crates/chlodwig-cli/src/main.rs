@@ -24,9 +24,9 @@ struct Cli {
     #[arg(long = "print", short = 'p')]
     print_mode: Option<String>,
 
-    /// Model to use
-    #[arg(long, default_value = "github/claude-opus-4.6")]
-    model: String,
+    /// Model to use (defaults to config.json or github/claude-opus-4.6)
+    #[arg(long)]
+    model: Option<String>,
 
     /// Max tokens for response
     #[arg(long, default_value = "16384")]
@@ -268,9 +268,13 @@ async fn main() -> Result<()> {
         system_prompt.iter().map(|b| b.text.len()).sum::<usize>()
     );
 
+    let default_model = "github/claude-opus-4.6".to_string();
+    let model = chlodwig_core::resolve_model(cli.model.clone())
+        .unwrap_or(default_model);
+
     let state = ConversationState {
         messages: Vec::new(),
-        model: cli.model.clone(),
+        model,
         system_prompt,
         max_tokens: cli.max_tokens,
         tools,

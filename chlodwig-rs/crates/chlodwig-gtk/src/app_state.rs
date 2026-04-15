@@ -53,6 +53,9 @@ pub struct AppState {
     pub model: String,
     /// Transient copy-feedback message (e.g. "Copied!"), shown briefly in status bar.
     pub copy_feedback: Option<String>,
+    /// Set to `true` when a turn completes and the UI should consider sending
+    /// a system notification. Cleared by `take_should_notify()`.
+    pub should_notify: bool,
 }
 
 impl AppState {
@@ -70,6 +73,7 @@ impl AppState {
             request_count: 0,
             model,
             copy_feedback: None,
+            should_notify: false,
         }
     }
 
@@ -81,6 +85,7 @@ impl AppState {
                 self.streaming_buffer.push_str(&text);
                 self.streaming_dirty = true;
                 self.stream_chunks += 1;
+                self.should_notify = false; // new turn started
                 true
             }
             ConversationEvent::TextComplete(text) => {
@@ -120,6 +125,7 @@ impl AppState {
                 self.is_streaming = false;
                 self.turn_count += 1;
                 self.stream_chunks = 0;
+                self.should_notify = true;
                 true
             }
             ConversationEvent::Error(msg) => {
@@ -205,6 +211,7 @@ impl AppState {
         self.turn_count = 0;
         self.request_count = 0;
         self.copy_feedback = None;
+        self.should_notify = false;
     }
 
     /// Set a transient copy-feedback message (e.g. "Copied!").
@@ -215,6 +222,14 @@ impl AppState {
     /// Take (and clear) the copy-feedback message.
     pub fn take_copy_feedback(&mut self) -> Option<String> {
         self.copy_feedback.take()
+    }
+
+    /// Take (and clear) the should_notify flag.
+    /// Returns `true` if a system notification should be sent.
+    pub fn take_should_notify(&mut self) -> bool {
+        let val = self.should_notify;
+        self.should_notify = false;
+        val
     }
 
     /// Current spinner character, computed from system time.
@@ -406,4 +421,14 @@ pub fn delete_word_back(text: &str, cursor: usize) -> (String, usize) {
         .collect();
 
     (new_text, word_start)
+}
+
+/// Determine the project directory name from the current working directory.
+/// Returns the last path component (e.g. "chlodwig-rs" for "/Users/me/projects/chlodwig-rs").
+/// Falls back to "chlodwig" if the CWD can't be determined.
+pub fn project_dir_name() -> String {
+    std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "chlodwig".to_string())
 }

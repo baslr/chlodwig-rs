@@ -29,5 +29,13 @@ libadwaita = { version = "0.7", features = ["v1_4"], optional = true }
 tokio = { workspace = true, optional = true }
 async-trait = { workspace = true, optional = true }
 
+# macOS native notifications via UNUserNotificationCenter.
+# These are non-optional on macOS — always compiled when building for macOS.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-user-notifications = "0.3.2"
+objc2-foundation = "0.3.2"
+objc2 = "0.6.4"
+block2 = "0.6.2"
+
 [dev-dependencies]
 tempfile = "3"

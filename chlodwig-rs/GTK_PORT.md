@@ -36,7 +36,7 @@
 | Tool call display | ✅ | ✅ | GTK shows tool name + JSON preview, Edit shows red/green diff |
 | Tool result display | ✅ | ✅ | Specialized rendering for Bash, Read, Write, Grep + generic fallback |
 | Markdown rendering | ✅ pulldown-cmark + syntect | ✅ | `md_renderer.rs` — headings, bold, italic, code, lists, tables |
-| Syntax highlighting (code blocks) | ✅ syntect → ratatui styles | ⚠️ | Shared `highlight.rs` in core; not yet wired into Markdown fenced code blocks |
+| Syntax highlighting (code blocks) | ✅ syntect → ratatui styles | ✅ | Shared `highlight.rs` in core; wired into `append_styled_lines()` for fenced code blocks |
 | Syntax highlighting (Read output) | ✅ per-file extension | ✅ | Via `chlodwig_core::highlight::lang_from_path` + `render_highlighted_line` |
 | Syntax highlighting (Write output) | ✅ per-file extension | ✅ | Via `chlodwig_core::highlight::lang_from_path` + `render_highlighted_line` |
 | Syntax highlighting (Grep output) | ✅ content mode | ❌ | — |
@@ -78,7 +78,7 @@
 | UTF-8 safety (Gotcha #1, #16, #28) | ✅ | ✅ | GTK uses UTF-8 natively — no byte-slicing needed |
 | Emoji rendering | ✅ terminal emoji | ✅ | CoreText bitmap rendering with overlay (EmojiTextView), ZWJ support |
 | Crash diagnostics (static buffer + signals) | ✅ 10 MiB static buf | ❌ | Different approach needed for GUI |
-| System notifications on turn complete | ✅ osascript/D-Bus | ❌ | — |
+| System notifications on turn complete | ✅ osascript/D-Bus | ✅ | macOS: native `UNUserNotificationCenter`; Linux: `GNotification` (D-Bus); focus check: `window.is_active()` |
 | Status bar (model, tokens, context, cost) | ✅ detailed | ✅ | Left/right status labels with model, turns, tokens, build info |
 | Spinner animation | ✅ braille chars | ✅ | Braille spinner (same as TUI), time-based rotation |
 | Context timer / session timer | ✅ title bar | ❌ | — |
@@ -151,14 +151,14 @@ The TUI uses `pulldown-cmark` → `RenderedLine` → ratatui spans. The GTK vers
 - [x] **2.1.1** — **Option A**: Use `pulldown-cmark` → walk events → apply `GtkTextTag`s (bold, italic, headings, lists, code spans)
 - [ ] **2.1.2** — **Option B**: Use `GtkSourceView` (syntax-aware widget) — better for code but more complex integration
 - [x] **2.1.3** — Create text tags: `heading1` (large bold), `heading2` (bold), `bold`, `italic`, `code-inline` (mono bg), `code-block` (mono bg), `link` (blue underline), `list-bullet`
-- [ ] **2.1.4** — Handle fenced code blocks with language annotation (syntax highlighting — see 2.2)
+- [x] **2.1.4** — Handle fenced code blocks with language annotation (syntax highlighting — see 2.2)
 - [x] **2.1.5** — Handle markdown tables (render as monospace with alignment)
 - [x] **2.1.6** — Test: send AssistantText with markdown, verify styled output
 
 ### 2.2 Syntax Highlighting
 - [x] **2.2.1** — **Option A**: `syntect` via shared `chlodwig_core::highlight` module (same highlighter as TUI)
 - [ ] **2.2.2** — **Option B**: `GtkSourceView` with `GtkSourceBuffer` — built-in language support
-- [ ] **2.2.3** — Apply to fenced code blocks in assistant responses (Markdown renderer)
+- [x] **2.2.3** — Apply to fenced code blocks in assistant responses (Markdown renderer)
 - [x] **2.2.4** — Apply to Read/Write tool output (per file extension)
 - [ ] **2.2.5** — Apply to Grep content-mode output
 
@@ -227,9 +227,9 @@ Most TUI keybindings are unnecessary in GTK (native text editing). Implemented s
 - [ ] **3.5.6** — Register shortcuts via `GtkShortcutController` or `app.set_accels_for_action()`
 
 ### 3.6 System Notifications
-- [ ] **3.6.1** — Send notification on turn complete when window is not focused
-- [ ] **3.6.2** — Use `GNotification` (GLib native) instead of osascript
-- [ ] **3.6.3** — Check `gtk4::Window::is_active()` for focus detection (replaces NSWorkspace FFI)
+- [x] **3.6.1** — Send notification on turn complete when window is not focused
+- [x] **3.6.2** — macOS: `UNUserNotificationCenter` (native); Linux: `GNotification` (D-Bus)
+- [x] **3.6.3** — Check `gtk4::Window::is_active()` for focus detection (replaces NSWorkspace FFI)
 
 ### 3.7 Theming
 - [ ] **3.7.1** — Follow system dark/light mode (Adwaita handles automatically)

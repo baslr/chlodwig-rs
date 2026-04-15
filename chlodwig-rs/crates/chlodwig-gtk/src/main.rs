@@ -72,6 +72,10 @@ fn main() -> glib::ExitCode {
 fn activate(app: &libadwaita::Application) {
     let (window, widgets) = window::build_window(app);
 
+    // Request notification permission on macOS (shows system dialog on first launch).
+    #[cfg(target_os = "macos")]
+    chlodwig_gtk::notification::request_notification_permission();
+
     // --- Shared state ---
     let app_state = Rc::new(RefCell::new(AppState::new(
         std::env::var("CHLODWIG_MODEL")
@@ -276,6 +280,8 @@ fn activate(app: &libadwaita::Application) {
     let scroll = widgets.output_scroll.clone();
     let status_left_label = widgets.status_left_label.clone();
     let status_right_label = widgets.status_right_label.clone();
+    let window_for_notify = window.clone();
+    let project_name = chlodwig_gtk::app_state::project_dir_name();
 
     // Use glib::timeout_add_local to periodically check for events
     // This bridges the async Tokio world with the GTK main loop.
@@ -399,6 +405,16 @@ fn activate(app: &libadwaita::Application) {
             window::update_status(&status_left_label, &status_right_label, &state_for_events.borrow());
         }
 
+        // --- System notification on turn complete ---
+        // Send a desktop notification when a turn finishes and the window
+        // is NOT focused (user switched to another app while waiting).
+        {
+            let mut state = state_for_events.borrow_mut();
+            if state.take_should_notify() && !window_for_notify.is_active() {
+                send_turn_complete_notification(&window_for_notify, &project_name);
+            }
+        }
+
         glib::ControlFlow::Continue
     });
 
@@ -417,8 +433,10 @@ fn activate(app: &libadwaita::Application) {
                     return;
                 }
             };
-            let model = std::env::var("CHLODWIG_MODEL")
-                .unwrap_or_else(|_| "github/claude-opus-4.6".into());
+            let default_model = "github/claude-opus-4.6".to_string();
+            let model = std::env::var("CHLODWIG_MODEL").ok();
+            let model = chlodwig_core::resolve_model(model)
+                .unwrap_or(default_model);
             let base_url = std::env::var("ANTHROPIC_BASE_URL").ok();
 
             let mut client = chlodwig_api::AnthropicClient::new(api_key);
@@ -918,4 +936,55 @@ fn ansi_tag_name(fg: Option<chlodwig_gtk::ansi::AnsiColor>, bold: bool) -> Strin
     };
     let bold_part = if bold { "_b" } else { "" };
     format!("ansi_{color_part}{bold_part}")
+}
+
+/// Send a system notification that a conversation turn has completed.
+///
+/// - **macOS**: Uses `UNUserNotificationCenter` (Apple's modern
+///   UserNotifications framework, macOS 10.14+). Native pop-up in
+///   Notification Center with sound. Requires one-time permission grant.
+///
+/// - **Linux**: Uses `gio::Notification` → D-Bus → desktop notification
+///   daemon (GNOME Shell, KDE, etc.). Requires a `.desktop` file named
+///   after the application ID (`rs.chlodwig.gtk.desktop`) for GNOME Shell.
+///
+/// The notification is only sent when the window is NOT focused (checked
+/// by the caller via `window.is_active()`). This avoids spamming the user
+/// while they are actively watching the output.
+fn send_turn_complete_notification(
+    window: &gtk4::ApplicationWindow,
+    project: &str,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = window; // not needed on macOS — UNUserNotificationCenter is standalone
+        chlodwig_gtk::notification::send_native_notification(
+            "Chlodwig",
+            "Turn complete ✓",
+            project,
+        );
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        send_notification_gnotification(window, project);
+    }
+}
+
+/// Linux/other: GNotification via D-Bus.
+#[cfg(not(target_os = "macos"))]
+fn send_notification_gnotification(
+    window: &gtk4::ApplicationWindow,
+    project: &str,
+) {
+    use gtk4::gio;
+
+    let notification = gio::Notification::new("Chlodwig");
+    notification.set_body(Some(&format!("Turn complete ✓ — {project}")));
+
+    if let Some(app) = window.application() {
+        app.send_notification(Some("turn-complete"), &notification);
+        tracing::debug!("GNotification sent for project {project:?}");
+    } else {
+        tracing::debug!("No application found on window — skipping notification");
+    }
 }

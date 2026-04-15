@@ -5,6 +5,10 @@ pub mod app_state;
 pub mod emoji;
 pub mod md_renderer;
 
+/// Native macOS notifications via UNUserNotificationCenter.
+#[cfg(target_os = "macos")]
+pub mod notification;
+
 // The window module depends on GTK4 at link-time. Only compile it when
 // building the binary (not during `cargo test --lib` on machines without
 // GTK4 runtime libraries). Tests for app_state are GTK-independent.
