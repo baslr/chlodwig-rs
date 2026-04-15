@@ -181,6 +181,8 @@ pub enum ConversationEvent {
     Usage {
         input_tokens: u32,
         output_tokens: u32,
+        cache_creation_input_tokens: u32,
+        cache_read_input_tokens: u32,
     },
     /// An HTTP API request was made.
     ApiRequestMade,
@@ -622,6 +624,8 @@ pub async fn run_turn(
                                 let _ = event_tx.send(ConversationEvent::Usage {
                                     input_tokens: usage.input_tokens,
                                     output_tokens: usage.output_tokens,
+                                    cache_creation_input_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
+                                    cache_read_input_tokens: usage.cache_read_input_tokens.unwrap_or(0),
                                 });
                             }
                         }
@@ -734,6 +738,8 @@ pub async fn run_turn(
                                 let _ = event_tx.send(ConversationEvent::Usage {
                                     input_tokens: usage.input_tokens,
                                     output_tokens: usage.output_tokens,
+                                    cache_creation_input_tokens: usage.cache_creation_input_tokens.unwrap_or(0),
+                                    cache_read_input_tokens: usage.cache_read_input_tokens.unwrap_or(0),
                                 });
                             }
                             let _ = delta; // stop_reason is implicit from tool_uses

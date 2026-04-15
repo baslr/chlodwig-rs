@@ -431,8 +431,7 @@ pub(crate) struct App {
     // Token usage tracking
     pub(crate) total_input_tokens: u64,
     pub(crate) total_output_tokens: u64,
-    pub(crate) turn_input_tokens: u64,
-    pub(crate) turn_output_tokens: u64,
+    pub(crate) turn_usage: chlodwig_core::TurnUsage,
     pub(crate) stream_chunks: u64,
     pub(crate) turn_count: u32,
     pub(crate) api_request_count: u32,
@@ -490,8 +489,7 @@ impl App {
             should_quit: false,
             total_input_tokens: 0,
             total_output_tokens: 0,
-            turn_input_tokens: 0,
-            turn_output_tokens: 0,
+            turn_usage: chlodwig_core::TurnUsage::default(),
             stream_chunks: 0,
             turn_count: 0,
             api_request_count: 0,
@@ -586,9 +584,7 @@ impl App {
         // Reset token counters to post-compaction state
         self.total_input_tokens = summary_tokens as u64;
         self.total_output_tokens = 0;
-        self.turn_input_tokens = 0;
-        self.turn_output_tokens = 0;
-        self.scroll_to_bottom_if_auto();
+        self.turn_usage.reset();
     }
 
     /// Build the title string for the output pane.
@@ -1879,8 +1875,7 @@ impl App {
         self.auto_scroll = true;
         self.total_input_tokens = 0;
         self.total_output_tokens = 0;
-        self.turn_input_tokens = 0;
-        self.turn_output_tokens = 0;
+        self.turn_usage.reset();
         self.stream_chunks = 0;
         self.turn_count = 0;
         self.api_request_count = 0;
@@ -2596,8 +2591,9 @@ impl App {
         let _ = writeln!(out, "stream_chunks:       {}", self.stream_chunks);
         let _ = writeln!(out, "total_input_tokens:  {}", self.total_input_tokens);
         let _ = writeln!(out, "total_output_tokens: {}", self.total_output_tokens);
-        let _ = writeln!(out, "turn_input_tokens:   {}", self.turn_input_tokens);
-        let _ = writeln!(out, "turn_output_tokens:  {}", self.turn_output_tokens);
+        let _ = writeln!(out, "turn_input_tokens:   {}", self.turn_usage.input_tokens);
+        let _ = writeln!(out, "turn_output_tokens:  {}", self.turn_usage.output_tokens);
+        let _ = writeln!(out, "turn_cache_tokens:   {}", self.turn_usage.cache_tokens);
 
         let _ = writeln!(out);
         let _ = writeln!(out, "=== Flags ===");

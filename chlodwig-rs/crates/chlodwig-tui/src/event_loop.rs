@@ -1127,8 +1127,7 @@ pub async fn run_tui_with_permissions(
                         app.scroll_to_bottom(); // auto-scroll
                         app.mark_dirty();
                         app.turn_count += 1;
-                        app.turn_input_tokens = 0;
-                        app.turn_output_tokens = 0;
+                        app.turn_usage.reset();
                         app.stream_chunks = 0;
 
                         // Check if auto-compact is needed before the turn
@@ -1790,11 +1789,12 @@ pub async fn run_tui_with_permissions(
                 ConversationEvent::Usage {
                     input_tokens,
                     output_tokens,
+                    cache_creation_input_tokens,
+                    cache_read_input_tokens,
                 } => {
                     app.total_input_tokens += input_tokens as u64;
                     app.total_output_tokens += output_tokens as u64;
-                    app.turn_input_tokens += input_tokens as u64;
-                    app.turn_output_tokens += output_tokens as u64;
+                    app.turn_usage.update(input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens);
                 }
                 ConversationEvent::ApiRequestMade => {
                     app.api_request_count += 1;

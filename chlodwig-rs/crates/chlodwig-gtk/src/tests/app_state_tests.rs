@@ -143,13 +143,82 @@ fn test_usage_accumulates() {
     state.handle_event(ConversationEvent::Usage {
         input_tokens: 100,
         output_tokens: 50,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
     });
     state.handle_event(ConversationEvent::Usage {
         input_tokens: 200,
         output_tokens: 75,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
     });
     assert_eq!(state.input_tokens, 300);
     assert_eq!(state.output_tokens, 125);
+}
+
+#[test]
+fn test_usage_sets_cache_tokens() {
+    let mut state = AppState::new("m".into());
+    // MessageStart: input=0, output=0, no cache
+    state.handle_event(ConversationEvent::Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+    });
+    assert_eq!(state.turn_usage.input_tokens, 0);
+    assert_eq!(state.turn_usage.output_tokens, 0);
+    assert_eq!(state.turn_usage.cache_tokens, 0);
+
+    // MessageDelta: all values arrive at once
+    state.handle_event(ConversationEvent::Usage {
+        input_tokens: 4783,
+        output_tokens: 1028,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 22350,
+    });
+    assert_eq!(state.turn_usage.input_tokens, 4783);
+    assert_eq!(state.turn_usage.output_tokens, 1028);
+    assert_eq!(state.turn_usage.cache_tokens, 22350);
+}
+
+#[test]
+fn test_usage_does_not_overwrite_with_zero() {
+    let mut state = AppState::new("m".into());
+    // MessageDelta with all values
+    state.handle_event(ConversationEvent::Usage {
+        input_tokens: 5000,
+        output_tokens: 200,
+        cache_creation_input_tokens: 1000,
+        cache_read_input_tokens: 20000,
+    });
+    assert_eq!(state.turn_usage.input_tokens, 5000);
+    assert_eq!(state.turn_usage.output_tokens, 200);
+    assert_eq!(state.turn_usage.cache_tokens, 21000);
+
+    // Next MessageStart sends zeros — should NOT overwrite
+    state.handle_event(ConversationEvent::Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
+    });
+    assert_eq!(state.turn_usage.input_tokens, 5000);
+    assert_eq!(state.turn_usage.output_tokens, 200);
+    assert_eq!(state.turn_usage.cache_tokens, 21000);
+}
+
+#[test]
+fn test_usage_cache_creation_plus_read() {
+    let mut state = AppState::new("m".into());
+    state.handle_event(ConversationEvent::Usage {
+        input_tokens: 3000,
+        output_tokens: 500,
+        cache_creation_input_tokens: 8000,
+        cache_read_input_tokens: 12000,
+    });
+    // cache = creation + read
+    assert_eq!(state.turn_usage.cache_tokens, 20000);
 }
 
 #[test]
@@ -181,6 +250,8 @@ fn test_clear_resets_everything() {
     state.handle_event(ConversationEvent::Usage {
         input_tokens: 100,
         output_tokens: 50,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
     });
     state.request_count = 5;
 
@@ -266,6 +337,8 @@ fn test_full_conversation_flow() {
     state.handle_event(ConversationEvent::Usage {
         input_tokens: 500,
         output_tokens: 100,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0,
     });
 
     // Turn complete

@@ -48,8 +48,9 @@ fn test_clear_resets_tokens() {
     let mut app = App::new("test".into());
     app.total_input_tokens = 50000;
     app.total_output_tokens = 10000;
-    app.turn_input_tokens = 5000;
-    app.turn_output_tokens = 1000;
+    app.turn_usage.input_tokens = 5000;
+    app.turn_usage.output_tokens = 1000;
+    app.turn_usage.cache_tokens = 20000;
     app.turn_count = 5;
     app.api_request_count = 10;
 
@@ -57,8 +58,9 @@ fn test_clear_resets_tokens() {
 
     assert_eq!(app.total_input_tokens, 0);
     assert_eq!(app.total_output_tokens, 0);
-    assert_eq!(app.turn_input_tokens, 0);
-    assert_eq!(app.turn_output_tokens, 0);
+    assert_eq!(app.turn_usage.input_tokens, 0);
+    assert_eq!(app.turn_usage.output_tokens, 0);
+    assert_eq!(app.turn_usage.cache_tokens, 0);
     assert_eq!(app.turn_count, 0);
     assert_eq!(app.api_request_count, 0);
 }

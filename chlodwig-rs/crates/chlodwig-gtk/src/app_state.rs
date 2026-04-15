@@ -42,9 +42,7 @@ pub struct AppState {
     /// Total output tokens used in this session.
     pub output_tokens: u64,
     /// Input tokens for the current/last turn.
-    pub turn_input_tokens: u64,
-    /// Output tokens for the current/last turn.
-    pub turn_output_tokens: u64,
+    pub turn_usage: chlodwig_core::TurnUsage,
     /// Number of SSE chunks in current stream.
     pub stream_chunks: u64,
     /// Number of completed conversation turns.
@@ -66,8 +64,7 @@ impl AppState {
             is_streaming: false,
             input_tokens: 0,
             output_tokens: 0,
-            turn_input_tokens: 0,
-            turn_output_tokens: 0,
+            turn_usage: chlodwig_core::TurnUsage::default(),
             stream_chunks: 0,
             turn_count: 0,
             request_count: 0,
@@ -131,11 +128,10 @@ impl AppState {
                 self.blocks.push(DisplayBlock::Error(msg));
                 true
             }
-            ConversationEvent::Usage { input_tokens, output_tokens } => {
+            ConversationEvent::Usage { input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens } => {
                 self.input_tokens += input_tokens as u64;
                 self.output_tokens += output_tokens as u64;
-                self.turn_input_tokens = input_tokens as u64;
-                self.turn_output_tokens = output_tokens as u64;
+                self.turn_usage.update(input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens);
                 true
             }
             ConversationEvent::ApiRequestMade => {
@@ -204,8 +200,7 @@ impl AppState {
         self.is_streaming = false;
         self.input_tokens = 0;
         self.output_tokens = 0;
-        self.turn_input_tokens = 0;
-        self.turn_output_tokens = 0;
+        self.turn_usage.reset();
         self.stream_chunks = 0;
         self.turn_count = 0;
         self.request_count = 0;
