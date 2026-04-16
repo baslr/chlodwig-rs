@@ -766,3 +766,180 @@ fn load_app_css() {
 // color rendering path only exists in Pango 2.x (PangoFontMap2).
 // The bundled Noto-COLRv1.ttf and extraction code remain in lib.rs
 // for future use when Pango 2.x becomes available.
+
+
+/// Show a UserQuestion dialog for the LLM's question.
+///
+/// Displays the question with optional selectable options and a free-text entry.
+/// When the user responds (or cancels), the `respond` oneshot sender is used to
+/// return the answer to the waiting tool. The `on_close` callback is invoked
+/// when the dialog closes (regardless of how — submit, cancel, or window close)
+/// so the caller can show the next queued dialog.
+pub fn show_user_question_dialog(
+    parent: &ApplicationWindow,
+    question: &str,
+    options: &[String],
+    respond: tokio::sync::oneshot::Sender<String>,
+    on_close: Box<dyn Fn() + 'static>,
+) {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let respond = Rc::new(RefCell::new(Some(respond)));
+    let on_close = Rc::new(on_close);
+
+    // Build content area
+    let content = GtkBox::new(Orientation::Vertical, 8);
+    content.set_margin_start(16);
+    content.set_margin_end(16);
+    content.set_margin_top(16);
+    content.set_margin_bottom(16);
+
+    // Question label
+    let question_label = Label::new(Some(question));
+    question_label.set_wrap(true);
+    question_label.set_xalign(0.0);
+    question_label.add_css_class("title-3");
+    content.append(&question_label);
+
+    // Free-text entry
+    let entry = gtk4::Entry::new();
+    entry.set_placeholder_text(Some(if options.is_empty() {
+        "Type your answer…"
+    } else {
+        "Or type a free-text answer…"
+    }));
+
+    // Build dialog window
+    let dialog = gtk4::Window::builder()
+        .title("Question from Assistant")
+        .transient_for(parent)
+        .modal(true)
+        .default_width(450)
+        .build();
+
+    let dialog_rc = Rc::new(dialog);
+
+    // Helper: send answer, close dialog, and notify caller
+    let make_responder = |respond: Rc<RefCell<Option<tokio::sync::oneshot::Sender<String>>>>,
+                          dialog: Rc<gtk4::Window>,
+                          on_close: Rc<Box<dyn Fn() + 'static>>| {
+        move |answer: String| {
+            if let Some(tx) = respond.borrow_mut().take() {
+                let _ = tx.send(answer);
+            }
+            dialog.close();
+            on_close();
+        }
+    };
+
+    // Option buttons
+    if !options.is_empty() {
+        let opts_box = GtkBox::new(Orientation::Vertical, 4);
+        for (i, opt) in options.iter().enumerate() {
+            let btn = Button::with_label(&format!("{}. {}", i + 1, opt));
+            btn.set_halign(gtk4::Align::Fill);
+            btn.add_css_class("flat");
+            let answer = opt.clone();
+            let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+            btn.connect_clicked(move |_| {
+                do_respond(answer.clone());
+            });
+            opts_box.append(&btn);
+        }
+        content.append(&opts_box);
+        content.append(&Separator::new(Orientation::Horizontal));
+    }
+
+    content.append(&entry);
+
+    // Button bar
+    let button_bar = GtkBox::new(Orientation::Horizontal, 8);
+    button_bar.set_margin_top(8);
+    button_bar.set_halign(gtk4::Align::End);
+
+    let cancel_btn = Button::with_label("Cancel");
+    let submit_btn = Button::with_label("Submit");
+    submit_btn.add_css_class("suggested-action");
+    button_bar.append(&cancel_btn);
+    button_bar.append(&submit_btn);
+    content.append(&button_bar);
+
+    // Cancel
+    {
+        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+        cancel_btn.connect_clicked(move |_| {
+            do_respond(String::new());
+        });
+    }
+
+    // Submit (from button or entry activation)
+    {
+        let entry_for_submit = entry.clone();
+        let options_clone: Vec<String> = options.to_vec();
+        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+        submit_btn.connect_clicked(move |_| {
+            let text = entry_for_submit.text().to_string();
+            let answer = if text.is_empty() && !options_clone.is_empty() {
+                // If no text typed and options available, default to first option
+                options_clone[0].clone()
+            } else {
+                text
+            };
+            do_respond(answer);
+        });
+    }
+
+    // Enter key in entry → submit (same fallback logic as Submit button)
+    {
+        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+        let options_for_enter: Vec<String> = options.to_vec();
+        entry.connect_activate(move |e| {
+            let text = e.text().to_string();
+            let answer = if text.is_empty() && !options_for_enter.is_empty() {
+                options_for_enter[0].clone()
+            } else {
+                text
+            };
+            do_respond(answer);
+        });
+    }
+
+    // Escape key → cancel
+    {
+        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+        let key_ctrl = gtk4::EventControllerKey::new();
+        key_ctrl.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk4::gdk::Key::Escape {
+                do_respond(String::new());
+                return gtk4::glib::Propagation::Stop;
+            }
+            gtk4::glib::Propagation::Proceed
+        });
+        dialog_rc.add_controller(key_ctrl);
+    }
+
+    // Also send empty string if window is closed via X button
+    {
+        let respond_close = respond.clone();
+        let on_close_x = on_close.clone();
+        dialog_rc.connect_close_request(move |_| {
+            // Only call on_close if respond hasn't been consumed yet.
+            // If it was already taken, the dialog was closed via make_responder
+            // which already called on_close.
+            if let Some(tx) = respond_close.borrow_mut().take() {
+                let _ = tx.send(String::new());
+                on_close_x();
+            }
+            gtk4::glib::Propagation::Proceed
+        });
+    }
+
+    dialog_rc.set_child(Some(&content));
+    dialog_rc.present();
+
+    // Focus: entry if text-only, otherwise first option button is already focusable
+    if options.is_empty() {
+        entry.grab_focus();
+    }
+}

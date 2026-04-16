@@ -33,6 +33,7 @@
 | `tests/copy_tests.rs` | 42 | Clipboard logic tests |
 | `tests/startup_cwd_tests.rs` | 40 | Startup CWD message tests |
 | `tests/quit_shortcut_tests.rs` | 21 | Cmd+Q shortcut tests |
+| `tests/user_question_tests.rs` | ~200 | UserQuestion dialog state, navigation, submit/cancel, source-level wiring tests |
 
 ### What the TUI has (feature comparison)
 
@@ -53,7 +54,7 @@
 | Timestamps | ✅ per-message | ❌ | — |
 | Adaptive typewriter effect | ✅ char-by-char queue | ❌ | Could skip — GTK TextBuffer updates are smooth enough |
 | Permission dialog | ✅ modal overlay | ❌ | Need `GtkMessageDialog` or `AdwAlertDialog` |
-| UserQuestion dialog | ✅ modal with options + free-text | ❌ | Need `AdwAlertDialog` or custom dialog |
+| UserQuestion dialog | ✅ modal with options + free-text | ✅ | Modal `gtk4::Window` with option buttons + `GtkEntry`, shared `UserQuestionTool` from `chlodwig-tools` |
 | `/clear`, `/reset`, `/new` | ✅ | ✅ | — |
 | `/compact` | ✅ | ✅ | Via `BackgroundCommand::Compact` → `compact_conversation()` |
 | `/help` | ✅ | ✅ | — |
@@ -120,10 +121,10 @@ The TUI has a modal overlay (y/n/a). The GTK version currently uses `AutoApprove
 ### 1.3 UserQuestion Dialog
 The LLM can call the `UserQuestion` tool to ask the user a question with optional choices.
 
-- [ ] **1.3.1** — Create `GtkUserQuestionDialog` using `AdwAlertDialog` + `GtkListBox` for options + `GtkEntry` for free-text
-- [ ] **1.3.2** — Bridge via `mpsc::UnboundedSender<UserQuestionRequest>` (same pattern as TUI)
-- [ ] **1.3.3** — Inject `UserQuestionTool` with the channel sender into `ConversationState.tools`
-- [ ] **1.3.4** — Test: model calls `UserQuestion` → dialog appears → user responds → tool returns
+- [x] **1.3.1** — Show `UserQuestion` dialog using a modal `gtk4::Window` with option buttons + free-text `GtkEntry`
+- [x] **1.3.2** — Bridge via `mpsc::UnboundedSender<UserQuestionRequest>` (same pattern as TUI, shared from `chlodwig-tools`)
+- [x] **1.3.3** — Inject `UserQuestionTool` with the channel sender into `ConversationState.tools`
+- [x] **1.3.4** — GTK dialog handles all interaction: option clicks, Enter in entry, Escape/Cancel/close → oneshot response back to tool
 
 ### 1.4 Session Persistence
 - [x] **1.4.1** — Auto-save on `TurnComplete` and `CompactionComplete` (via `BackgroundCommand::SaveSession` → `chlodwig_core::save_session()`)

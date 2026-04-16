@@ -144,6 +144,10 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     let (event_tx, event_rx) = mpsc::unbounded_channel::<ConversationEvent>();
     let event_rx = Rc::new(RefCell::new(Some(event_rx)));
 
+    // Channel: UserQuestion tool → GTK dialog
+    let (uq_tx, uq_rx) = mpsc::unbounded_channel::<chlodwig_tools::UserQuestionRequest>();
+    let uq_rx = Rc::new(RefCell::new(Some(uq_rx)));
+
     // Channel: commands from GTK → background task
     let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<BackgroundCommand>();
 
@@ -630,6 +634,13 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     let status_left_label = widgets.status_left_label.clone();
     let status_right_label = widgets.status_right_label.clone();
     let window_for_notify = window.clone();
+    let window_for_uq = window.clone();
+    // Sequential dialog queue: only one UserQuestion dialog at a time.
+    // Incoming requests are pushed to uq_queue; when no dialog is open
+    // (uq_dialog_open == false), the next request is popped and shown.
+    let uq_queue: Rc<RefCell<std::collections::VecDeque<chlodwig_tools::UserQuestionRequest>>> =
+        Rc::new(RefCell::new(std::collections::VecDeque::new()));
+    let uq_dialog_open: Rc<Cell<bool>> = Rc::new(Cell::new(false));
     let project_name = chlodwig_gtk::app_state::project_dir_name();
     let prompt_tx_for_events = prompt_tx.clone();
     let session_started_at_for_events = session_started_at.clone();
@@ -639,6 +650,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     // Use glib::timeout_add_local to periodically check for events
     // This bridges the async Tokio world with the GTK main loop.
     let event_rx_cell = event_rx.clone();
+    let uq_rx_cell = uq_rx.clone();
     // Track tool_use_id → (tool_name, input) so ToolResult can identify Read/Bash/Write/Grep
     let mut tool_id_to_info: std::collections::HashMap<String, (String, serde_json::Value)> =
         std::collections::HashMap::new();
@@ -705,6 +717,41 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             let _ = prompt_tx_for_events.send(BackgroundCommand::SaveSession {
                 started_at: session_started_at_for_events.clone(),
             });
+        }
+
+        // Drain pending UserQuestion requests into the queue.
+        {
+            let mut uq_opt = uq_rx_cell.borrow_mut();
+            if let Some(uq) = uq_opt.as_mut() {
+                while let Ok(req) = uq.try_recv() {
+                    uq_queue.borrow_mut().push_back(req);
+                }
+            }
+        }
+
+        // Show the next queued dialog if none is currently open.
+        if !uq_dialog_open.get() {
+            let next = uq_queue.borrow_mut().pop_front();
+            if let Some(req) = next {
+                uq_dialog_open.set(true);
+                let uq_dialog_open_clone = uq_dialog_open.clone();
+                let uq_queue_clone = uq_queue.clone();
+                let window_clone = window_for_uq.clone();
+                window::show_user_question_dialog(
+                    &window_for_uq,
+                    &req.question,
+                    &req.options,
+                    req.respond,
+                    Box::new(move || {
+                        // Called when the dialog closes — show next queued dialog if any.
+                        uq_dialog_open_clone.set(false);
+                        // Trigger next dialog on the next event loop tick
+                        // (the timeout_add_local will pick it up).
+                        let _ = &uq_queue_clone;
+                        let _ = &window_clone;
+                    }),
+                );
+            }
         }
 
         // --- Streaming Markdown rendering (once per tick) ---
@@ -816,7 +863,10 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 None,
                 chlodwig_core::UiContext::Gui,
             );
-            let tools = chlodwig_tools::builtin_tools();
+            let mut tools = chlodwig_tools::builtin_tools();
+            // Inject UserQuestion tool — uq_tx was created in GTK scope,
+            // the receiver (uq_rx) is polled in the GTK event loop.
+            tools.push(Box::new(chlodwig_tools::UserQuestionTool::new(uq_tx)));
 
             let mut conv_state = ConversationState {
                 messages: Vec::new(),

@@ -11,3 +11,4 @@ mod streaming_tests;
 mod quit_shortcut_tests;
 mod startup_cwd_tests;
 mod table_viewport_tests;
+mod user_question_tests;
