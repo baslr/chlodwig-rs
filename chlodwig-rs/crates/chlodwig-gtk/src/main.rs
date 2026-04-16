@@ -474,121 +474,22 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     // to <Control>v/c/x/a. On macOS, users press Cmd (META_MASK) not Ctrl.
     // GTK4 has an internal Cmd→Ctrl remapping, but it doesn't work reliably
     // with MacPorts builds (GTK 4.14.x). We explicitly handle Cmd+V/C/X/A
-    // by emitting the corresponding clipboard signals.
+    // Cmd+Return → submit (prompt-specific, before the shared shortcuts)
     let submit_for_key = submit.clone();
-    let input_view_for_key = widgets.input_view.clone();
-    let input_view_key_ctrl = gtk4::EventControllerKey::new();
-    input_view_key_ctrl.connect_key_pressed(move |_, key, _keycode, modifiers| {
+    let input_view_submit_ctrl = gtk4::EventControllerKey::new();
+    input_view_submit_ctrl.connect_key_pressed(move |_, key, _keycode, modifiers| {
         let is_cmd = modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
             || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
-
         if key == gtk4::gdk::Key::Return && is_cmd {
             submit_for_key();
             return glib::Propagation::Stop;
         }
-
-        // Cmd+V → paste, Cmd+C → copy, Cmd+X → cut, Cmd+A → select all
-        // Cmd+Backspace → delete from cursor to line start
-        if is_cmd {
-            match key {
-                k if k == gtk4::gdk::Key::v || k == gtk4::gdk::Key::V => {
-                    input_view_for_key.emit_paste_clipboard();
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::c || k == gtk4::gdk::Key::C => {
-                    input_view_for_key.emit_copy_clipboard();
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::x || k == gtk4::gdk::Key::X => {
-                    input_view_for_key.emit_cut_clipboard();
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::a || k == gtk4::gdk::Key::A => {
-                    let buf = input_view_for_key.buffer();
-                    buf.select_range(&buf.start_iter(), &buf.end_iter());
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::BackSpace => {
-                    let buf = input_view_for_key.buffer();
-                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
-                    let cursor = buf.cursor_position() as usize;
-                    let (new_text, new_cursor) = chlodwig_gtk::app_state::delete_to_line_start(&text, cursor);
-                    buf.set_text(&new_text);
-                    let iter = buf.iter_at_offset(new_cursor as i32);
-                    buf.place_cursor(&iter);
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::Left => {
-                    let buf = input_view_for_key.buffer();
-                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
-                    let cursor = buf.cursor_position() as usize;
-                    let new_pos = chlodwig_gtk::app_state::line_start_pos(&text, cursor);
-                    let iter = buf.iter_at_offset(new_pos as i32);
-                    buf.place_cursor(&iter);
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::Right => {
-                    let buf = input_view_for_key.buffer();
-                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
-                    let cursor = buf.cursor_position() as usize;
-                    let new_pos = chlodwig_gtk::app_state::line_end_pos(&text, cursor);
-                    let iter = buf.iter_at_offset(new_pos as i32);
-                    buf.place_cursor(&iter);
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::Up => {
-                    let buf = input_view_for_key.buffer();
-                    buf.place_cursor(&buf.start_iter());
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::Down => {
-                    let buf = input_view_for_key.buffer();
-                    buf.place_cursor(&buf.end_iter());
-                    return glib::Propagation::Stop;
-                }
-                _ => {}
-            }
-        }
-
-        // Option+Left → word left, Option+Right → word right, Option+Backspace → delete word back
-        let is_alt = modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK);
-        if is_alt {
-            match key {
-                k if k == gtk4::gdk::Key::Left => {
-                    let buf = input_view_for_key.buffer();
-                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
-                    let cursor = buf.cursor_position() as usize;
-                    let new_pos = chlodwig_gtk::app_state::word_left_pos(&text, cursor);
-                    let iter = buf.iter_at_offset(new_pos as i32);
-                    buf.place_cursor(&iter);
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::Right => {
-                    let buf = input_view_for_key.buffer();
-                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
-                    let cursor = buf.cursor_position() as usize;
-                    let new_pos = chlodwig_gtk::app_state::word_right_pos(&text, cursor);
-                    let iter = buf.iter_at_offset(new_pos as i32);
-                    buf.place_cursor(&iter);
-                    return glib::Propagation::Stop;
-                }
-                k if k == gtk4::gdk::Key::BackSpace => {
-                    let buf = input_view_for_key.buffer();
-                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
-                    let cursor = buf.cursor_position() as usize;
-                    let (new_text, new_cursor) = chlodwig_gtk::app_state::delete_word_back(&text, cursor);
-                    buf.set_text(&new_text);
-                    let iter = buf.iter_at_offset(new_cursor as i32);
-                    buf.place_cursor(&iter);
-                    return glib::Propagation::Stop;
-                }
-                _ => {}
-            }
-        }
-
         glib::Propagation::Proceed
     });
-    widgets.input_view.add_controller(input_view_key_ctrl);
+    widgets.input_view.add_controller(input_view_submit_ctrl);
+
+    // macOS Cmd/Option shortcuts (shared with UserQuestion dialog)
+    chlodwig_gtk::window::setup_macos_input_shortcuts(&widgets.input_view);
 
     // --- Copy feedback: show "✓ Copied!" in status bar when text is copied ---
     let state_for_copy = app_state.clone();

@@ -15,8 +15,8 @@
 | File | Lines | Content |
 |------|------:|---------|
 | `app_state.rs` | 458 | GTK-independent `AppState` + `DisplayBlock` enum, `handle_event()`, input editing helpers (`delete_to_line_start`, `line_start_pos`, `line_end_pos`, `word_left_pos`, `word_right_pos`, `delete_word_back`), `AutoScroll` delegation, `TurnUsage` context |
-| `window.rs` | 768 | Window layout, TextTags, `append_styled()`, `scroll_to_bottom()`, emoji overlay rendering, context menu, DND disable |
-| `main.rs` | 1118 | Entry point, Tokio↔GTK bridge, `render_event_to_buffer()`, `build_system_prompt()`, keyboard shortcuts (Cmd+V/C/X/A, Cmd+Enter, Cmd+Q, Cmd+Backspace, Cmd+←/→/↑/↓, Option+←/→/⌫), auto-scroll via `vadjustment`, syntax highlighting for Read/Write/Edit |
+| `window.rs` | 768 | Window layout, TextTags, `append_styled()`, `scroll_to_bottom()`, emoji overlay rendering, context menu, DND disable, `setup_macos_input_shortcuts()` (shared Cmd/Option keybindings for any TextView), UserQuestion dialog (multiline TextView, Cmd+Enter to submit) |
+| `main.rs` | 1118 | Entry point, Tokio↔GTK bridge, `render_event_to_buffer()`, `build_system_prompt()`, keyboard shortcuts via shared `setup_macos_input_shortcuts()` + Cmd+Enter submit, auto-scroll via `vadjustment`, syntax highlighting for Read/Write/Edit |
 | `md_renderer.rs` | 576 | Markdown → GtkTextBuffer renderer (headings, bold, italic, code blocks, lists, tables, syntax-highlighted fenced code) |
 | `emoji.rs` | 1243 | Emoji detection, CoreText bitmap rendering, ZWJ sequence handling |
 | `emoji_overlay.rs` | 417 | EmojiTextView subclass with overlay-based emoji rendering |
@@ -54,7 +54,7 @@
 | Timestamps | ✅ per-message | ❌ | — |
 | Adaptive typewriter effect | ✅ char-by-char queue | ❌ | Could skip — GTK TextBuffer updates are smooth enough |
 | Permission dialog | ✅ modal overlay | ❌ | Need `GtkMessageDialog` or `AdwAlertDialog` |
-| UserQuestion dialog | ✅ modal with options + free-text | ✅ | Modal `gtk4::Window` with option buttons + `GtkEntry`, shared `UserQuestionTool` from `chlodwig-tools` |
+| UserQuestion dialog | ✅ modal with options + free-text | ✅ | Modal `gtk4::Window` with option buttons + multiline `GtkTextView` (same widget + shortcuts as prompt input via `setup_macos_input_shortcuts()`), Enter=newline, Cmd+Enter=submit |
 | `/clear`, `/reset`, `/new` | ✅ | ✅ | — |
 | `/compact` | ✅ | ✅ | Via `BackgroundCommand::Compact` → `compact_conversation()` |
 | `/help` | ✅ | ✅ | — |
@@ -121,10 +121,11 @@ The TUI has a modal overlay (y/n/a). The GTK version currently uses `AutoApprove
 ### 1.3 UserQuestion Dialog
 The LLM can call the `UserQuestion` tool to ask the user a question with optional choices.
 
-- [x] **1.3.1** — Show `UserQuestion` dialog using a modal `gtk4::Window` with option buttons + free-text `GtkEntry`
+- [x] **1.3.1** — Show `UserQuestion` dialog using a modal `gtk4::Window` with option buttons + multiline `GtkTextView` (same shortcuts as prompt input via shared `setup_macos_input_shortcuts()`)
 - [x] **1.3.2** — Bridge via `mpsc::UnboundedSender<UserQuestionRequest>` (same pattern as TUI, shared from `chlodwig-tools`)
 - [x] **1.3.3** — Inject `UserQuestionTool` with the channel sender into `ConversationState.tools`
-- [x] **1.3.4** — GTK dialog handles all interaction: option clicks, Enter in entry, Escape/Cancel/close → oneshot response back to tool
+- [x] **1.3.4** — GTK dialog handles all interaction: option clicks, Cmd+Enter to submit, Escape/Cancel/close → oneshot response back to tool
+- [x] **1.3.5** — Enter inserts newline (same as prompt input), Cmd+Enter submits — 1:1 behavior with prompt TextView
 
 ### 1.4 Session Persistence
 - [x] **1.4.1** — Auto-save on `TurnComplete` and `CompactionComplete` (via `BackgroundCommand::SaveSession` → `chlodwig_core::save_session()`)
@@ -219,7 +220,7 @@ The TUI has 5 tabs. GTK can use different patterns:
 - [ ] **3.4.4** — Keyboard shortcut hints in placeholder text
 
 ### 3.5 Keyboard Shortcuts
-Most TUI keybindings are unnecessary in GTK (native text editing). Implemented so far:
+Most TUI keybindings are unnecessary in GTK (native text editing). All Cmd/Option shortcuts are implemented via `setup_macos_input_shortcuts()` in `window.rs` — shared between the main prompt input and the UserQuestion dialog. Implemented so far:
 
 - [x] **3.5.0** — `Cmd+Enter` — submit prompt (Ctrl+Enter on Linux)
 - [x] **3.5.0b** — `Cmd+V/C/X/A` — paste/copy/cut/select-all (explicit META_MASK handling for macOS)

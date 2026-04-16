@@ -13,8 +13,7 @@ fn pending_with_options(
         question: question.to_string(),
         options: options.iter().map(|s| s.to_string()).collect(),
         selected: if options.is_empty() { None } else { Some(0) },
-        text_input: String::new(),
-        text_cursor: 0,
+        input: chlodwig_core::InputState::new(),
         respond: tx,
     };
     (q, rx)
@@ -59,8 +58,8 @@ fn test_has_modal_true_with_permission() {
 fn test_user_question_with_options_starts_on_first_option() {
     let (q, _rx) = pending_with_options("Pick one", &["A", "B", "C"]);
     assert_eq!(q.selected, Some(0));
-    assert!(q.text_input.is_empty());
-    assert_eq!(q.text_cursor, 0);
+    assert!(q.input.is_empty());
+    assert_eq!(q.input.cursor, 0);
 }
 
 #[test]
@@ -153,50 +152,35 @@ fn test_user_question_text_input_insert_char() {
     let (mut q, _rx) = pending_text_only("Question?");
     assert_eq!(q.selected, None); // text mode
 
-    // Simulate typing "hi"
-    let byte_pos = q.text_input.char_indices().nth(q.text_cursor)
-        .map(|(i, _)| i).unwrap_or(q.text_input.len());
-    q.text_input.insert(byte_pos, 'h');
-    q.text_cursor += 1;
+    // Simulate typing "hi" using InputState
+    q.input.insert_char('h');
+    q.input.insert_char('i');
 
-    let byte_pos = q.text_input.char_indices().nth(q.text_cursor)
-        .map(|(i, _)| i).unwrap_or(q.text_input.len());
-    q.text_input.insert(byte_pos, 'i');
-    q.text_cursor += 1;
-
-    assert_eq!(q.text_input, "hi");
-    assert_eq!(q.text_cursor, 2);
+    assert_eq!(q.input.text, "hi");
+    assert_eq!(q.input.cursor, 2);
 }
 
 #[test]
 fn test_user_question_text_input_backspace() {
     let (mut q, _rx) = pending_text_only("Question?");
-    q.text_input = "hei".to_string();
-    q.text_cursor = 3;
+    q.input = chlodwig_core::InputState::with_text("hei");
 
     // Backspace
-    q.text_cursor -= 1;
-    let byte_pos = q.text_input.char_indices().nth(q.text_cursor)
-        .map(|(i, _)| i).unwrap_or(q.text_input.len());
-    q.text_input.remove(byte_pos);
+    q.input.delete_back();
 
-    assert_eq!(q.text_input, "he");
-    assert_eq!(q.text_cursor, 2);
+    assert_eq!(q.input.text, "he");
+    assert_eq!(q.input.cursor, 2);
 }
 
 #[test]
 fn test_user_question_text_input_utf8() {
     let (mut q, _rx) = pending_text_only("Name?");
-    q.text_input = "Ärger".to_string();
-    q.text_cursor = 5; // at end
+    q.input = chlodwig_core::InputState::with_text("Ärger");
 
     // Backspace removes 'r'
-    q.text_cursor -= 1;
-    let byte_pos = q.text_input.char_indices().nth(q.text_cursor)
-        .map(|(i, _)| i).unwrap_or(q.text_input.len());
-    q.text_input.remove(byte_pos);
+    q.input.delete_back();
 
-    assert_eq!(q.text_input, "Ärge");
+    assert_eq!(q.input.text, "Ärge");
 }
 
 // ── Submit ────────────────────────────────────────────────────────
@@ -227,13 +211,13 @@ fn test_user_question_submit_second_option() {
 #[test]
 fn test_user_question_submit_text_input() {
     let (mut q, rx) = pending_text_only("Thoughts?");
-    q.text_input = "I think we should use Rust".to_string();
+    q.input = chlodwig_core::InputState::with_text("I think we should use Rust");
     q.selected = None; // text mode
 
     let answer = if let Some(idx) = q.selected {
         q.options[idx].clone()
     } else {
-        q.text_input.clone()
+        q.input.text.clone()
     };
     q.respond.send(answer).unwrap();
 
@@ -244,12 +228,12 @@ fn test_user_question_submit_text_input() {
 fn test_user_question_submit_freetext_ignoring_options() {
     let (mut q, rx) = pending_with_options("Pick color", &["Red", "Blue"]);
     q.selected = None; // switched to text mode
-    q.text_input = "Green actually".to_string();
+    q.input = chlodwig_core::InputState::with_text("Green actually");
 
     let answer = if let Some(idx) = q.selected {
         q.options[idx].clone()
     } else {
-        q.text_input.clone()
+        q.input.text.clone()
     };
     q.respond.send(answer).unwrap();
 
@@ -368,5 +352,98 @@ fn test_user_question_definition_in_tool_list() {
     assert!(
         source.contains("UserQuestionTool::new"),
         "Event loop must create UserQuestionTool with the channel sender"
+    );
+}
+
+// ── InputState integration in dialog ─────────────────────────────
+
+#[test]
+fn test_user_question_word_movement() {
+    let (mut q, _rx) = pending_text_only("Question?");
+    q.input = chlodwig_core::InputState::with_text("hello world");
+    q.input.move_cursor_word_left();
+    assert_eq!(q.input.cursor, 6);
+    q.input.move_cursor_word_right();
+    assert_eq!(q.input.cursor, 11);
+}
+
+#[test]
+fn test_user_question_delete_word_back() {
+    let (mut q, _rx) = pending_text_only("Question?");
+    q.input = chlodwig_core::InputState::with_text("hello world");
+    q.input.delete_word_back();
+    assert_eq!(q.input.text, "hello ");
+}
+
+#[test]
+fn test_user_question_delete_word_forward() {
+    let (mut q, _rx) = pending_text_only("Question?");
+    q.input = chlodwig_core::InputState::with_text("hello world");
+    q.input.cursor = 0;
+    q.input.delete_word_forward();
+    assert_eq!(q.input.text, " world");
+}
+
+#[test]
+fn test_user_question_newline_insertion() {
+    let (mut q, _rx) = pending_text_only("Question?");
+    q.input.insert_char('a');
+    q.input.insert_newline();
+    q.input.insert_char('b');
+    assert_eq!(q.input.text, "a\nb");
+}
+
+#[test]
+fn test_user_question_paste() {
+    let (mut q, _rx) = pending_text_only("Question?");
+    q.input.insert_paste("line1\r\nline2\nline3");
+    assert_eq!(q.input.text, "line1\nline2\nline3");
+    assert_eq!(q.input.cursor, 17);
+}
+
+#[test]
+fn test_user_question_delete_forward() {
+    let (mut q, _rx) = pending_text_only("Question?");
+    q.input = chlodwig_core::InputState::with_text("abc");
+    q.input.cursor = 1;
+    q.input.delete_forward();
+    assert_eq!(q.input.text, "ac");
+    assert_eq!(q.input.cursor, 1);
+}
+
+#[test]
+fn test_user_question_home_end() {
+    let (mut q, _rx) = pending_text_only("Question?");
+    q.input = chlodwig_core::InputState::with_text("hello");
+    q.input.move_home();
+    assert_eq!(q.input.cursor, 0);
+    q.input.move_end();
+    assert_eq!(q.input.cursor, 5);
+}
+
+#[test]
+fn test_event_loop_has_user_question_alt_b_handler() {
+    let source = include_str!("../event_loop.rs");
+    assert!(
+        source.contains("Char('b') if app.pending_user_question"),
+        "Event loop must handle Alt+b in user question dialog"
+    );
+}
+
+#[test]
+fn test_event_loop_has_user_question_ctrl_j_handler() {
+    let source = include_str!("../event_loop.rs");
+    assert!(
+        source.contains("Char('j') if app.pending_user_question"),
+        "Event loop must handle Ctrl+J in user question dialog"
+    );
+}
+
+#[test]
+fn test_event_loop_has_user_question_delete_forward_handler() {
+    let source = include_str!("../event_loop.rs");
+    assert!(
+        source.contains("KeyCode::Delete if app.pending_user_question"),
+        "Event loop must handle Delete key in user question dialog"
     );
 }

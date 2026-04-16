@@ -623,10 +623,10 @@ pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion
         Style::default().fg(Color::DarkGray)
     };
     let input_prefix = if input_focused { "▸ " } else { "  " };
-    let input_label = if q.text_input.is_empty() {
+    let input_label = if q.input.is_empty() {
         format!("{input_prefix}Type your answer...")
     } else {
-        format!("{input_prefix}{}", q.text_input)
+        format!("{input_prefix}{}", q.input.text)
     };
     lines.push(Line::from(Span::styled(input_label, input_style)));
 
@@ -660,11 +660,7 @@ pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion
         // Compute cursor position within the dialog
         // The text input line is after: question, blank, options..., blank
         let text_line_offset = 2 + if q.options.is_empty() { 0 } else { q.options.len() + 1 };
-        let cursor_x = area.x + 1 + 2 + q.text_input[..q.text_input
-            .char_indices()
-            .nth(q.text_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(q.text_input.len())]
+        let cursor_x = area.x + 1 + 2 + q.input.text[..q.input.cursor_byte_pos()]
             .width() as u16;
         let cursor_y = area.y + 1 + text_line_offset as u16;
         if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {

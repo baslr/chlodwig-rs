@@ -18,6 +18,120 @@ use crate::emoji;
 use crate::emoji_overlay::EmojiTextView;
 
 const BUILD_TIME: &str = env!("BUILD_TIME");
+
+/// Set up macOS-standard keyboard shortcuts on a `TextView`:
+/// Cmd+C/V/X/A, Cmd+Backspace (delete to line start), Cmd+Left/Right (line start/end),
+/// Cmd+Up/Down (document start/end), Option+Left/Right (word left/right),
+/// Option+Backspace (delete word back).
+///
+/// This is used for both the main prompt input and the UserQuestion dialog input.
+pub fn setup_macos_input_shortcuts(view: &TextView) {
+    let view_for_key = view.clone();
+    let key_ctrl = gtk4::EventControllerKey::new();
+    key_ctrl.connect_key_pressed(move |_, key, _keycode, modifiers| {
+        let is_cmd = modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
+            || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+
+        if is_cmd {
+            match key {
+                k if k == gtk4::gdk::Key::v || k == gtk4::gdk::Key::V => {
+                    view_for_key.emit_paste_clipboard();
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::c || k == gtk4::gdk::Key::C => {
+                    view_for_key.emit_copy_clipboard();
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::x || k == gtk4::gdk::Key::X => {
+                    view_for_key.emit_cut_clipboard();
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::a || k == gtk4::gdk::Key::A => {
+                    let buf = view_for_key.buffer();
+                    buf.select_range(&buf.start_iter(), &buf.end_iter());
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::BackSpace => {
+                    let buf = view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let (new_text, new_cursor) = crate::app_state::delete_to_line_start(&text, cursor);
+                    buf.set_text(&new_text);
+                    let iter = buf.iter_at_offset(new_cursor as i32);
+                    buf.place_cursor(&iter);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Left => {
+                    let buf = view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = crate::app_state::line_start_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Right => {
+                    let buf = view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = crate::app_state::line_end_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Up => {
+                    let buf = view_for_key.buffer();
+                    buf.place_cursor(&buf.start_iter());
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Down => {
+                    let buf = view_for_key.buffer();
+                    buf.place_cursor(&buf.end_iter());
+                    return gtk4::glib::Propagation::Stop;
+                }
+                _ => {}
+            }
+        }
+
+        let is_alt = modifiers.contains(gtk4::gdk::ModifierType::ALT_MASK);
+        if is_alt {
+            match key {
+                k if k == gtk4::gdk::Key::Left => {
+                    let buf = view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = crate::app_state::word_left_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::Right => {
+                    let buf = view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let new_pos = crate::app_state::word_right_pos(&text, cursor);
+                    let iter = buf.iter_at_offset(new_pos as i32);
+                    buf.place_cursor(&iter);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                k if k == gtk4::gdk::Key::BackSpace => {
+                    let buf = view_for_key.buffer();
+                    let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
+                    let cursor = buf.cursor_position() as usize;
+                    let (new_text, new_cursor) = crate::app_state::delete_word_back(&text, cursor);
+                    buf.set_text(&new_text);
+                    let iter = buf.iter_at_offset(new_cursor as i32);
+                    buf.place_cursor(&iter);
+                    return gtk4::glib::Propagation::Stop;
+                }
+                _ => {}
+            }
+        }
+
+        gtk4::glib::Propagation::Proceed
+    });
+    view.add_controller(key_ctrl);
+}
 const BUILD_ID: &str = env!("BUILD_ID");
 
 // Thread-local emoji cache for CoreText-rendered emoji bitmaps.
@@ -802,13 +916,59 @@ pub fn show_user_question_dialog(
     question_label.add_css_class("title-3");
     content.append(&question_label);
 
-    // Free-text entry
-    let entry = gtk4::Entry::new();
-    entry.set_placeholder_text(Some(if options.is_empty() {
+    // Free-text input (multiline TextView — same widget as the main prompt input,
+    // so all macOS Cmd-shortcuts work: Cmd+A, Cmd+Left/Right, Option+Left/Right,
+    // Cmd+Backspace, Cmd+C/V/X, etc.)
+    let text_buffer = gtk4::TextBuffer::new(None::<&gtk4::TextTagTable>);
+    let text_view = TextView::builder()
+        .buffer(&text_buffer)
+        .editable(true)
+        .wrap_mode(WrapMode::Word)
+        .vexpand(true)
+        .top_margin(4)
+        .bottom_margin(4)
+        .left_margin(8)
+        .right_margin(8)
+        .build();
+
+    // Attach macOS Cmd/Option shortcuts (shared with main prompt input)
+    setup_macos_input_shortcuts(&text_view);
+
+    let text_scroll = ScrolledWindow::builder()
+        .hexpand(true)
+        .vexpand(true)
+        .min_content_height(40)
+        .hscrollbar_policy(PolicyType::Never)
+        .vscrollbar_policy(PolicyType::Automatic)
+        .child(&text_view)
+        .build();
+
+    // Placeholder hint
+    let placeholder_text = if options.is_empty() {
         "Type your answer…"
     } else {
         "Or type a free-text answer…"
-    }));
+    };
+    let placeholder_label = Label::new(Some(placeholder_text));
+    placeholder_label.set_xalign(0.0);
+    placeholder_label.set_opacity(0.5);
+    placeholder_label.set_margin_start(12);
+    placeholder_label.set_margin_top(8);
+    placeholder_label.set_can_target(false);
+
+    // Show/hide placeholder based on buffer content
+    {
+        let pl = placeholder_label.clone();
+        text_buffer.connect_changed(move |buf| {
+            let has_text = buf.char_count() > 0;
+            pl.set_visible(!has_text);
+        });
+    }
+
+    // Overlay the placeholder on the text view
+    let text_overlay = gtk4::Overlay::new();
+    text_overlay.set_child(Some(&text_scroll));
+    text_overlay.add_overlay(&placeholder_label);
 
     // Build dialog window
     let dialog = gtk4::Window::builder()
@@ -816,6 +976,7 @@ pub fn show_user_question_dialog(
         .transient_for(parent)
         .modal(true)
         .default_width(450)
+        .default_height(300)
         .build();
 
     let dialog_rc = Rc::new(dialog);
@@ -857,7 +1018,7 @@ pub fn show_user_question_dialog(
         content.append(&Separator::new(Orientation::Horizontal));
     }
 
-    content.append(&entry);
+    content.append(&text_overlay);
 
     // Button bar
     let button_bar = GtkBox::new(Orientation::Horizontal, 8);
@@ -879,15 +1040,15 @@ pub fn show_user_question_dialog(
         });
     }
 
-    // Submit (from button or entry activation)
+    // Submit (from button)
     {
-        let entry_for_submit = entry.clone();
+        let buf_for_submit = text_buffer.clone();
         let options_clone: Vec<String> = options.to_vec();
         let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
         submit_btn.connect_clicked(move |_| {
-            let text = entry_for_submit.text().to_string();
-            let answer = if text.is_empty() && !options_clone.is_empty() {
-                // If no text typed and options available, default to first option
+            let (start, end) = buf_for_submit.bounds();
+            let text = buf_for_submit.text(&start, &end, false).to_string();
+            let answer = if text.trim().is_empty() && !options_clone.is_empty() {
                 options_clone[0].clone()
             } else {
                 text
@@ -896,19 +1057,29 @@ pub fn show_user_question_dialog(
         });
     }
 
-    // Enter key in entry → submit (same fallback logic as Submit button)
+    // Cmd+Enter → submit (Enter alone inserts newline — same as main prompt input)
     {
         let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
         let options_for_enter: Vec<String> = options.to_vec();
-        entry.connect_activate(move |e| {
-            let text = e.text().to_string();
-            let answer = if text.is_empty() && !options_for_enter.is_empty() {
-                options_for_enter[0].clone()
-            } else {
-                text
-            };
-            do_respond(answer);
+        let buf_for_enter = text_buffer.clone();
+        let key_ctrl = gtk4::EventControllerKey::new();
+        key_ctrl.connect_key_pressed(move |_, key, _, modifiers| {
+            let is_cmd = modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
+                || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
+            if key == gtk4::gdk::Key::Return && is_cmd {
+                let (start, end) = buf_for_enter.bounds();
+                let text = buf_for_enter.text(&start, &end, false).to_string();
+                let answer = if text.trim().is_empty() && !options_for_enter.is_empty() {
+                    options_for_enter[0].clone()
+                } else {
+                    text
+                };
+                do_respond(answer);
+                return gtk4::glib::Propagation::Stop;
+            }
+            gtk4::glib::Propagation::Proceed
         });
+        text_view.add_controller(key_ctrl);
     }
 
     // Escape key → cancel
@@ -944,8 +1115,8 @@ pub fn show_user_question_dialog(
     dialog_rc.set_child(Some(&content));
     dialog_rc.present();
 
-    // Focus: entry if text-only, otherwise first option button is already focusable
+    // Focus: text view if text-only, otherwise first option button is already focusable
     if options.is_empty() {
-        entry.grab_focus();
+        text_view.grab_focus();
     }
 }

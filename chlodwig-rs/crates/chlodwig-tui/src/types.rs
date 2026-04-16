@@ -1,6 +1,6 @@
 //! Shared types, enums, and constants for the TUI.
 
-use chlodwig_core::PermissionDecision;
+use chlodwig_core::{InputState, PermissionDecision};
 use tokio::sync::oneshot;
 
 // ── Display model ──────────────────────────────────────────────────
@@ -87,10 +87,8 @@ pub(crate) struct PendingUserQuestion {
     /// Currently selected option index (0..options.len()), or `None` when
     /// the free-text input is focused.
     pub(crate) selected: Option<usize>,
-    /// Free-text input buffer (user can type instead of picking an option).
-    pub(crate) text_input: String,
-    /// Cursor position (char index) in `text_input`.
-    pub(crate) text_cursor: usize,
+    /// Free-text input state (reusable InputState with full editing support).
+    pub(crate) input: InputState,
     pub(crate) respond: oneshot::Sender<String>,
 }
 

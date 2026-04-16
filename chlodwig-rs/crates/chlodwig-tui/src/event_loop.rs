@@ -1156,7 +1156,7 @@ pub async fn run_tui_with_permissions(
                         let answer = if let Some(idx) = q.selected {
                             q.options[idx].clone()
                         } else {
-                            q.text_input
+                            q.input.text
                         };
                         let _ = q.respond.send(answer);
                     }
@@ -1165,47 +1165,86 @@ pub async fn run_tui_with_permissions(
                         let q = app.pending_user_question.take().unwrap();
                         let _ = q.respond.send(String::new());
                     }
-                    // Text input when in text mode (no option selected)
+                    // Alt+b: word left in text mode
+                    KeyCode::Char('b') if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.move_cursor_word_left();
+                    }
+                    // Alt+f: word right in text mode
+                    KeyCode::Char('f') if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.move_cursor_word_right();
+                    }
+                    // Alt+d: delete word forward in text mode
+                    KeyCode::Char('d') if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.delete_word_forward();
+                    }
+                    // Ctrl+J: insert newline in text mode
+                    KeyCode::Char('j') if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.insert_newline();
+                    }
+                    // Text input when in text mode (no option selected) — general Char handler
                     KeyCode::Char(c) if app.pending_user_question.is_some()
                         && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
                     {
                         let q = app.pending_user_question.as_mut().unwrap();
-                        // Insert at cursor position (char-based)
-                        let byte_pos = q.text_input
-                            .char_indices()
-                            .nth(q.text_cursor)
-                            .map(|(i, _)| i)
-                            .unwrap_or(q.text_input.len());
-                        q.text_input.insert(byte_pos, c);
-                        q.text_cursor += 1;
+                        q.input.insert_char(c);
+                    }
+                    // Alt+Backspace: delete word back in text mode (must be before plain Backspace)
+                    KeyCode::Backspace if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
+                        && key.modifiers.contains(KeyModifiers::ALT) =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.delete_word_back();
                     }
                     // Backspace in text mode
                     KeyCode::Backspace if app.pending_user_question.is_some()
                         && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && app.pending_user_question.as_ref().unwrap().text_cursor > 0 =>
+                        && app.pending_user_question.as_ref().unwrap().input.cursor > 0 =>
                     {
                         let q = app.pending_user_question.as_mut().unwrap();
-                        q.text_cursor -= 1;
-                        let byte_pos = q.text_input
-                            .char_indices()
-                            .nth(q.text_cursor)
-                            .map(|(i, _)| i)
-                            .unwrap_or(q.text_input.len());
-                        q.text_input.remove(byte_pos);
+                        q.input.delete_back();
                     }
                     // Left/Right cursor in text mode
                     KeyCode::Left if app.pending_user_question.is_some()
                         && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && app.pending_user_question.as_ref().unwrap().text_cursor > 0 =>
+                        && app.pending_user_question.as_ref().unwrap().input.cursor > 0 =>
                     {
-                        app.pending_user_question.as_mut().unwrap().text_cursor -= 1;
+                        app.pending_user_question.as_mut().unwrap().input.move_left();
                     }
                     KeyCode::Right if app.pending_user_question.is_some()
                         && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && app.pending_user_question.as_ref().unwrap().text_cursor
-                            < app.pending_user_question.as_ref().unwrap().text_input.chars().count() =>
+                        && app.pending_user_question.as_ref().unwrap().input.cursor
+                            < app.pending_user_question.as_ref().unwrap().input.char_count() =>
                     {
-                        app.pending_user_question.as_mut().unwrap().text_cursor += 1;
+                        app.pending_user_question.as_mut().unwrap().input.move_right();
+                    }
+                    // Home/End in text mode
+                    KeyCode::Home if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.move_home();
+                    }
+                    KeyCode::End if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.move_end();
+                    }
+                    // Delete key (fn+Backspace) in text mode
+                    KeyCode::Delete if app.pending_user_question.is_some()
+                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
+                    {
+                        app.pending_user_question.as_mut().unwrap().input.delete_forward();
                     }
                     // Number keys 1-9: quick-select option (when options exist)
                     KeyCode::Char(c @ '1'..='9') if app.pending_user_question.is_some()
@@ -1801,8 +1840,7 @@ pub async fn run_tui_with_permissions(
                 question: req.question,
                 options: req.options.clone(),
                 selected: if req.options.is_empty() { None } else { Some(0) },
-                text_input: String::new(),
-                text_cursor: 0,
+                input: chlodwig_core::InputState::new(),
                 respond: req.respond,
             });
             needs_redraw = true;

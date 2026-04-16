@@ -239,3 +239,46 @@ fn test_empty_options_means_freetext_only() {
     let _ = req.respond.send("Claude".to_string());
     assert_eq!(rx.blocking_recv().unwrap(), "Claude");
 }
+
+// --- Dialog uses multiline TextView, not single-line Entry ---
+
+#[test]
+fn test_dialog_uses_textview_not_entry() {
+    let source = include_str!("../window.rs");
+    assert!(
+        source.contains("TextView::builder()"),
+        "UserQuestion dialog must use a multiline TextView, not a single-line Entry"
+    );
+    // The old Entry::new() should be gone from the dialog
+    assert!(
+        !source.contains("Entry::new()"),
+        "UserQuestion dialog must NOT use Entry::new() — use TextView for multiline"
+    );
+}
+
+#[test]
+fn test_dialog_uses_shared_macos_shortcuts() {
+    let source = include_str!("../window.rs");
+    assert!(
+        source.contains("setup_macos_input_shortcuts(&text_view)"),
+        "UserQuestion dialog must call setup_macos_input_shortcuts on its TextView"
+    );
+}
+
+#[test]
+fn test_main_uses_shared_macos_shortcuts() {
+    let source = include_str!("../main.rs");
+    assert!(
+        source.contains("setup_macos_input_shortcuts"),
+        "Main prompt input must use the shared setup_macos_input_shortcuts function"
+    );
+}
+
+#[test]
+fn test_dialog_cmd_enter_submits() {
+    let source = include_str!("../window.rs");
+    assert!(
+        source.contains("META_MASK"),
+        "Dialog must check for Cmd (META_MASK) modifier so Cmd+Enter submits"
+    );
+}
