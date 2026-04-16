@@ -19,7 +19,7 @@ pub mod tools;
 
 pub use auto_scroll::*;
 pub use input_state::InputState;
-pub use command::{Command, COMMANDS_HELP, execute_shell_pty};
+pub use command::{Command, COMMANDS_HELP, execute_shell_pty, help_markdown_commands, help_markdown_keys_tui, help_markdown_keys_gtk};
 pub use config::*;
 pub use conversation::*;
 pub use log_paths::*;

@@ -877,25 +877,13 @@ pub async fn run_tui_with_permissions(
                             break; // exit inner drain loop
                                 }
                                 Command::Help => {
-                            let help_text = format!(
-                                "{}
-
-⌨ Key Bindings:
-  Enter                 Submit input
-  Ctrl+J                Insert newline (all terminals)
-  Shift+Enter           Insert newline (Kitty-protocol terminals)
-  Up / Down             Move cursor in multiline input; history on first/last line
-  Alt+← / Alt+→         Move cursor word left / right
-  Alt+b / Alt+f         Move cursor word left / right (Emacs)
-  Alt+Backspace         Delete word backward
-  Alt+d                 Delete word forward
-  Ctrl+K                Delete word backward
-  Ctrl+L                Delete word forward
-  Ctrl+C                Quit",
-                                chlodwig_core::COMMANDS_HELP
+                            let help_md = format!(
+                                "{}\n\n{}",
+                                chlodwig_core::help_markdown_commands(),
+                                chlodwig_core::help_markdown_keys_tui(),
                             );
-                            app.display_blocks.push(DisplayBlock::SystemMessage(
-                                help_text,
+                            app.display_blocks.push(DisplayBlock::AssistantText(
+                                help_md,
                             ));
                             app.mark_dirty();
                             app.scroll_to_bottom();

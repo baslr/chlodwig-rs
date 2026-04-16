@@ -257,8 +257,17 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                     return;
                 }
                 Command::Help => {
-                    let help = chlodwig_gtk::app_state::help_text();
-                    window::append_styled(&output_buf_for_submit, &format!("\n{help}\n"), "system");
+                    let help_md = format!(
+                        "{}\n\n{}",
+                        chlodwig_core::help_markdown_commands(),
+                        chlodwig_core::help_markdown_keys_gtk(),
+                    );
+                    {
+                        let mut state = state_for_submit.borrow_mut();
+                        state.blocks.push(chlodwig_gtk::app_state::DisplayBlock::AssistantText(help_md));
+                    }
+                    let state = state_for_submit.borrow();
+                    rerender_all_blocks(&output_buf_for_submit, &state, viewport_cols_for_submit.get());
                     window::scroll_to_bottom(&scroll_for_submit);
                     return;
                 }

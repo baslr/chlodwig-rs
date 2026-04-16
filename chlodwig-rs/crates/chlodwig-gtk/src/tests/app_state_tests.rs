@@ -1029,13 +1029,14 @@ fn test_parse_command_shell_preserves_case() {
 }
 
 #[test]
-fn test_help_text_contains_commands() {
-    let help = crate::app_state::help_text();
-    assert!(help.contains("/clear"), "help must mention /clear");
-    assert!(help.contains("/help"), "help must mention /help");
-    assert!(help.contains("! <cmd>"), "help must mention shell");
-    assert!(help.contains("exit"), "help must mention exit");
-    assert!(help.contains("Cmd+Enter"), "help must mention Cmd+Enter");
+fn test_help_markdown_contains_commands_and_keys() {
+    let cmds = chlodwig_core::help_markdown_commands();
+    let keys = chlodwig_core::help_markdown_keys_gtk();
+    assert!(cmds.contains("`/help`"), "must mention /help in backticks");
+    assert!(cmds.contains("`/clear`"), "must mention /clear");
+    assert!(cmds.contains("`! <cmd>`"), "must mention shell");
+    assert!(keys.contains("`Cmd+Enter`"), "must mention Cmd+Enter");
+    assert!(keys.contains("`Cmd+Q`"), "must mention Cmd+Q");
 }
 
 #[test]

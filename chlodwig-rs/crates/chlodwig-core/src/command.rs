@@ -96,6 +96,65 @@ pub const COMMANDS_HELP: &str = "\
   ! <cmd>               Execute shell command
   exit, quit            Exit";
 
+/// Commands section as a markdown table.
+pub fn help_markdown_commands() -> String {
+    "\
+## 📖 Commands
+
+| Command | Description |
+|---------|-------------|
+| `/help`, `/?` | Show this help |
+| `/sessions` | List all saved sessions |
+| `/resume` | Load the most recent session |
+| `/resume <prefix>` | Load session by timestamp prefix |
+| `/save` | Manually save the current session |
+| `/compact [instr]` | Compact conversation history |
+| `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
+| `! <cmd>` | Execute shell command |
+| `exit`, `quit` | Exit |"
+        .to_string()
+}
+
+/// TUI keybindings as a markdown table.
+pub fn help_markdown_keys_tui() -> String {
+    "\
+## ⌨ Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Submit input |
+| `Ctrl+J` | Insert newline (all terminals) |
+| `Shift+Enter` | Insert newline (Kitty-protocol terminals) |
+| `Up` / `Down` | Move cursor in multiline input; history on first/last line |
+| `Alt+←` / `Alt+→` | Move cursor word left / right |
+| `Alt+b` / `Alt+f` | Move cursor word left / right (Emacs) |
+| `Alt+Backspace` | Delete word backward |
+| `Alt+d` | Delete word forward |
+| `Ctrl+K` | Delete word backward |
+| `Ctrl+L` | Delete word forward |
+| `Ctrl+C` | Quit |"
+        .to_string()
+}
+
+/// GTK keybindings as a markdown table.
+pub fn help_markdown_keys_gtk() -> String {
+    "\
+## ⌨ Key Bindings
+
+| Key | Action |
+|-----|--------|
+| `Cmd+Enter` | Submit input |
+| `Enter` | Insert newline |
+| `Cmd+Backspace` | Delete to start of line |
+| `Option+Backspace` | Delete word backward |
+| `Cmd+←/→` | Move cursor to line start/end |
+| `Cmd+↑/↓` | Move cursor to document start/end |
+| `Option+←/→` | Move cursor word left/right |
+| `Cmd+V/C/X/A` | Paste/Copy/Cut/Select All |
+| `Cmd+Q` | Quit |"
+        .to_string()
+}
+
 /// Execute a shell command in a PTY and return `(output, is_error)`.
 ///
 /// Wraps the command in `script` to allocate a pseudo-terminal so programs
@@ -258,6 +317,50 @@ mod tests {
         assert!(COMMANDS_HELP.contains("/sessions"), "must mention /sessions");
         assert!(COMMANDS_HELP.contains("/resume"), "must mention /resume");
         assert!(COMMANDS_HELP.contains("/save"), "must mention /save");
+    }
+
+    // ── help_markdown tests ─────────────────────────────────────
+
+    #[test]
+    fn test_help_markdown_commands_is_valid_table() {
+        let md = help_markdown_commands();
+        assert!(md.contains("| Command | Description |"), "must have header");
+        assert!(md.contains("|---------|"), "must have separator");
+        assert!(md.contains("`/help`"), "commands must be in backticks");
+        assert!(md.contains("`/compact [instr]`"));
+        assert!(md.contains("`! <cmd>`"));
+        assert!(md.contains("`exit`"));
+    }
+
+    #[test]
+    fn test_help_markdown_keys_tui_is_valid_table() {
+        let md = help_markdown_keys_tui();
+        assert!(md.contains("| Key | Action |"));
+        assert!(md.contains("`Enter`"));
+        assert!(md.contains("`Ctrl+J`"));
+        assert!(md.contains("`Ctrl+C`"));
+    }
+
+    #[test]
+    fn test_help_markdown_keys_gtk_is_valid_table() {
+        let md = help_markdown_keys_gtk();
+        assert!(md.contains("| Key | Action |"));
+        assert!(md.contains("`Cmd+Enter`"));
+        assert!(md.contains("`Cmd+Q`"));
+    }
+
+    #[test]
+    fn test_help_markdown_commands_all_commands_present() {
+        let md = help_markdown_commands();
+        // Every parseable command must appear
+        assert!(md.contains("/help"));
+        assert!(md.contains("/sessions"));
+        assert!(md.contains("/resume"));
+        assert!(md.contains("/save"));
+        assert!(md.contains("/compact"));
+        assert!(md.contains("/clear"));
+        assert!(md.contains("! <cmd>"));
+        assert!(md.contains("exit"));
     }
 
     // ── execute_shell_pty tests ───────────────────────────────────
