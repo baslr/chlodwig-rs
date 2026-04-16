@@ -388,13 +388,21 @@ info "Signing host app..."
 # If the host app is sandboxed, macOS forces CWD to
 # ~/Library/Containers/<bundle-id>/Data and CHLODWIG_PROJECT_DIR is ignored.
 
-# Sign WITHOUT entitlements (no sandbox, no restrictions)
-codesign --force --sign "$CERT_NAME" \
+# Sign ad-hoc (NOT with the self-signed certificate).
+# The self-signed cert triggers AMFI validation on the host app too,
+# which can cause "Chlodwig cannot be opened because of a problem" dialogs.
+# Ad-hoc signing works fine for unsigned local apps on macOS.
+codesign --force --sign - \
     "$APP_DIR"
 
 # Verify the host app was NOT signed with sandbox
 if codesign -d --entitlements - "$APP_DIR" 2>&1 | grep -q "app-sandbox"; then
     error "Host app has sandbox entitlements! This breaks CHLODWIG_PROJECT_DIR."
+fi
+
+# Verify host is ad-hoc signed (not with certificate — certificate breaks app launch)
+if codesign -dvvv "$APP_DIR" 2>&1 | grep -q "Authority="; then
+    warn "Host app signed with certificate instead of ad-hoc. This may cause launch failures."
 fi
 
 # Verify extension signature survived host signing
@@ -456,6 +464,51 @@ echo "    - Make sure 'Chlodwig Finder Integration' is enabled"
 echo "    - Run: pluginkit -m -p com.apple.FinderSync"
 echo "    - Run: log show --predicate 'eventMessage contains \"ChlodwigFinderSync\"' --last 1m"
 echo ""
+
+# --- Step 9: Install LaunchAgent watchdog ---
+
+info "Installing FinderSync watchdog LaunchAgent..."
+
+WATCHDOG_SCRIPT="$SCRIPT_DIR/chlodwig-finder-watchdog.sh"
+WATCHDOG_INSTALL="$HOME/.chlodwig-rs/chlodwig-finder-watchdog.sh"
+PLIST_NAME="rs.chlodwig.finder-watchdog"
+PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
+
+# Copy watchdog script to a stable location
+mkdir -p "$HOME/.chlodwig-rs"
+cp "$WATCHDOG_SCRIPT" "$WATCHDOG_INSTALL"
+chmod +x "$WATCHDOG_INSTALL"
+
+# Unload old agent if present
+launchctl bootout "gui/$(id -u)/$PLIST_NAME" 2>/dev/null || true
+
+# Write LaunchAgent plist
+cat > "$PLIST_PATH" << WATCHDOG_PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${PLIST_NAME}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${WATCHDOG_INSTALL}</string>
+    </array>
+    <key>StartInterval</key>
+    <integer>30</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardErrorPath</key>
+    <string>${HOME}/.chlodwig-rs/finder-watchdog-stderr.log</string>
+</dict>
+</plist>
+WATCHDOG_PLIST
+
+# Load the agent
+launchctl bootstrap "gui/$(id -u)" "$PLIST_PATH"
+
+info "Watchdog installed. Checks every 30 seconds."
 
 # --- Cleanup ---
 rm -rf "$BUILD_DIR"
