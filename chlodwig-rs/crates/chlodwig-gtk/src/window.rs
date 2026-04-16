@@ -839,6 +839,12 @@ pub fn show_user_question_dialog(
         for (i, opt) in options.iter().enumerate() {
             let btn = Button::with_label(&format!("{}. {}", i + 1, opt));
             btn.set_halign(gtk4::Align::Fill);
+            // Left-align the label text inside the button (GTK default is centered).
+            if let Some(child) = btn.child() {
+                if let Some(label) = child.downcast_ref::<Label>() {
+                    label.set_xalign(0.0);
+                }
+            }
             btn.add_css_class("flat");
             let answer = opt.clone();
             let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
