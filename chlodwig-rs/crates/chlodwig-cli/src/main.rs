@@ -269,6 +269,7 @@ async fn run_headless(
         messages: state.messages.clone(),
         system_prompt: state.system_prompt.clone(),
         constants: None, // headless mode doesn't have editable constants
+        table_sorts: vec![],
     };
     if let Err(e) = chlodwig_core::save_session(&snapshot) {
         eprintln!("\x1b[33mWarning: failed to save session: {e}\x1b[0m");

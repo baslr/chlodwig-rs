@@ -382,6 +382,7 @@ fn trigger_session_save(
             messages: guard.messages.clone(),
             system_prompt: guard.system_prompt.clone(),
             constants: Some(constants),
+            table_sorts: vec![],
         };
         drop(guard); // release lock before blocking I/O
 

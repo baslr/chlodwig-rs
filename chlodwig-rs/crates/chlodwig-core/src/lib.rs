@@ -24,7 +24,8 @@ pub use config::*;
 pub use conversation::*;
 pub use log_paths::*;
 pub use markdown::{
-    MdColor, MdStyle, StyledLine, StyledSpan, render_markdown, render_markdown_with_width,
+    MdColor, MdStyle, StyledLine, StyledSpan, TableData, extract_tables,
+    render_markdown, render_markdown_with_table_overrides, render_markdown_with_width,
 };
 pub use messages::*;
 pub use permissions::*;

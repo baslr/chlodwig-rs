@@ -62,6 +62,9 @@ pub struct AppState {
     /// Whether tool usage blocks (ToolUseStart, ToolResult) are visible in the output.
     /// UI preference — survives `clear()`.
     pub show_tool_usage: bool,
+    /// Extracted table data for sortable tables. Each entry is (block_index, table_index_within_block, TableData).
+    /// Updated when AssistantText blocks are added. Used by the GTK click handler to sort tables.
+    pub tables: Vec<(usize, usize, chlodwig_core::TableData)>,
 }
 
 impl AppState {
@@ -82,6 +85,7 @@ impl AppState {
             should_notify: false,
             auto_scroll: chlodwig_core::AutoScroll::new(),
             show_tool_usage: true,
+            tables: Vec::new(),
         }
     }
 
@@ -99,7 +103,7 @@ impl AppState {
             ConversationEvent::TextComplete(text) => {
                 self.streaming_buffer.clear();
                 self.streaming_dirty = false;
-                self.blocks.push(DisplayBlock::AssistantText(text));
+                self.push_assistant_text(text);
                 true
             }
             ConversationEvent::ToolUseStart { name, input, .. } => {
@@ -190,7 +194,7 @@ impl AppState {
     fn flush_streaming(&mut self) {
         if !self.streaming_buffer.is_empty() {
             let text = std::mem::take(&mut self.streaming_buffer);
-            self.blocks.push(DisplayBlock::AssistantText(text));
+            self.push_assistant_text(text);
             self.streaming_dirty = false;
         }
     }
@@ -206,9 +210,36 @@ impl AppState {
         self.turn_usage.context_window_size()
     }
 
+    /// Push an AssistantText block and extract any tables from it.
+    fn push_assistant_text(&mut self, text: String) {
+        let block_index = self.blocks.len();
+        let extracted = chlodwig_core::extract_tables(&text);
+        for (table_idx, table) in extracted.into_iter().enumerate() {
+            self.tables.push((block_index, table_idx, table));
+        }
+        self.blocks.push(DisplayBlock::AssistantText(text));
+    }
+
+    /// Sort table `table_global_index` by `col_index`. Toggles direction if
+    /// already sorted by the same column. Returns `true` if a table was found.
+    pub fn sort_table(&mut self, table_global_index: usize, col_index: usize) -> bool {
+        if let Some((_bi, _ti, table)) = self.tables.get_mut(table_global_index) {
+            let descending = if table.sort_column == Some(col_index) {
+                !table.sort_descending // toggle
+            } else {
+                false // new column → ascending
+            };
+            *table = table.sorted_by_column(col_index, descending);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Clear the conversation.
     pub fn clear(&mut self) {
         self.blocks.clear();
+        self.tables.clear();
         self.streaming_buffer.clear();
         self.streaming_dirty = false;
         self.is_streaming = false;
@@ -221,6 +252,33 @@ impl AppState {
         self.copy_feedback = None;
         self.should_notify = false;
         self.auto_scroll.scroll_to_bottom();
+    }
+
+    /// Extract table sort states for session persistence.
+    pub fn table_sort_states(&self) -> Vec<chlodwig_core::TableSortState> {
+        self.tables
+            .iter()
+            .filter_map(|(bi, ti, td)| {
+                td.sort_column.map(|col| chlodwig_core::TableSortState {
+                    block_index: *bi,
+                    table_index: *ti,
+                    sort_column: col,
+                    sort_descending: td.sort_descending,
+                })
+            })
+            .collect()
+    }
+
+    /// Apply saved sort states to the extracted tables.
+    pub fn apply_table_sort_states(&mut self, sorts: &[chlodwig_core::TableSortState]) {
+        for sort in sorts {
+            if let Some((bi, ti, td)) = self.tables.iter_mut().find(|(bi, ti, _)| {
+                *bi == sort.block_index && *ti == sort.table_index
+            }) {
+                let _ = (bi, ti); // suppress unused warnings
+                *td = td.sorted_by_column(sort.sort_column, sort.sort_descending);
+            }
+        }
     }
 
     /// Restore saved messages into display blocks.
@@ -237,7 +295,7 @@ impl AppState {
                     self.blocks.push(DisplayBlock::UserMessage(text));
                 }
                 RestoredBlock::AssistantText(text) => {
-                    self.blocks.push(DisplayBlock::AssistantText(text));
+                    self.push_assistant_text(text);
                 }
                 RestoredBlock::Thinking(_) => {
                     // GTK doesn't display thinking blocks (yet)

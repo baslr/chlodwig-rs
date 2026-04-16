@@ -24,7 +24,7 @@ enum BackgroundCommand {
     /// Clear the conversation (reset `ConversationState.messages`).
     ClearMessages,
     /// Save the current session to disk.
-    SaveSession { started_at: String },
+    SaveSession { started_at: String, table_sorts: Vec<chlodwig_core::TableSortState> },
     /// Restore messages from a loaded session into ConversationState.
     RestoreMessages { messages: Vec<Message> },
     /// Compact the conversation history.
@@ -172,6 +172,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 {
                     let mut state = app_state.borrow_mut();
                     state.restore_messages(&snapshot.messages);
+                    state.apply_table_sort_states(&snapshot.table_sorts);
                 }
 
                 // Render restored blocks into the output buffer
@@ -350,6 +351,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                             {
                                 let mut state = state_for_submit.borrow_mut();
                                 state.restore_messages(&snapshot.messages);
+                                state.apply_table_sort_states(&snapshot.table_sorts);
                             }
                             viewport_cols_for_submit.set(
                                 chlodwig_gtk::viewport::viewport_columns(
@@ -399,6 +401,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 Command::Save => {
                     let _ = prompt_tx_clone.send(BackgroundCommand::SaveSession {
                         started_at: session_started_at_for_submit.clone(),
+                        table_sorts: state_for_submit.borrow().table_sort_states(),
                     });
                     window::append_styled(
                         &output_buf_for_submit,
@@ -490,6 +493,142 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
 
     // macOS Cmd/Option shortcuts (shared with UserQuestion dialog)
     chlodwig_gtk::window::setup_macos_input_shortcuts(&widgets.input_view);
+
+    // --- Table header click: sort table by clicked column ---
+    {
+        let state_for_sort = app_state.clone();
+        let output_buf_for_sort = widgets.output_buffer.clone();
+        let output_view_for_sort = widgets.output_view.clone();
+        let viewport_cols_for_sort = viewport_cols.clone();
+        let scroll_for_sort = widgets.output_scroll.clone();
+        let prompt_tx_for_sort = prompt_tx.clone();
+        let session_started_at_for_sort = session_started_at.clone();
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(1); // left click only
+        gesture.connect_released(move |_gesture, _n_press, x, y| {
+            // Convert widget coordinates to buffer coordinates
+            let (bx, by) = output_view_for_sort.window_to_buffer_coords(
+                gtk4::TextWindowType::Widget,
+                x as i32,
+                y as i32,
+            );
+            if let Some(iter) = output_view_for_sort.iter_at_location(bx, by) {
+                // Check all tags at this position for table_sort:G:C
+                for tag in iter.tags() {
+                    if let Some(name) = tag.name() {
+                        if let Some(rest) = name.strip_prefix("table_sort:") {
+                            let parts: Vec<&str> = rest.split(':').collect();
+                            if parts.len() == 2 {
+                                if let (Ok(global_idx), Ok(col_idx)) =
+                                    (parts[0].parse::<usize>(), parts[1].parse::<usize>())
+                                {
+                                    let mut state = state_for_sort.borrow_mut();
+                                    if state.sort_table(global_idx, col_idx) {
+                                        let vw = viewport_cols_for_sort.get();
+                                        rerender_table_in_place(&output_buf_for_sort, &state, global_idx, vw);
+                                        // Save sort state immediately
+                                        let _ = prompt_tx_for_sort.send(BackgroundCommand::SaveSession {
+                                            started_at: session_started_at_for_sort.clone(),
+                                            table_sorts: state.table_sort_states(),
+                                        });
+                                        if state.auto_scroll.is_active() {
+                                            let sc = scroll_for_sort.clone();
+                                            glib::idle_add_local_once(move || {
+                                                window::scroll_to_bottom(&sc);
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        widgets.output_view.add_controller(gesture);
+    }
+
+    // --- Table row highlight on hover ---
+    {
+        // Create the highlight tag once
+        let highlight_tag = gtk4::TextTag::builder()
+            .name("table_row_highlight")
+            .background("rgba(255,255,255,0.08)")
+            .build();
+        widgets.output_buffer.tag_table().add(&highlight_tag);
+
+        let output_view_for_motion = widgets.output_view.clone();
+        let output_buf_for_motion = widgets.output_buffer.clone();
+        let prev_highlight_line = std::rc::Rc::new(std::cell::Cell::new(-1i32));
+
+        let motion = gtk4::EventControllerMotion::new();
+        let prev_line_for_motion = prev_highlight_line.clone();
+        motion.connect_motion(move |_ctrl, x, y| {
+            let (bx, by) = output_view_for_motion.window_to_buffer_coords(
+                gtk4::TextWindowType::Widget,
+                x as i32,
+                y as i32,
+            );
+            let buf = &output_buf_for_motion;
+
+            // Remove previous highlight
+            let prev = prev_line_for_motion.get();
+            if prev >= 0 {
+                if let Some(tag) = buf.tag_table().lookup("table_row_highlight") {
+                    let start = buf.iter_at_line(prev).unwrap_or_else(|| buf.start_iter());
+                    let mut end = start;
+                    end.forward_to_line_end();
+                    buf.remove_tag(&tag, &start, &end);
+                }
+            }
+
+            // Check if cursor is on a table data row (contains │ but not ┌┐└┘├┤)
+            if let Some(iter) = output_view_for_motion.iter_at_location(bx, by) {
+                let line = iter.line();
+                let line_start = buf.iter_at_line(line).unwrap_or_else(|| buf.start_iter());
+                let mut line_end = line_start;
+                line_end.forward_to_line_end();
+                let text = buf.text(&line_start, &line_end, false);
+
+                let is_data_row = text.contains('│')
+                    && !text.starts_with('┌')
+                    && !text.starts_with('└')
+                    && !text.starts_with('├');
+
+                if is_data_row {
+                    if let Some(tag) = buf.tag_table().lookup("table_row_highlight") {
+                        let start = buf.iter_at_line(line).unwrap_or_else(|| buf.start_iter());
+                        let mut end = start;
+                        end.forward_to_line_end();
+                        buf.apply_tag(&tag, &start, &end);
+                    }
+                    prev_line_for_motion.set(line);
+                } else {
+                    prev_line_for_motion.set(-1);
+                }
+            } else {
+                prev_line_for_motion.set(-1);
+            }
+        });
+
+        // Clear highlight when mouse leaves the view
+        let output_buf_for_leave = widgets.output_buffer.clone();
+        let prev_line_for_leave = prev_highlight_line.clone();
+        motion.connect_leave(move |_ctrl| {
+            let prev = prev_line_for_leave.get();
+            if prev >= 0 {
+                if let Some(tag) = output_buf_for_leave.tag_table().lookup("table_row_highlight") {
+                    let start = output_buf_for_leave.iter_at_line(prev).unwrap_or_else(|| output_buf_for_leave.start_iter());
+                    let mut end = start;
+                    end.forward_to_line_end();
+                    output_buf_for_leave.remove_tag(&tag, &start, &end);
+                }
+                prev_line_for_leave.set(-1);
+            }
+        });
+
+        widgets.output_view.add_controller(motion);
+    }
 
     // --- Copy feedback: show "✓ Copied!" in status bar when text is copied ---
     let state_for_copy = app_state.clone();
@@ -625,6 +764,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         if should_save_session {
             let _ = prompt_tx_for_events.send(BackgroundCommand::SaveSession {
                 started_at: session_started_at_for_events.clone(),
+                table_sorts: state_for_events.borrow().table_sort_states(),
             });
         }
 
@@ -710,7 +850,33 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 }
 
                 let final_text = finalized_text.as_deref().unwrap_or("");
-                rerender_streaming_markdown(&output_buf, streaming_start_offset.get(), final_text, viewport_cols_for_events.get());
+                let vp = viewport_cols_for_events.get();
+
+                // Build table overrides if the finalized block has tables
+                let block_idx = state.blocks.len().saturating_sub(1);
+                let table_overrides: Vec<(usize, &chlodwig_core::TableData)> = state
+                    .tables
+                    .iter()
+                    .filter(|(bi, _, _)| *bi == block_idx)
+                    .map(|(_, ti, td)| (*ti, td))
+                    .collect();
+                let lines = if table_overrides.is_empty() {
+                    chlodwig_core::render_markdown_with_width(final_text, vp)
+                } else {
+                    chlodwig_core::render_markdown_with_table_overrides(final_text, vp, &table_overrides)
+                };
+
+                // Delete previous streaming render
+                chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf, streaming_start_offset.get());
+                let end_off = output_buf.end_iter().offset();
+                if end_off > streaming_start_offset.get() {
+                    let mut start = output_buf.iter_at_offset(streaming_start_offset.get());
+                    let mut end = output_buf.iter_at_offset(end_off);
+                    output_buf.delete(&mut start, &mut end);
+                }
+
+                // Re-render with table header tags
+                append_styled_lines_with_table_headers(&output_buf, &lines, &state.tables, block_idx);
                 window::append_to_output(&output_buf, "\n");
 
                 streaming_start_offset.set(-1);
@@ -840,7 +1006,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                         conv_state.messages.clear();
                         continue;
                     }
-                    BackgroundCommand::SaveSession { started_at } => {
+                    BackgroundCommand::SaveSession { started_at, table_sorts } => {
                         let snapshot = chlodwig_core::SessionSnapshot {
                             saved_at: chrono::Local::now().to_rfc3339(),
                             started_at,
@@ -848,6 +1014,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                             messages: conv_state.messages.clone(),
                             system_prompt: conv_state.system_prompt.clone(),
                             constants: None,
+                            table_sorts,
                         };
                         if let Err(e) = chlodwig_core::save_session(&snapshot) {
                             tracing::warn!("Failed to auto-save session: {e}");
@@ -943,15 +1110,23 @@ fn rerender_all_blocks(
     let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
     window::append_styled(buffer, &format!("{cwd_msg}\n"), "system");
 
-    for block in &state.blocks {
+    for (block_idx, block) in state.blocks.iter().enumerate() {
         match block {
             DisplayBlock::UserMessage(text) => {
                 window::append_styled(buffer, &format!("\n▶ {text}\n"), "user");
             }
             DisplayBlock::AssistantText(text) => {
                 window::append_to_output(buffer, "\n");
-                let lines = chlodwig_core::render_markdown_with_width(text, viewport_width);
-                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+                let overrides: Vec<(usize, &chlodwig_core::TableData)> = state.tables.iter()
+                    .filter(|(bi, _, _)| *bi == block_idx)
+                    .map(|(_, ti, td)| (*ti, td))
+                    .collect();
+                let lines = if overrides.is_empty() {
+                    chlodwig_core::render_markdown_with_width(text, viewport_width)
+                } else {
+                    chlodwig_core::render_markdown_with_table_overrides(text, viewport_width, &overrides)
+                };
+                append_styled_lines_with_table_headers(buffer, &lines, &state.tables, block_idx);
                 window::append_to_output(buffer, "\n");
             }
             DisplayBlock::ToolUseStart { name, input } => {
@@ -1025,15 +1200,23 @@ fn render_restored_blocks(
 ) {
     use chlodwig_gtk::app_state::DisplayBlock;
 
-    for block in &state.blocks {
+    for (block_idx, block) in state.blocks.iter().enumerate() {
         match block {
             DisplayBlock::UserMessage(text) => {
                 window::append_styled(buffer, &format!("\n▶ {text}\n"), "user");
             }
             DisplayBlock::AssistantText(text) => {
                 window::append_to_output(buffer, "\n");
-                let lines = chlodwig_core::render_markdown_with_width(text, viewport_width);
-                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+                let overrides: Vec<(usize, &chlodwig_core::TableData)> = state.tables.iter()
+                    .filter(|(bi, _, _)| *bi == block_idx)
+                    .map(|(_, ti, td)| (*ti, td))
+                    .collect();
+                let lines = if overrides.is_empty() {
+                    chlodwig_core::render_markdown_with_width(text, viewport_width)
+                } else {
+                    chlodwig_core::render_markdown_with_table_overrides(text, viewport_width, &overrides)
+                };
+                append_styled_lines_with_table_headers(buffer, &lines, &state.tables, block_idx);
                 window::append_to_output(buffer, "\n");
             }
             DisplayBlock::ToolUseStart { name, input } => {
@@ -1102,6 +1285,203 @@ fn render_restored_blocks(
 
 /// Delete the Markdown-rendered streaming range and re-render with new text.
 ///
+/// Like `append_styled_lines` but adds clickable `table_sort:G:C` tags to
+/// table header cells. `G` is the global table index in `all_tables`, `C` is
+/// the column index within that table. The click handler in the event loop
+/// parses these tag names to know which table/column to sort.
+fn append_styled_lines_with_table_headers(
+    buffer: &gtk4::TextBuffer,
+    lines: &[chlodwig_core::StyledLine],
+    all_tables: &[(usize, usize, chlodwig_core::TableData)],
+    block_idx: usize,
+) {
+    // Find global table indices for this block
+    let block_tables: Vec<usize> = all_tables.iter().enumerate()
+        .filter(|(_, (bi, _, _))| *bi == block_idx)
+        .map(|(global_idx, _)| global_idx)
+        .collect();
+
+    // State machine: detect table regions by looking for border characters
+    let mut table_within_block: usize = 0;
+    let mut in_table = false;
+    let mut header_next = false; // true after top border (┌), the next row is the header
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx > 0 {
+            let mut end = buffer.end_iter();
+            buffer.insert(&mut end, "\n");
+        }
+
+        let line_text = line.text();
+
+        // Detect table boundaries from border characters
+        if line_text.starts_with('┌') {
+            in_table = true;
+            header_next = true;
+        } else if line_text.starts_with('└') {
+            in_table = false;
+            table_within_block += 1;
+        } else if line_text.starts_with('├') {
+            header_next = false; // separator after header
+        }
+
+        // Check if this is a header row (bold cells between │ borders)
+        let is_header_row = in_table && header_next
+            && line.spans.iter().any(|s| s.style.bold && s.style.monospace);
+
+        if is_header_row {
+            // Find the global table index
+            let global_table_idx = if table_within_block < block_tables.len() {
+                block_tables[table_within_block]
+            } else {
+                usize::MAX // fallback — won't match
+            };
+
+            let mut col_idx: usize = 0;
+            for span in &line.spans {
+                let tag_name = chlodwig_gtk::md_renderer::ensure_tag(buffer, &span.style);
+
+                if span.style.bold && span.style.monospace && global_table_idx != usize::MAX {
+                    // This is a header cell — add both the style tag and a sort tag
+                    let sort_tag_name = format!("table_sort:{global_table_idx}:{col_idx}");
+                    // Ensure sort tag exists (clickable: underline on hover via CSS)
+                    let tag_table = buffer.tag_table();
+                    if tag_table.lookup(&sort_tag_name).is_none() {
+                        let sort_tag = gtk4::TextTag::builder()
+                            .name(&sort_tag_name)
+                            .build();
+                        tag_table.add(&sort_tag);
+                    }
+
+                    let mut end = buffer.end_iter();
+                    let start_offset = end.offset();
+                    buffer.insert(&mut end, &span.text);
+                    let start_iter = buffer.iter_at_offset(start_offset);
+                    let end_iter = buffer.end_iter();
+                    buffer.apply_tag_by_name(&tag_name, &start_iter, &end_iter);
+                    buffer.apply_tag_by_name(&sort_tag_name, &start_iter, &end_iter);
+                    col_idx += 1;
+                } else {
+                    chlodwig_gtk::md_renderer::insert_text_with_emoji_and_tag(
+                        buffer,
+                        &span.text,
+                        &tag_name,
+                        span.style.monospace,
+                    );
+                }
+            }
+        } else {
+            // Normal line — delegate to standard renderer
+            for span in &line.spans {
+                let tag_name = chlodwig_gtk::md_renderer::ensure_tag(buffer, &span.style);
+                chlodwig_gtk::md_renderer::insert_text_with_emoji_and_tag(
+                    buffer,
+                    &span.text,
+                    &tag_name,
+                    span.style.monospace,
+                );
+            }
+        }
+    }
+}
+
+/// Re-render a single table in-place in the TextBuffer after sorting.
+///
+/// Finds the table region by searching for the `table_sort:{global_idx}:0` tag,
+/// then expands to the full table (┌ to ┘), deletes it, and inserts the new
+/// sorted table. Much faster than `rerender_all_blocks` for long conversations.
+fn rerender_table_in_place(
+    buffer: &gtk4::TextBuffer,
+    state: &AppState,
+    global_table_idx: usize,
+    viewport_width: usize,
+) {
+    // Find the tag for column 0 of this table
+    let tag_name = format!("table_sort:{global_table_idx}:0");
+    let tag_table = buffer.tag_table();
+    let tag = match tag_table.lookup(&tag_name) {
+        Some(t) => t,
+        None => return, // tag not found, fall back silently
+    };
+
+    // Find where this tag is applied in the buffer
+    let mut iter = buffer.start_iter();
+    if !iter.starts_tag(Some(&tag)) {
+        if !iter.forward_to_tag_toggle(Some(&tag)) {
+            return;
+        }
+    }
+
+    // We're now at (or near) the header row. Walk backward to find ┌ (table top border)
+    let mut table_start = iter;
+    table_start.set_line(table_start.line());
+    table_start.set_line_offset(0);
+    // Search upward for a line starting with ┌
+    loop {
+        let line_start = buffer.iter_at_line(table_start.line());
+        if let Some(ls) = line_start {
+            let line_end = {
+                let mut e = ls;
+                e.forward_to_line_end();
+                e
+            };
+            let line_text = buffer.text(&ls, &line_end, false);
+            if line_text.starts_with('┌') {
+                table_start = ls;
+                break;
+            }
+        }
+        if table_start.line() == 0 {
+            break;
+        }
+        table_start = match buffer.iter_at_line(table_start.line() - 1) {
+            Some(i) => i,
+            None => break,
+        };
+    }
+
+    // Walk forward from the tag to find └ (table bottom border)
+    let mut table_end = iter;
+    loop {
+        let line_start = match buffer.iter_at_line(table_end.line()) {
+            Some(i) => i,
+            None => break,
+        };
+        let mut line_end = line_start;
+        line_end.forward_to_line_end();
+        let line_text = buffer.text(&line_start, &line_end, false);
+        if line_text.starts_with('└') {
+            // Include the newline after the └ line
+            table_end = line_end;
+            if !table_end.is_end() {
+                table_end.forward_char();
+            }
+            break;
+        }
+        if !table_end.forward_line() {
+            break;
+        }
+    }
+
+    // Get the block_index for this table to build overrides
+    let (block_idx, table_data) = match state.tables.get(global_table_idx) {
+        Some((bi, _ti, td)) => (*bi, td),
+        None => return,
+    };
+
+    // Render just this table
+    let table_lines = table_data.render(viewport_width);
+
+    // Clear emoji overlays in the table region
+    chlodwig_gtk::emoji_overlay::clear_overlays_from(buffer, table_start.offset());
+
+    // Delete old table text
+    buffer.delete(&mut table_start, &mut table_end);
+
+    // Insert new table with sort tags
+    append_styled_lines_with_table_headers(buffer, &table_lines, &state.tables, block_idx);
+}
+
 /// Called once per tick to update the live-streaming Markdown view.
 /// `start_offset` is the char offset where streaming started in the TextBuffer.
 fn rerender_streaming_markdown(

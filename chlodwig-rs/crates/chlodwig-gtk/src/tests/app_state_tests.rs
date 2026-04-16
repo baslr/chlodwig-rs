@@ -1076,3 +1076,219 @@ fn test_clear_resets_state() {
     assert_eq!(state.output_tokens, 0);
     assert_eq!(state.turn_count, 0);
 }
+
+// ── Table sorting tests ─────────────────────────────────────────────
+
+#[test]
+fn test_text_complete_extracts_tables() {
+    let mut state = AppState::new("test".into());
+    let md = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    assert_eq!(state.tables.len(), 1);
+    assert_eq!(state.tables[0].2.head, vec!["Name", "Age"]);
+    assert_eq!(state.tables[0].2.rows.len(), 2);
+}
+
+#[test]
+fn test_text_complete_no_tables() {
+    let mut state = AppState::new("test".into());
+    state.handle_event(ConversationEvent::TextComplete("Hello world".into()));
+    assert!(state.tables.is_empty());
+}
+
+#[test]
+fn test_sort_table_ascending() {
+    let mut state = AppState::new("test".into());
+    let md = "| Name | Age |\n|------|-----|\n| Zara | 42 |\n| Alice | 23 |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    assert!(state.sort_table(0, 0)); // sort by Name ascending
+    assert_eq!(state.tables[0].2.rows[0][0], "Alice");
+    assert_eq!(state.tables[0].2.rows[1][0], "Zara");
+}
+
+#[test]
+fn test_sort_table_toggle_descending() {
+    let mut state = AppState::new("test".into());
+    let md = "| Name |\n|------|\n| B |\n| A |\n| C |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    state.sort_table(0, 0); // ascending: A, B, C
+    assert_eq!(state.tables[0].2.rows[0][0], "A");
+    state.sort_table(0, 0); // toggle: descending: C, B, A
+    assert_eq!(state.tables[0].2.rows[0][0], "C");
+}
+
+#[test]
+fn test_sort_table_numeric() {
+    let mut state = AppState::new("test".into());
+    let md = "| X | Val |\n|---|-----|\n| a | 100 |\n| b | 3 |\n| c | 42 |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    state.sort_table(0, 1); // sort by Val (numeric)
+    assert_eq!(state.tables[0].2.rows[0][1], "3");
+    assert_eq!(state.tables[0].2.rows[1][1], "42");
+    assert_eq!(state.tables[0].2.rows[2][1], "100");
+}
+
+#[test]
+fn test_sort_table_preserves_rows() {
+    let mut state = AppState::new("test".into());
+    let md = "| Name | City |\n|------|------|\n| Zara | Wien |\n| Alice | Bern |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    state.sort_table(0, 0); // sort by Name
+    assert_eq!(state.tables[0].2.rows[0], vec!["Alice", "Bern"]);
+    assert_eq!(state.tables[0].2.rows[1], vec!["Zara", "Wien"]);
+}
+
+#[test]
+fn test_sort_table_invalid_index() {
+    let mut state = AppState::new("test".into());
+    let md = "| A |\n|---|\n| 1 |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    assert!(!state.sort_table(99, 0)); // invalid table index
+}
+
+#[test]
+fn test_clear_resets_tables() {
+    let mut state = AppState::new("test".into());
+    let md = "| A |\n|---|\n| 1 |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    assert_eq!(state.tables.len(), 1);
+    state.clear();
+    assert!(state.tables.is_empty());
+}
+
+#[test]
+fn test_multiple_tables_in_one_block() {
+    let mut state = AppState::new("test".into());
+    let md = "| A |\n|---|\n| 1 |\n\nText\n\n| B | C |\n|---|---|\n| x | y |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    assert_eq!(state.tables.len(), 2);
+    assert_eq!(state.tables[0].2.head, vec!["A"]);
+    assert_eq!(state.tables[1].2.head, vec!["B", "C"]);
+    // Both belong to block 0
+    assert_eq!(state.tables[0].0, 0);
+    assert_eq!(state.tables[1].0, 0);
+}
+
+#[test]
+fn test_sort_table_has_sort_indicator() {
+    let mut state = AppState::new("test".into());
+    let md = "| Name |\n|------|\n| B |\n| A |".to_string();
+    state.handle_event(ConversationEvent::TextComplete(md));
+    state.sort_table(0, 0);
+    let lines = state.tables[0].2.render(usize::MAX);
+    let text: String = lines.iter().map(|l| l.text()).collect::<Vec<_>>().join("");
+    assert!(text.contains("▲"), "Missing sort indicator: {text}");
+}
+
+#[test]
+fn test_event_loop_has_table_sort_click_handler() {
+    let source = include_str!("../main.rs");
+    assert!(
+        source.contains("table_sort:") && source.contains("sort_table"),
+        "main.rs must contain table sort click handler"
+    );
+}
+
+
+#[test]
+fn test_finalized_streaming_render_uses_table_headers() {
+    // The finalized streaming render (Case 2: TextComplete) must use
+    // append_styled_lines_with_table_headers so that table sort tags
+    // are present immediately — not only after a resize.
+    let source = include_str!("../main.rs");
+    // Find the rerender_streaming_markdown function — it must use
+    // append_styled_lines_with_table_headers, not plain append_styled_lines.
+    // OR the finalization block must call append_styled_lines_with_table_headers directly.
+    //
+    // The key check: after streaming_finalized, the render path must include table headers.
+    assert!(
+        source.contains("finalize_streaming_with_table_headers")
+            || (source.contains("streaming_finalized") && source.contains("append_styled_lines_with_table_headers")),
+        "Finalized streaming render must use append_styled_lines_with_table_headers \
+         so table sort tags are present immediately, not only after resize"
+    );
+}
+
+#[test]
+fn test_table_sort_states_extraction() {
+    let mut state = AppState::new("test".into());
+    let md = "| Name | Score |\n|------|-------|\n| Bob | 42 |\n| Alice | 7 |\n";
+    state.handle_event(ConversationEvent::TextComplete(md.to_string()));
+
+    // No sorts yet
+    let sorts = state.table_sort_states();
+    assert!(sorts.is_empty());
+
+    // Sort the table
+    state.sort_table(0, 0);
+    let sorts = state.table_sort_states();
+    assert_eq!(sorts.len(), 1);
+    assert_eq!(sorts[0].block_index, 0);
+    assert_eq!(sorts[0].table_index, 0);
+    assert_eq!(sorts[0].sort_column, 0);
+    assert!(!sorts[0].sort_descending);
+}
+
+#[test]
+fn test_apply_table_sort_states_restores_sort() {
+    let md = "| Name | Score |\n|------|-------|\n| Bob | 42 |\n| Alice | 7 |\n";
+
+    let mut state1 = AppState::new("test".into());
+    state1.handle_event(ConversationEvent::TextComplete(md.to_string()));
+    state1.sort_table(0, 0);
+    let sorts = state1.table_sort_states();
+
+    let mut state2 = AppState::new("test".into());
+    state2.handle_event(ConversationEvent::TextComplete(md.to_string()));
+    state2.apply_table_sort_states(&sorts);
+
+    let sorts2 = state2.table_sort_states();
+    assert_eq!(sorts2.len(), 1);
+    assert_eq!(sorts2[0].sort_column, 0);
+    assert!(!sorts2[0].sort_descending);
+
+    let (_, _, td) = &state2.tables[0];
+    assert_eq!(td.rows[0][0], "Alice");
+    assert_eq!(td.rows[1][0], "Bob");
+}
+
+#[test]
+fn test_session_save_includes_table_sorts() {
+    let source = include_str!("../main.rs");
+    assert!(
+        source.contains("table_sort_states()") && source.contains("table_sorts"),
+        "SaveSession must include table_sort_states from AppState"
+    );
+}
+
+#[test]
+fn test_session_restore_applies_table_sorts() {
+    let source = include_str!("../main.rs");
+    assert!(
+        source.contains("apply_table_sort_states"),
+        "Session restore must call apply_table_sort_states"
+    );
+}
+
+#[test]
+fn test_sort_table_does_not_rerender_all_blocks() {
+    // Sorting a table must NOT call rerender_all_blocks — it must only
+    // re-render the affected table in-place for performance.
+    let source = include_str!("../main.rs");
+    // Find the sort_table click handler block and verify it doesn't call rerender_all_blocks
+    let sort_handler_start = source.find("sort_table(global_idx").expect("sort handler must exist");
+    let sort_handler_section = &source[sort_handler_start..sort_handler_start + 500.min(source.len() - sort_handler_start)];
+    assert!(
+        !sort_handler_section.contains("rerender_all_blocks"),
+        "sort_table click handler must not call rerender_all_blocks — use in-place table re-render instead"
+    );
+}
+
+#[test]
+fn test_event_loop_has_table_row_highlight() {
+    let source = include_str!("../main.rs");
+    assert!(
+        source.contains("table_row_highlight") && source.contains("connect_motion"),
+        "main.rs must highlight table rows on hover"
+    );
+}

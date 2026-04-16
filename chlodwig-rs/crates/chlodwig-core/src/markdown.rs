@@ -165,6 +165,19 @@ pub fn render_markdown(text: &str) -> Vec<StyledLine> {
 /// Render Markdown text to styled lines, wrapping table columns to fit
 /// within `viewport_width` terminal columns.
 pub fn render_markdown_with_width(text: &str, viewport_width: usize) -> Vec<StyledLine> {
+    render_markdown_with_table_overrides(text, viewport_width, &[])
+}
+
+/// Render Markdown text to styled lines, with optional sorted table overrides.
+///
+/// `table_overrides` maps table index (0-based, in order of appearance) to
+/// a `TableData` whose sorted rows replace the original table's rows.
+/// Tables without an override are rendered from the Markdown source as usual.
+pub fn render_markdown_with_table_overrides(
+    text: &str,
+    viewport_width: usize,
+    table_overrides: &[(usize, &TableData)],
+) -> Vec<StyledLine> {
     let options = Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TABLES
         | Options::ENABLE_FOOTNOTES;
@@ -203,6 +216,7 @@ pub fn render_markdown_with_width(text: &str, viewport_width: usize) -> Vec<Styl
     let mut table_current_row: Vec<String> = Vec::new();
     let mut table_cell_buf = String::new();
     let mut in_table_head = false;
+    let mut table_counter: usize = 0; // counts tables for override lookup
 
     for event in parser {
         if in_code_block {
@@ -447,13 +461,20 @@ pub fn render_markdown_with_width(text: &str, viewport_width: usize) -> Vec<Styl
                 table_rows.clear();
             }
             Event::End(TagEnd::Table) => {
-                render_table(
-                    &table_head,
-                    &table_rows,
-                    &table_alignments,
-                    viewport_width,
-                    &mut result,
-                );
+                // Check for a sorted table override
+                if let Some((_idx, td)) = table_overrides.iter().find(|(idx, _)| *idx == table_counter) {
+                    let lines = td.render(viewport_width);
+                    result.extend(lines);
+                } else {
+                    render_table(
+                        &table_head,
+                        &table_rows,
+                        &table_alignments,
+                        viewport_width,
+                        &mut result,
+                    );
+                }
+                table_counter += 1;
                 in_table = false;
                 table_head.clear();
                 table_rows.clear();
@@ -586,6 +607,214 @@ fn flush_line(
         wrap_prefix,
         code_info: None,
     });
+}
+
+// ── TableData: sortable table structure ─────────────────────────────
+
+/// Parsed table data that can be sorted by any column and re-rendered.
+///
+/// Extracted from Markdown by `extract_tables()`. The GTK frontend uses this
+/// to implement clickable-header sorting: click a column header → sort rows
+/// by that column → re-render the table region in the TextBuffer.
+#[derive(Debug, Clone)]
+pub struct TableData {
+    /// Header cells.
+    pub head: Vec<String>,
+    /// Body rows — each row is a Vec of cell strings.
+    pub rows: Vec<Vec<String>>,
+    /// Column alignments from Markdown.
+    pub alignments: Vec<Alignment>,
+    /// Which column is currently sorted (None = original order).
+    pub sort_column: Option<usize>,
+    /// Sort direction: false = ascending, true = descending.
+    pub sort_descending: bool,
+}
+
+impl TableData {
+    pub fn new(head: Vec<String>, rows: Vec<Vec<String>>, alignments: Vec<Alignment>) -> Self {
+        Self {
+            head,
+            rows,
+            alignments,
+            sort_column: None,
+            sort_descending: false,
+        }
+    }
+
+    /// Return a new `TableData` with rows sorted by `col_index`.
+    /// If `descending` is true, sort in reverse order.
+    /// Heuristic: if ALL non-empty cells in the column parse as `f64`, sort numerically.
+    /// Otherwise sort alphabetically (case-insensitive).
+    pub fn sorted_by_column(&self, col_index: usize, descending: bool) -> Self {
+        let mut sorted = self.clone();
+        sorted.sort_column = Some(col_index);
+        sorted.sort_descending = descending;
+
+        let get_cell = |row: &Vec<String>| -> String {
+            row.get(col_index).cloned().unwrap_or_default()
+        };
+
+        /// Parse a number that may use comma or dot as decimal separator.
+        /// "10,5" → 10.5, "3.14" → 3.14, "1.000,5" → 1000.5 (thousand-sep dot)
+        fn parse_number(s: &str) -> Option<f64> {
+            let s = s.trim();
+            if s.is_empty() { return None; }
+
+            // Helper: check if all dots in s are thousand separators
+            // (each dot is followed by exactly 3 digits, then end-of-string or another dot)
+            fn dots_are_thousands(s: &str) -> bool {
+                let parts: Vec<&str> = s.split('.').collect();
+                if parts.len() < 2 { return false; }
+                // First part can be 1-3 digits, all subsequent must be exactly 3
+                if parts[0].is_empty() || !parts[0].chars().all(|c| c.is_ascii_digit()) {
+                    return false;
+                }
+                parts[1..].iter().all(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_digit()))
+            }
+
+            fn commas_are_thousands(s: &str) -> bool {
+                let parts: Vec<&str> = s.split(',').collect();
+                if parts.len() < 2 { return false; }
+                if parts[0].is_empty() || !parts[0].chars().all(|c| c.is_ascii_digit()) {
+                    return false;
+                }
+                parts[1..].iter().all(|p| p.len() == 3 && p.chars().all(|c| c.is_ascii_digit()))
+            }
+
+            let has_dot = s.contains('.');
+            let has_comma = s.contains(',');
+
+            let normalized = if has_comma && has_dot {
+                // Both present: the last one is the decimal separator
+                let last_dot = s.rfind('.').unwrap();
+                let last_comma = s.rfind(',').unwrap();
+                if last_comma > last_dot {
+                    s.replace('.', "").replace(',', ".")
+                } else {
+                    s.replace(',', "")
+                }
+            } else if has_dot && dots_are_thousands(s) {
+                // "312.696" "1.234.567" → thousand separators, remove dots
+                s.replace('.', "")
+            } else if has_comma && commas_are_thousands(s) {
+                // "1,000" "1,234,567" → thousand separators, remove commas
+                s.replace(',', "")
+            } else if has_comma && !has_dot {
+                // "10,5" → decimal comma
+                s.replace(',', ".")
+            } else {
+                // "3.14" or plain number
+                s.to_string()
+            };
+            normalized.parse::<f64>().ok()
+        }
+
+        // Check if all non-empty values are numeric
+        let all_numeric = sorted.rows.iter().all(|row| {
+            let cell = get_cell(row);
+            cell.trim().is_empty() || parse_number(&cell).is_some()
+        });
+
+        sorted.rows.sort_by(|a, b| {
+            let va = get_cell(a);
+            let vb = get_cell(b);
+            let cmp = if all_numeric {
+                let na = parse_number(&va).unwrap_or(f64::NEG_INFINITY);
+                let nb = parse_number(&vb).unwrap_or(f64::NEG_INFINITY);
+                na.partial_cmp(&nb).unwrap_or(std::cmp::Ordering::Equal)
+            } else {
+                va.to_lowercase().cmp(&vb.to_lowercase())
+            };
+            if descending { cmp.reverse() } else { cmp }
+        });
+
+        sorted
+    }
+
+    /// Render this table to styled lines, fitting within `viewport_width`.
+    /// Adds a sort indicator (▲/▼) to the sorted column header.
+    pub fn render(&self, viewport_width: usize) -> Vec<StyledLine> {
+        // Build header with sort indicator
+        let head_with_indicator: Vec<String> = self.head.iter().enumerate().map(|(i, h)| {
+            if self.sort_column == Some(i) {
+                let arrow = if self.sort_descending { "▼" } else { "▲" };
+                format!("{h} {arrow}")
+            } else {
+                h.clone()
+            }
+        }).collect();
+
+        let mut result = Vec::new();
+        render_table(
+            &head_with_indicator,
+            &self.rows,
+            &self.alignments,
+            viewport_width,
+            &mut result,
+        );
+        result
+    }
+}
+
+/// Extract all tables from a Markdown string as `TableData` structs.
+/// The returned tables preserve the original row order.
+pub fn extract_tables(markdown: &str) -> Vec<TableData> {
+    let options = Options::ENABLE_STRIKETHROUGH
+        | Options::ENABLE_TABLES
+        | Options::ENABLE_FOOTNOTES;
+    let parser = Parser::new_ext(markdown, options);
+
+    let mut tables = Vec::new();
+    let mut in_table = false;
+    let mut in_head = false;
+    let mut table_head: Vec<String> = Vec::new();
+    let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut table_alignments: Vec<Alignment> = Vec::new();
+    let mut current_row: Vec<String> = Vec::new();
+    let mut current_cell = String::new();
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::Table(alignments)) => {
+                in_table = true;
+                table_alignments = alignments;
+                table_head.clear();
+                table_rows.clear();
+            }
+            Event::End(TagEnd::Table) => {
+                tables.push(TableData::new(
+                    std::mem::take(&mut table_head),
+                    std::mem::take(&mut table_rows),
+                    std::mem::take(&mut table_alignments),
+                ));
+                in_table = false;
+            }
+            Event::Start(Tag::TableHead) => { in_head = true; }
+            Event::End(TagEnd::TableHead) => {
+                table_head = std::mem::take(&mut current_row);
+                in_head = false;
+            }
+            Event::Start(Tag::TableRow) => {}
+            Event::End(TagEnd::TableRow) => {
+                if !in_head {
+                    table_rows.push(std::mem::take(&mut current_row));
+                }
+            }
+            Event::Start(Tag::TableCell) => { current_cell.clear(); }
+            Event::End(TagEnd::TableCell) => {
+                current_row.push(std::mem::take(&mut current_cell));
+            }
+            Event::Text(text) if in_table => {
+                current_cell.push_str(&text);
+            }
+            Event::Code(code) if in_table => {
+                current_cell.push_str(&code);
+            }
+            _ => {}
+        }
+    }
+
+    tables
 }
 
 // ── Table rendering ─────────────────────────────────────────────────
@@ -1435,4 +1664,274 @@ mod tests {
         let multi_zwj = "🏊\u{200D}♂\u{FE0F}🚴\u{200D}♀\u{FE0F}🏃\u{200D}♂\u{FE0F}🥇";
         assert_eq!(multi_zwj.width(), 8);
     }
+
+    // ── TableData sort tests ────────────────────────────────────────
+
+    #[test]
+    fn test_table_data_sort_by_column_alphabetic() {
+        let td = TableData::new(
+            vec!["Name".into(), "City".into()],
+            vec![
+                vec!["Zara".into(), "Wien".into()],
+                vec!["Alice".into(), "Bern".into()],
+                vec!["Maria".into(), "Graz".into()],
+            ],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        assert_eq!(sorted.rows[0][0], "Alice");
+        assert_eq!(sorted.rows[1][0], "Maria");
+        assert_eq!(sorted.rows[2][0], "Zara");
+        // Rows stay intact
+        assert_eq!(sorted.rows[0][1], "Bern");
+        assert_eq!(sorted.rows[2][1], "Wien");
+    }
+
+    #[test]
+    fn test_table_data_sort_by_column_descending() {
+        let td = TableData::new(
+            vec!["Name".into(), "City".into()],
+            vec![
+                vec!["Alice".into(), "Bern".into()],
+                vec!["Zara".into(), "Wien".into()],
+            ],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(0, true);
+        assert_eq!(sorted.rows[0][0], "Zara");
+        assert_eq!(sorted.rows[1][0], "Alice");
+    }
+
+    #[test]
+    fn test_table_data_sort_numeric() {
+        let td = TableData::new(
+            vec!["Name".into(), "Age".into()],
+            vec![
+                vec!["Zara".into(), "42".into()],
+                vec!["Bob".into(), "3".into()],
+                vec!["Maria".into(), "31".into()],
+            ],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(1, false);
+        // Numeric sort: 3, 31, 42
+        assert_eq!(sorted.rows[0][1], "3");
+        assert_eq!(sorted.rows[1][1], "31");
+        assert_eq!(sorted.rows[2][1], "42");
+    }
+
+    #[test]
+    fn test_table_data_sort_numeric_comma_decimal() {
+        // German-style decimal comma: 0,66  5,1  10,5  84,4  9,1
+        let td = TableData::new(
+            vec!["Val".into()],
+            vec![
+                vec!["0,66".into()],
+                vec!["10,5".into()],
+                vec!["5,1".into()],
+                vec!["84,4".into()],
+                vec!["9,1".into()],
+            ],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        assert_eq!(sorted.rows[0][0], "0,66");
+        assert_eq!(sorted.rows[1][0], "5,1");
+        assert_eq!(sorted.rows[2][0], "9,1");
+        assert_eq!(sorted.rows[3][0], "10,5");
+        assert_eq!(sorted.rows[4][0], "84,4");
+    }
+
+    #[test]
+    fn test_table_data_sort_numeric_mixed_dot_and_comma() {
+        // Mix of 3.14 and 2,71 — both should be recognized as numeric
+        let td = TableData::new(
+            vec!["Val".into()],
+            vec![
+                vec!["3.14".into()],
+                vec!["2,71".into()],
+                vec!["1.0".into()],
+            ],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        assert_eq!(sorted.rows[0][0], "1.0");
+        assert_eq!(sorted.rows[1][0], "2,71");
+        assert_eq!(sorted.rows[2][0], "3.14");
+    }
+
+    #[test]
+    fn test_table_data_sort_preserves_header() {
+        let td = TableData::new(
+            vec!["Name".into(), "Age".into()],
+            vec![
+                vec!["Zara".into(), "42".into()],
+                vec!["Alice".into(), "23".into()],
+            ],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        assert_eq!(sorted.head, vec!["Name", "Age"]);
+    }
+
+    #[test]
+    fn test_table_data_sort_out_of_bounds_column() {
+        let td = TableData::new(
+            vec!["A".into()],
+            vec![vec!["x".into()], vec!["y".into()]],
+            vec![],
+        );
+        // Column index 5 is out of bounds — should not panic, treat as empty
+        let sorted = td.sorted_by_column(5, false);
+        assert_eq!(sorted.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_table_data_sort_mixed_numeric_alpha() {
+        // Some cells parse as numbers, some don't → fall back to string sort
+        let td = TableData::new(
+            vec!["Val".into()],
+            vec![
+                vec!["42".into()],
+                vec!["banana".into()],
+                vec!["3".into()],
+            ],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        // String sort: "3" < "42" < "banana"
+        assert_eq!(sorted.rows[0][0], "3");
+        assert_eq!(sorted.rows[1][0], "42");
+        assert_eq!(sorted.rows[2][0], "banana");
+    }
+
+    #[test]
+    fn test_table_data_sort_toggle_direction() {
+        let td = TableData::new(
+            vec!["N".into()],
+            vec![vec!["b".into()], vec!["a".into()], vec!["c".into()]],
+            vec![],
+        );
+        assert_eq!(td.sort_column, None);
+        let s1 = td.sorted_by_column(0, false);
+        assert_eq!(s1.rows[0][0], "a");
+        assert_eq!(s1.sort_column, Some(0));
+        assert_eq!(s1.sort_descending, false);
+        let s2 = s1.sorted_by_column(0, true);
+        assert_eq!(s2.rows[0][0], "c");
+        assert_eq!(s2.sort_descending, true);
+    }
+
+    #[test]
+    fn test_table_data_render_produces_styled_lines() {
+        let td = TableData::new(
+            vec!["A".into(), "B".into()],
+            vec![vec!["1".into(), "2".into()]],
+            vec![],
+        );
+        let lines = td.render(usize::MAX);
+        assert!(!lines.is_empty());
+        // Should contain header row and data row
+        let text: String = lines.iter().map(|l| l.text()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("A"), "Header A missing: {text}");
+        assert!(text.contains("1"), "Cell 1 missing: {text}");
+    }
+
+    #[test]
+    fn test_table_data_sort_indicator_in_header() {
+        let td = TableData::new(
+            vec!["Name".into(), "Age".into()],
+            vec![vec!["A".into(), "1".into()]],
+            vec![],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        let lines = sorted.render(usize::MAX);
+        let header_text: String = lines.iter().map(|l| l.text()).collect::<Vec<_>>().join("");
+        // Should show ▲ or ▼ indicator on sorted column
+        assert!(
+            header_text.contains("▲") || header_text.contains("▼"),
+            "Sort indicator missing: {header_text}"
+        );
+    }
+
+    #[test]
+    fn test_extract_tables_from_markdown() {
+        let md = "Some text\n\n| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nMore text";
+        let tables = extract_tables(md);
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].head, vec!["A", "B"]);
+        assert_eq!(tables[0].rows.len(), 2);
+        assert_eq!(tables[0].rows[0], vec!["1", "2"]);
+    }
+
+    #[test]
+    fn test_extract_tables_multiple() {
+        let md = "| X |\n|---|\n| 1 |\n\nText\n\n| Y | Z |\n|---|---|\n| a | b |";
+        let tables = extract_tables(md);
+        assert_eq!(tables.len(), 2);
+        assert_eq!(tables[0].head, vec!["X"]);
+        assert_eq!(tables[1].head, vec!["Y", "Z"]);
+    }
+
+    #[test]
+    fn test_extract_tables_none() {
+        let md = "Just some text\n\nNo tables here";
+        let tables = extract_tables(md);
+        assert!(tables.is_empty());
+    }
 }
+
+    #[test]
+    fn test_table_data_sort_dot_thousands_separator() {
+        // 312.696 and 357.592 use dots as thousand separators (German style)
+        // They should sort as 312696 and 357592, not as 312.696 and 357.592
+        let td = TableData::new(
+            vec!["Value".into()],
+            vec![
+                vec!["312.696".into()],
+                vec!["316".into()],
+                vec!["357.592".into()],
+            ],
+            vec![Alignment::None],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        assert_eq!(sorted.rows[0][0], "316");
+        assert_eq!(sorted.rows[1][0], "312.696");
+        assert_eq!(sorted.rows[2][0], "357.592");
+    }
+
+    #[test]
+    fn test_table_data_sort_dot_decimal_not_thousands() {
+        // 3.14 and 2.71 are actual decimals (not 3 digits after dot)
+        let td = TableData::new(
+            vec!["Value".into()],
+            vec![
+                vec!["3.14".into()],
+                vec!["2.71".into()],
+                vec!["10.5".into()],
+            ],
+            vec![Alignment::None],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        assert_eq!(sorted.rows[0][0], "2.71");
+        assert_eq!(sorted.rows[1][0], "3.14");
+        assert_eq!(sorted.rows[2][0], "10.5");
+    }
+
+    #[test]
+    fn test_table_data_sort_multiple_dot_thousands() {
+        // 1.234.567 = 1234567
+        let td = TableData::new(
+            vec!["Value".into()],
+            vec![
+                vec!["1.234.567".into()],
+                vec!["500.000".into()],
+                vec!["2.000".into()],
+            ],
+            vec![Alignment::None],
+        );
+        let sorted = td.sorted_by_column(0, false);
+        assert_eq!(sorted.rows[0][0], "2.000");
+        assert_eq!(sorted.rows[1][0], "500.000");
+        assert_eq!(sorted.rows[2][0], "1.234.567");
+    }

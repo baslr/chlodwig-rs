@@ -296,7 +296,7 @@ mod gtk_impl {
     /// Emoji segments are rendered via CoreText and drawn as overlays
     /// over 2-space placeholders. The tag is applied to the placeholder
     /// spaces so they inherit the correct font (e.g. monospace for tables).
-    fn insert_text_with_emoji_and_tag(
+    pub fn insert_text_with_emoji_and_tag(
         buffer: &gtk4::TextBuffer,
         text: &str,
         tag_name: &str,
