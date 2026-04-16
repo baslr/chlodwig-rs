@@ -122,3 +122,41 @@ fn test_core_table_narrow_gtk_viewport() {
         );
     }
 }
+
+// ── Source-level: event loop re-renders on resize ──────────────────
+
+#[test]
+fn test_event_loop_has_resize_rerender() {
+    // The GTK event loop must re-render all blocks when the viewport width
+    // changes, so tables adapt to the new column count.
+    let source = include_str!("../main.rs");
+    assert!(
+        source.contains("rerender_all_blocks") && source.contains("resize_stable_ticks"),
+        "main.rs must contain resize-debounced rerender_all_blocks call"
+    );
+}
+
+#[test]
+fn test_event_loop_resize_skips_during_streaming() {
+    // Re-render on resize must NOT happen during active streaming —
+    // the streaming re-render already uses the current viewport width.
+    let source = include_str!("../main.rs");
+    assert!(
+        source.contains("!state.is_streaming"),
+        "resize rerender must be gated on !state.is_streaming"
+    );
+}
+
+#[test]
+fn test_different_viewport_widths_produce_different_table_widths() {
+    let md = "| Column A | Column B with a lot of text that should wrap differently at different widths |\n|---|---|\n| short | This is a long cell that contains enough text to demonstrate wrapping behavior |";
+    let narrow = chlodwig_core::render_markdown_with_width(md, 40);
+    let wide = chlodwig_core::render_markdown_with_width(md, 120);
+    // Narrow viewport should produce more lines (wrapped cells)
+    assert!(
+        narrow.len() > wide.len(),
+        "Narrow viewport ({} lines) should produce more lines than wide ({} lines)",
+        narrow.len(),
+        wide.len()
+    );
+}

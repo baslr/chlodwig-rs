@@ -558,6 +558,14 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     // Snapshot of the streaming buffer text for Markdown rendering.
     // Filled from AppState on each tick; used for the per-tick re-render.
     let mut last_streaming_snapshot = String::new();
+    // Track last rendered viewport width (in monospace columns) to detect resize.
+    // When the width changes and we're NOT streaming, re-render all blocks so
+    // tables adapt to the new width.
+    let mut last_rendered_cols: usize = 0;
+    // Debounce resize: count consecutive ticks with a new (stable) width before
+    // triggering re-render. At 16ms/tick, 10 ticks ≈ 160ms debounce.
+    let mut resize_stable_ticks: u32 = 0;
+    let mut resize_pending_cols: usize = 0;
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let mut rx_opt = event_rx_cell.borrow_mut();
         let rx = match rx_opt.as_mut() {
@@ -739,6 +747,43 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             let mut state = state_for_events.borrow_mut();
             if state.take_should_notify() && !window_for_notify.is_active() {
                 send_turn_complete_notification(&window_for_notify, &project_name);
+            }
+        }
+
+        // --- Resize detection: re-render tables when viewport width changes ---
+        // Check every tick if the viewport column count changed. Debounce by
+        // waiting 10 consecutive ticks (~160ms) with the same new width before
+        // triggering a full re-render. Skip during active streaming (the
+        // streaming re-render already uses the current width).
+        {
+            let current_cols = chlodwig_gtk::viewport::viewport_columns(
+                output_view_for_events.upcast_ref::<gtk4::TextView>(),
+            );
+            if current_cols != last_rendered_cols {
+                if current_cols == resize_pending_cols {
+                    resize_stable_ticks += 1;
+                } else {
+                    resize_pending_cols = current_cols;
+                    resize_stable_ticks = 1;
+                }
+                if resize_stable_ticks >= 10 {
+                    // Width has been stable for ~160ms — re-render
+                    last_rendered_cols = current_cols;
+                    viewport_cols_for_events.set(current_cols);
+                    resize_stable_ticks = 0;
+                    let state = state_for_events.borrow();
+                    if !state.is_streaming {
+                        rerender_all_blocks(&output_buf, &state, current_cols);
+                        if state.auto_scroll.is_active() {
+                            let scroll_clone = scroll.clone();
+                            glib::idle_add_local_once(move || {
+                                window::scroll_to_bottom(&scroll_clone);
+                            });
+                        }
+                    }
+                }
+            } else {
+                resize_stable_ticks = 0;
             }
         }
 
