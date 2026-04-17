@@ -287,9 +287,17 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
     main_box.append(&Separator::new(Orientation::Horizontal));
     main_box.append(&status_bar);
 
+    let cwd_name = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let title = match cwd_name {
+        Some(name) => format!("Chlodwig - {name}"),
+        None => "Chlodwig".to_string(),
+    };
+
     let window = ApplicationWindow::builder()
         .application(app)
-        .title("Chlodwig")
+        .title(&title)
         .default_width(900)
         .default_height(700)
         .build();

@@ -166,6 +166,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         let conv_menu = gio::Menu::new();
         conv_menu.append(Some("Compact History"), Some("app.compact"));
         conv_menu.append(Some("Resume Last Session"), Some("app.resume"));
+        conv_menu.append(Some("Sessions…"), Some("app.sessions-browser"));
         menubar.append_submenu(Some("Conversation"), &conv_menu);
 
         app.set_menubar(Some(&menubar));
@@ -213,6 +214,88 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             }
         });
         app.add_action(&resume_action);
+
+        // "Sessions…" action — opens the sessions browser window
+        let sessions_action = gtk4::gio::SimpleAction::new("sessions-browser", None);
+        let prompt_tx_sessions = prompt_tx.clone();
+        let state_sessions = app_state.clone();
+        let output_buf_sessions = widgets.output_buffer.clone();
+        let output_view_sessions = widgets.output_view.clone();
+        let viewport_cols_sessions = viewport_cols.clone();
+        let status_left_sessions = widgets.status_left_label.clone();
+        let status_right_sessions = widgets.status_right_label.clone();
+        let window_for_sessions = window.clone();
+        let session_started_at_for_sessions = session_started_at.clone();
+        sessions_action.connect_activate(move |_, _| {
+            let prompt_tx = prompt_tx_sessions.clone();
+            let state = state_sessions.clone();
+            let output_buf = output_buf_sessions.clone();
+            let output_view = output_view_sessions.clone();
+            let viewport_cols = viewport_cols_sessions.clone();
+            let status_left = status_left_sessions.clone();
+            let status_right = status_right_sessions.clone();
+            let current_file = Some(chlodwig_core::session_filename_for(&session_started_at_for_sessions));
+            chlodwig_gtk::sessions_window::show_sessions_window(
+                &window_for_sessions,
+                current_file,
+                Box::new(move |path| {
+                    match chlodwig_core::load_session_from(&path) {
+                        Ok(snapshot) => {
+                            let msg_count = snapshot.messages.len();
+                            // Clear current display
+                            {
+                                let mut s = state.borrow_mut();
+                                s.clear();
+                            }
+                            let mut si = output_buf.start_iter();
+                            let mut ei = output_buf.end_iter();
+                            chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf, 0);
+                            output_buf.delete(&mut si, &mut ei);
+
+                            // Restore display blocks
+                            {
+                                let mut s = state.borrow_mut();
+                                s.restore_messages(&snapshot.messages);
+                                s.apply_table_sort_states(&snapshot.table_sorts);
+                            }
+                            viewport_cols.set(
+                                chlodwig_gtk::viewport::viewport_columns(
+                                    output_view.upcast_ref::<gtk4::TextView>(),
+                                ),
+                            );
+                            render::render_restored_blocks(
+                                &output_buf,
+                                &state.borrow(),
+                                viewport_cols.get(),
+                            );
+                            window::append_styled(
+                                &output_buf,
+                                &format!(
+                                    "✓ Resumed session ({msg_count} messages, saved at {})\n",
+                                    snapshot.saved_at,
+                                ),
+                                "system",
+                            );
+
+                            // Restore messages in background thread
+                            let _ = prompt_tx.send(BackgroundCommand::RestoreMessages {
+                                messages: snapshot.messages,
+                            });
+
+                            window::update_status(&status_left, &status_right, &state.borrow());
+                        }
+                        Err(e) => {
+                            window::append_styled(
+                                &output_buf,
+                                &format!("\n✗ Failed to load session: {e}\n"),
+                                "error",
+                            );
+                        }
+                    }
+                }),
+            );
+        });
+        app.add_action(&sessions_action);
     }
 
     // Set initial status

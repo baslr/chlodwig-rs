@@ -412,6 +412,48 @@ pub fn load_session_by_prefix_in(
     Ok(Some(snapshot))
 }
 
+/// Load a session snapshot from an arbitrary file path.
+///
+/// Returns `Err` on I/O or parse errors.
+pub fn load_session_from(path: &std::path::Path) -> std::io::Result<SessionSnapshot> {
+    let json = std::fs::read_to_string(path)?;
+    let snapshot: SessionSnapshot = serde_json::from_str(&json)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(snapshot)
+}
+
+/// Extract a conversation preview from session messages.
+///
+/// Returns pairs of `(role_label, text)` for user and assistant messages only.
+/// Tool use, tool results, thinking blocks, and images are excluded.
+/// Text is truncated to `max_chars` per message.
+pub fn session_preview_messages(
+    messages: &[Message],
+    max_chars: usize,
+) -> Vec<(&'static str, String)> {
+    let mut result = Vec::new();
+    for msg in messages {
+        let text = msg.text();
+        if text.is_empty() {
+            continue;
+        }
+        let role_label = match msg.role {
+            crate::Role::User => "You",
+            crate::Role::Assistant => "Assistant",
+        };
+        let truncated = if text.chars().count() > max_chars {
+            let s: String = text.chars().take(max_chars).collect();
+            format!("{s}…")
+        } else {
+            text
+        };
+        // Collapse newlines to spaces for preview
+        let oneline = truncated.replace('\n', " ");
+        result.push((role_label, oneline));
+    }
+    result
+}
+
 // ── Standalone constants.json persistence ────────────────────────────
 
 /// Save a constants snapshot to disk (blocking I/O).
@@ -1366,5 +1408,82 @@ mod tests {
         };
         let json = serde_json::to_string(&snap).unwrap();
         assert!(!json.contains("table_sorts"), "Empty table_sorts should be skipped: {json}");
+    }
+
+    #[test]
+    fn test_load_session_from_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.json");
+        let snap = make_snapshot(vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: "hello".into() }],
+        }]);
+        save_session_to(&snap, &path).unwrap();
+
+        let loaded = load_session_from(&path).unwrap();
+        assert_eq!(loaded.messages.len(), 1);
+        assert_eq!(loaded.messages[0].text(), "hello");
+    }
+
+    #[test]
+    fn test_load_session_from_nonexistent() {
+        let result = load_session_from(std::path::Path::new("/nonexistent/path.json"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_session_preview_messages_filters_tools() {
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "Read my file".into() }],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "t1".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: crate::ToolResultContent::Text("file contents".into()),
+                    is_error: None,
+                }],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text { text: "Here is the file".into() }],
+            },
+        ];
+        let preview = session_preview_messages(&messages, 100);
+        assert_eq!(preview.len(), 2);
+        assert_eq!(preview[0], ("You", "Read my file".to_string()));
+        assert_eq!(preview[1], ("Assistant", "Here is the file".to_string()));
+    }
+
+    #[test]
+    fn test_session_preview_messages_truncates() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: "a".repeat(200).into() }],
+        }];
+        let preview = session_preview_messages(&messages, 50);
+        assert_eq!(preview.len(), 1);
+        assert!(preview[0].1.ends_with('…'));
+        assert_eq!(preview[0].1.chars().count(), 51); // 50 + …
+    }
+
+    #[test]
+    fn test_session_preview_messages_collapses_newlines() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: "line1\nline2\nline3".into() }],
+        }];
+        let preview = session_preview_messages(&messages, 100);
+        assert_eq!(preview[0].1, "line1 line2 line3");
     }
 }

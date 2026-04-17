@@ -19,6 +19,8 @@ pub mod setup;
 #[cfg(feature = "gtk-ui")]
 pub mod emoji_overlay;
 #[cfg(feature = "gtk-ui")]
+pub mod sessions_window;
+#[cfg(feature = "gtk-ui")]
 pub mod window;
 
 #[cfg(test)]
