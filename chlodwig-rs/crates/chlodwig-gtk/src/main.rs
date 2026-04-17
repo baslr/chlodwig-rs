@@ -296,6 +296,41 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             );
         });
         app.add_action(&sessions_action);
+
+        // Window menu (macOS standard)
+        let window_menu = gio::Menu::new();
+        window_menu.append(Some("Minimize"), Some("app.minimize"));
+        window_menu.append(Some("Hide Chlodwig"), Some("app.hide"));
+        window_menu.append(Some("Show Chlodwig"), Some("app.show"));
+        menubar.append_submenu(Some("Window"), &window_menu);
+
+        // "Minimize" action (Cmd+M) — minimize the main window
+        let minimize_action = gio::SimpleAction::new("minimize", None);
+        let window_for_minimize = window.clone();
+        minimize_action.connect_activate(move |_, _| {
+            window_for_minimize.minimize();
+        });
+        app.add_action(&minimize_action);
+        app.set_accels_for_action("app.minimize", &["<Meta>m"]);
+
+        // "Hide" action (Cmd+H) — hide the main window (macOS "Hide App")
+        let hide_action = gio::SimpleAction::new("hide", None);
+        let window_for_hide = window.clone();
+        hide_action.connect_activate(move |_, _| {
+            window_for_hide.set_visible(false);
+        });
+        app.add_action(&hide_action);
+        app.set_accels_for_action("app.hide", &["<Meta>h"]);
+
+        // "Show" action (Shift+Cmd+H) — show the window again after hide
+        let show_action = gio::SimpleAction::new("show", None);
+        let window_for_show = window.clone();
+        show_action.connect_activate(move |_, _| {
+            window_for_show.set_visible(true);
+            window_for_show.present();
+        });
+        app.add_action(&show_action);
+        app.set_accels_for_action("app.show", &["<Shift><Meta>h"]);
     }
 
     // Set initial status
