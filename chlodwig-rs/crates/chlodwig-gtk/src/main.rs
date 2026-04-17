@@ -221,6 +221,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         let state_sessions = app_state.clone();
         let output_buf_sessions = widgets.output_buffer.clone();
         let output_view_sessions = widgets.output_view.clone();
+        let output_scroll_sessions = widgets.output_scroll.clone();
         let viewport_cols_sessions = viewport_cols.clone();
         let status_left_sessions = widgets.status_left_label.clone();
         let status_right_sessions = widgets.status_right_label.clone();
@@ -231,6 +232,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             let state = state_sessions.clone();
             let output_buf = output_buf_sessions.clone();
             let output_view = output_view_sessions.clone();
+            let output_scroll = output_scroll_sessions.clone();
             let viewport_cols = viewport_cols_sessions.clone();
             let status_left = status_left_sessions.clone();
             let status_right = status_right_sessions.clone();
@@ -242,58 +244,22 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 Box::new(move |path| {
                     match chlodwig_core::load_session_from(&path) {
                         Ok(snapshot) => {
-                            let msg_count = snapshot.messages.len();
-                            // Clear current display
-                            {
-                                let mut s = state.borrow_mut();
-                                s.clear();
-                            }
-                            let mut si = output_buf.start_iter();
-                            let mut ei = output_buf.end_iter();
-                            chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf, 0);
-                            output_buf.delete(&mut si, &mut ei);
-
-                            // Restore display blocks
-                            {
-                                let mut s = state.borrow_mut();
-                                s.restore_messages(&snapshot.messages);
-                                s.apply_table_sort_states(&snapshot.table_sorts);
-                                s.session_name = snapshot.name.clone();
-                            }
-                            // Update window title with restored name
                             let cwd_name: Option<String> = std::env::current_dir()
                                 .ok()
                                 .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-                            let restored_title = chlodwig_gtk::window::format_window_title(
-                                cwd_name.as_deref(),
-                                snapshot.name.as_deref(),
-                            );
-                            window_for_resume.set_title(Some(&restored_title));
-                            viewport_cols.set(
-                                chlodwig_gtk::viewport::viewport_columns(
-                                    output_view.upcast_ref::<gtk4::TextView>(),
-                                ),
-                            );
-                            render::render_restored_blocks(
-                                &output_buf,
-                                &state.borrow(),
-                                viewport_cols.get(),
-                            );
-                            window::append_styled(
-                                &output_buf,
-                                &format!(
-                                    "✓ Resumed session ({msg_count} messages, saved at {})\n",
-                                    snapshot.saved_at,
-                                ),
-                                "system",
-                            );
-
-                            // Restore messages in background thread
-                            let _ = prompt_tx.send(BackgroundCommand::RestoreMessages {
-                                messages: snapshot.messages,
-                            });
-
-                            window::update_status(&status_left, &status_right, &state.borrow());
+                            let ctx = restore::RestoreContext {
+                                state: &state,
+                                output_buf: &output_buf,
+                                output_view: &output_view,
+                                output_scroll: &output_scroll,
+                                window: &window_for_resume,
+                                viewport_cols: &viewport_cols,
+                                status_left: &status_left,
+                                status_right: &status_right,
+                                prompt_tx: &prompt_tx,
+                                cwd_name: cwd_name.as_deref(),
+                            };
+                            restore::apply_restored_session_to_ui(snapshot, &ctx);
                         }
                         Err(e) => {
                             window::append_styled(
@@ -354,50 +320,26 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     }
 
     // --- Resume session if --resume flag was passed ---
-    let mut initial_messages: Vec<Message> = Vec::new();
     if resume_flag {
         match chlodwig_core::load_latest_session() {
             Ok(Some(snapshot)) => {
-                let msg_count = snapshot.messages.len();
-                tracing::info!("Resuming session with {msg_count} messages");
-
-                // Restore display blocks into AppState
-                {
-                    let mut state = app_state.borrow_mut();
-                    state.restore_messages(&snapshot.messages);
-                    state.apply_table_sort_states(&snapshot.table_sorts);
-                    state.session_name = snapshot.name.clone();
-                }
-                // Update window title with restored name
-                {
-                    let cwd_name: Option<String> = std::env::current_dir()
-                        .ok()
-                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-                    let restored_title = chlodwig_gtk::window::format_window_title(
-                        cwd_name.as_deref(),
-                        snapshot.name.as_deref(),
-                    );
-                    window.set_title(Some(&restored_title));
-                }
-
-                // Render restored blocks into the output buffer
-                render::render_restored_blocks(
-                    &widgets.output_buffer,
-                    &app_state.borrow(),
-                    viewport_cols.get(),
-                );
-
-                window::append_styled(
-                    &widgets.output_buffer,
-                    &format!("✓ Resumed session ({msg_count} messages, saved at {})\n", snapshot.saved_at),
-                    "system",
-                );
-
-                // Remember messages to send to background thread
-                initial_messages = snapshot.messages;
-
-                window::scroll_to_bottom(&widgets.output_scroll);
-                window::update_status(&widgets.status_left_label, &widgets.status_right_label, &app_state.borrow());
+                tracing::info!("Resuming session with {} messages", snapshot.messages.len());
+                let cwd_name: Option<String> = std::env::current_dir()
+                    .ok()
+                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+                let ctx = restore::RestoreContext {
+                    state: &app_state,
+                    output_buf: &widgets.output_buffer,
+                    output_view: &widgets.output_view,
+                    output_scroll: &widgets.output_scroll,
+                    window: &window,
+                    viewport_cols: &viewport_cols,
+                    status_left: &widgets.status_left_label,
+                    status_right: &widgets.status_right_label,
+                    prompt_tx: &prompt_tx,
+                    cwd_name: cwd_name.as_deref(),
+                };
+                restore::apply_restored_session_to_ui(snapshot, &ctx);
             }
             Ok(None) => {
                 window::append_styled(
@@ -566,49 +508,19 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                     };
                     match load_result {
                         Ok(Some(snapshot)) => {
-                            let msg_count = snapshot.messages.len();
-                            // Clear current display
-                            {
-                                let mut state = state_for_submit.borrow_mut();
-                                state.clear();
-                            }
-                            let mut s = output_buf_for_submit.start_iter();
-                            let mut e = output_buf_for_submit.end_iter();
-                            chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf_for_submit, 0);
-                            output_buf_for_submit.delete(&mut s, &mut e);
-
-                            // Restore display blocks
-                            {
-                                let mut state = state_for_submit.borrow_mut();
-                                state.restore_messages(&snapshot.messages);
-                                state.apply_table_sort_states(&snapshot.table_sorts);
-                                state.session_name = snapshot.name.clone();
-                            }
-                            // Update window title with restored name
-                            let restored_title = chlodwig_gtk::window::format_window_title(
-                                cwd_name_for_submit.as_deref(),
-                                snapshot.name.as_deref(),
-                            );
-                            window_for_submit.set_title(Some(&restored_title));
-                            viewport_cols_for_submit.set(
-                                chlodwig_gtk::viewport::viewport_columns(
-                                    output_view_for_submit.upcast_ref::<gtk4::TextView>(),
-                                ),
-                            );
-                            render::render_restored_blocks(&output_buf_for_submit, &state_for_submit.borrow(), viewport_cols_for_submit.get());
-                            window::append_styled(
-                                &output_buf_for_submit,
-                                &format!(
-                                    "✓ Resumed session ({msg_count} messages, saved at {})\n",
-                                    snapshot.saved_at
-                                ),
-                                "system",
-                            );
-
-                            // Restore messages in background thread
-                            let _ = prompt_tx_clone.send(BackgroundCommand::RestoreMessages {
-                                messages: snapshot.messages,
-                            });
+                            let ctx = restore::RestoreContext {
+                                state: &state_for_submit,
+                                output_buf: &output_buf_for_submit,
+                                output_view: &output_view_for_submit,
+                                output_scroll: &scroll_for_submit,
+                                window: &window_for_submit,
+                                viewport_cols: &viewport_cols_for_submit,
+                                status_left: &status_left_for_submit,
+                                status_right: &status_right_for_submit,
+                                prompt_tx: &prompt_tx_clone,
+                                cwd_name: cwd_name_for_submit.as_deref(),
+                            };
+                            restore::apply_restored_session_to_ui(snapshot, &ctx);
                         }
                         Ok(None) => {
                             let msg = match &prefix {
@@ -622,6 +534,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                                 &format!("\n{msg}\n"),
                                 "system",
                             );
+                            window::scroll_to_bottom(&scroll_for_submit);
                         }
                         Err(e) => {
                             window::append_styled(
@@ -629,10 +542,9 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                                 &format!("\n✗ Failed to load session: {e}\n"),
                                 "error",
                             );
+                            window::scroll_to_bottom(&scroll_for_submit);
                         }
                     }
-                    window::scroll_to_bottom(&scroll_for_submit);
-                    window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
                     return;
                 }
                 Command::Name(new_name) => {
@@ -1284,11 +1196,10 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
 
             let permission = chlodwig_core::AutoApprovePrompter;
 
-            // If there are initial messages from --resume, restore them
-            if !initial_messages.is_empty() {
-                conv_state.messages = initial_messages;
-                tracing::info!("Background thread: restored {} messages", conv_state.messages.len());
-            }
+            // Resume restoration is now handled uniformly via
+            // `BackgroundCommand::RestoreMessages` (sent by
+            // `restore::apply_restored_session_to_ui`), so there is no
+            // separate initial_messages path here.
 
             while let Some(bg_cmd) = prompt_rx.recv().await {
                 match bg_cmd {
@@ -1383,3 +1294,5 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
 /// skipping `ToolUseStart` and `ToolResult` when `state.show_tool_usage` is false.
 // Rendering functions are in render.rs
 mod render;
+// Session-restore glue (shared by all 3 resume entry points).
+mod restore;

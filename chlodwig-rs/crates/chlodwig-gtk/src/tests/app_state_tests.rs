@@ -1264,10 +1264,28 @@ fn test_session_save_includes_table_sorts() {
 
 #[test]
 fn test_session_restore_applies_table_sorts() {
-    let source = include_str!("../main.rs");
+    // The previous resume paths in main.rs called `apply_table_sort_states`
+    // inline. After the restore-glue refactor (commit refactor(gtk):
+    // unify session-restore flow), all three paths go through
+    // `restore::apply_restored_session_to_ui` which delegates to
+    // `AppState::apply_session_snapshot`, which in turn calls
+    // `apply_table_sort_states`. Verify the chain is intact:
+    let main_source = include_str!("../main.rs");
+    let restore_source = include_str!("../restore.rs");
+    let app_state_source = include_str!("../app_state.rs");
+
     assert!(
-        source.contains("apply_table_sort_states"),
-        "Session restore must call apply_table_sort_states"
+        main_source.contains("apply_restored_session_to_ui")
+            || main_source.contains("apply_table_sort_states"),
+        "main.rs must use restore helper or call apply_table_sort_states directly"
+    );
+    assert!(
+        restore_source.contains("apply_session_snapshot"),
+        "restore.rs must delegate to AppState::apply_session_snapshot"
+    );
+    assert!(
+        app_state_source.contains("apply_table_sort_states"),
+        "AppState::apply_session_snapshot must call apply_table_sort_states"
     );
 }
 

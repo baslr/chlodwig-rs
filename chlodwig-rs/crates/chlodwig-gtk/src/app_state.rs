@@ -285,6 +285,26 @@ impl AppState {
         }
     }
 
+    /// Apply a `SessionSnapshot` to this `AppState`, replacing all current
+    /// in-memory state with the data from the snapshot.
+    ///
+    /// Performs (in this order):
+    /// 1. `clear()` — wipes blocks, counters, tables, name, etc.
+    /// 2. `restore_messages()` — converts `Message`s → `DisplayBlock`s.
+    /// 3. `apply_table_sort_states()` — re-applies persisted column sorts.
+    /// 4. Sets `session_name` from the snapshot.
+    ///
+    /// This is the GTK-pure (no widgets) part of the resume flow shared
+    /// by all three resume entry points (`--resume`, `/resume`, sessions
+    /// browser). The widget side (clear output buffer, set window title,
+    /// re-render, etc.) is handled by `restore::apply_restored_session_to_ui`.
+    pub fn apply_session_snapshot(&mut self, snapshot: &chlodwig_core::SessionSnapshot) {
+        self.clear();
+        self.restore_messages(&snapshot.messages);
+        self.apply_table_sort_states(&snapshot.table_sorts);
+        self.session_name = snapshot.name.clone();
+    }
+
     /// Restore saved messages into display blocks.
     ///
     /// Uses `chlodwig_core::restore_messages()` to convert `Message` → `RestoredBlock`,
