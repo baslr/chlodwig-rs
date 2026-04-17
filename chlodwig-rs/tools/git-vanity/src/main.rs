@@ -79,9 +79,13 @@ fn main() {
     }
 
     let num_cores = thread_override.unwrap_or_else(|| {
-        std::thread::available_parallelism()
+        // Leave one core free so the OS / interactive apps stay responsive.
+        // Even with `nice 19`, saturating ALL cores starves the scheduler on
+        // macOS — opening a new terminal can take many seconds.
+        let total = std::thread::available_parallelism()
             .map(|n| n.get())
-            .unwrap_or(8)
+            .unwrap_or(8);
+        if total > 1 { total - 1 } else { 1 }
     });
     println!("🚀 Using {num_cores} threads (lock-free, no rayon)");
     println!("📦 Strategy: SHA-1 midstate (computed once) + inline check (emoji nonce)");
