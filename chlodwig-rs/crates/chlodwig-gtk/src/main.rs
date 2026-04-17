@@ -24,7 +24,7 @@ enum BackgroundCommand {
     /// Clear the conversation (reset `ConversationState.messages`).
     ClearMessages,
     /// Save the current session to disk.
-    SaveSession { started_at: String, table_sorts: Vec<chlodwig_core::TableSortState> },
+    SaveSession { started_at: String, table_sorts: Vec<chlodwig_core::TableSortState>, name: Option<String> },
     /// Restore messages from a loaded session into ConversationState.
     RestoreMessages { messages: Vec<Message> },
     /// Compact the conversation history.
@@ -234,6 +234,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             let viewport_cols = viewport_cols_sessions.clone();
             let status_left = status_left_sessions.clone();
             let status_right = status_right_sessions.clone();
+            let window_for_resume = window_for_sessions.clone();
             let current_file = Some(chlodwig_core::session_filename_for(&session_started_at_for_sessions));
             chlodwig_gtk::sessions_window::show_sessions_window(
                 &window_for_sessions,
@@ -257,7 +258,17 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                                 let mut s = state.borrow_mut();
                                 s.restore_messages(&snapshot.messages);
                                 s.apply_table_sort_states(&snapshot.table_sorts);
+                                s.session_name = snapshot.name.clone();
                             }
+                            // Update window title with restored name
+                            let cwd_name: Option<String> = std::env::current_dir()
+                                .ok()
+                                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+                            let restored_title = chlodwig_gtk::window::format_window_title(
+                                cwd_name.as_deref(),
+                                snapshot.name.as_deref(),
+                            );
+                            window_for_resume.set_title(Some(&restored_title));
                             viewport_cols.set(
                                 chlodwig_gtk::viewport::viewport_columns(
                                     output_view.upcast_ref::<gtk4::TextView>(),
@@ -355,6 +366,18 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                     let mut state = app_state.borrow_mut();
                     state.restore_messages(&snapshot.messages);
                     state.apply_table_sort_states(&snapshot.table_sorts);
+                    state.session_name = snapshot.name.clone();
+                }
+                // Update window title with restored name
+                {
+                    let cwd_name: Option<String> = std::env::current_dir()
+                        .ok()
+                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+                    let restored_title = chlodwig_gtk::window::format_window_title(
+                        cwd_name.as_deref(),
+                        snapshot.name.as_deref(),
+                    );
+                    window.set_title(Some(&restored_title));
                 }
 
                 // Render restored blocks into the output buffer
@@ -404,6 +427,10 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     let session_started_at_for_submit = session_started_at.clone();
     let viewport_cols_for_submit = viewport_cols.clone();
     let output_view_for_submit = widgets.output_view.clone();
+    let window_for_submit = window.clone();
+    let cwd_name_for_submit: Option<String> = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
 
     let submit = move || {
         let start = input_buf.start_iter();
@@ -499,9 +526,13 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                                 "system",
                             );
                             for info in &sessions {
+                                let name_part = info.name.as_deref()
+                                    .map(|n| format!(" [{n}]"))
+                                    .unwrap_or_default();
                                 let line = format!(
-                                    "  {} — {} ({} messages, {})\n",
+                                    "  {}{} — {} ({} messages, {})\n",
                                     info.filename.trim_end_matches(".json"),
+                                    name_part,
                                     info.model,
                                     info.message_count,
                                     info.saved_at,
@@ -543,7 +574,14 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                                 let mut state = state_for_submit.borrow_mut();
                                 state.restore_messages(&snapshot.messages);
                                 state.apply_table_sort_states(&snapshot.table_sorts);
+                                state.session_name = snapshot.name.clone();
                             }
+                            // Update window title with restored name
+                            let restored_title = chlodwig_gtk::window::format_window_title(
+                                cwd_name_for_submit.as_deref(),
+                                snapshot.name.as_deref(),
+                            );
+                            window_for_submit.set_title(Some(&restored_title));
                             viewport_cols_for_submit.set(
                                 chlodwig_gtk::viewport::viewport_columns(
                                     output_view_for_submit.upcast_ref::<gtk4::TextView>(),
@@ -589,10 +627,36 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                     window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
                     return;
                 }
+                Command::Name(new_name) => {
+                    {
+                        let mut state = state_for_submit.borrow_mut();
+                        state.session_name = new_name.clone();
+                    }
+                    // Update window title.
+                    let new_title = chlodwig_gtk::window::format_window_title(
+                        cwd_name_for_submit.as_deref(),
+                        new_name.as_deref(),
+                    );
+                    window_for_submit.set_title(Some(&new_title));
+                    // Persist immediately.
+                    let _ = prompt_tx_clone.send(BackgroundCommand::SaveSession {
+                        started_at: session_started_at_for_submit.clone(),
+                        table_sorts: state_for_submit.borrow().table_sort_states(),
+                        name: new_name.clone(),
+                    });
+                    let msg = match &new_name {
+                        Some(n) => format!("\n✓ Session named: {n}\n"),
+                        None => "\n✓ Session name cleared.\n".to_string(),
+                    };
+                    window::append_styled(&output_buf_for_submit, &msg, "system");
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    return;
+                }
                 Command::Save => {
                     let _ = prompt_tx_clone.send(BackgroundCommand::SaveSession {
                         started_at: session_started_at_for_submit.clone(),
                         table_sorts: state_for_submit.borrow().table_sort_states(),
+                        name: state_for_submit.borrow().session_name.clone(),
                     });
                     window::append_styled(
                         &output_buf_for_submit,
@@ -721,6 +785,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                                         let _ = prompt_tx_for_sort.send(BackgroundCommand::SaveSession {
                                             started_at: session_started_at_for_sort.clone(),
                                             table_sorts: state.table_sort_states(),
+                                            name: state.session_name.clone(),
                                         });
                                         if state.auto_scroll.is_active() {
                                             let sc = scroll_for_sort.clone();
@@ -956,6 +1021,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             let _ = prompt_tx_for_events.send(BackgroundCommand::SaveSession {
                 started_at: session_started_at_for_events.clone(),
                 table_sorts: state_for_events.borrow().table_sort_states(),
+                name: state_for_events.borrow().session_name.clone(),
             });
         }
 
@@ -1197,7 +1263,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                         conv_state.messages.clear();
                         continue;
                     }
-                    BackgroundCommand::SaveSession { started_at, table_sorts } => {
+                    BackgroundCommand::SaveSession { started_at, table_sorts, name } => {
                         let snapshot = chlodwig_core::SessionSnapshot {
                             saved_at: chrono::Local::now().to_rfc3339(),
                             started_at,
@@ -1206,6 +1272,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                             system_prompt: conv_state.system_prompt.clone(),
                             constants: None,
                             table_sorts,
+                            name,
                         };
                         if let Err(e) = chlodwig_core::save_session(&snapshot) {
                             tracing::warn!("Failed to auto-save session: {e}");

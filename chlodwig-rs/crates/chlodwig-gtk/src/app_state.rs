@@ -65,6 +65,8 @@ pub struct AppState {
     /// Extracted table data for sortable tables. Each entry is (block_index, table_index_within_block, TableData).
     /// Updated when AssistantText blocks are added. Used by the GTK click handler to sort tables.
     pub tables: Vec<(usize, usize, chlodwig_core::TableData)>,
+    /// Optional human-readable name for this session (set via `/name`).
+    pub session_name: Option<String>,
 }
 
 impl AppState {
@@ -86,6 +88,7 @@ impl AppState {
             auto_scroll: chlodwig_core::AutoScroll::new(),
             show_tool_usage: true,
             tables: Vec::new(),
+            session_name: None,
         }
     }
 
@@ -252,6 +255,7 @@ impl AppState {
         self.copy_feedback = None;
         self.should_notify = false;
         self.auto_scroll.scroll_to_bottom();
+        self.session_name = None;
     }
 
     /// Extract table sort states for session persistence.

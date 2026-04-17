@@ -22,6 +22,9 @@ pub enum Command {
     Resume(Option<String>),
     /// `/save` — manually save the current session.
     Save,
+    /// `/name <name>` — set a human-readable name for this session.
+    /// Empty name (`/name` with no argument) clears the name.
+    Name(Option<String>),
 }
 
 impl Command {
@@ -70,6 +73,18 @@ impl Command {
             return Some(Command::Resume(Some(prefix)));
         }
 
+        // /name with optional name (empty clears)
+        if lower == "/name" {
+            return Some(Command::Name(None));
+        }
+        if lower.starts_with("/name ") {
+            let name = trimmed["/name ".len()..].trim().to_string();
+            if name.is_empty() {
+                return Some(Command::Name(None));
+            }
+            return Some(Command::Name(Some(name)));
+        }
+
         match lower.as_str() {
             "/clear" | "/reset" | "/new" => Some(Command::Clear),
             "/help" | "/h" | "/?" | "help" => Some(Command::Help),
@@ -91,6 +106,7 @@ pub const COMMANDS_HELP: &str = "\
   /resume               Load the most recent session
   /resume <prefix>      Load session by timestamp prefix (e.g. 2026_04_13)
   /save                 Manually save the current session
+  /name <name>          Set a human-readable name for this session
   /compact [instr]      Compact conversation history
   /clear, /reset, /new  Clear conversation, start fresh
   ! <cmd>               Execute shell command
@@ -108,6 +124,7 @@ pub fn help_markdown_commands() -> String {
 | `/resume` | Load the most recent session |
 | `/resume <prefix>` | Load session by timestamp prefix |
 | `/save` | Manually save the current session |
+| `/name <name>` | Set a human-readable name for this session |
 | `/compact [instr]` | Compact conversation history |
 | `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
 | `! <cmd>` | Execute shell command |
@@ -277,6 +294,41 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_name_with_argument() {
+        assert_eq!(
+            Command::parse("/name my session"),
+            Some(Command::Name(Some("my session".into())))
+        );
+        assert_eq!(
+            Command::parse("/name refactor"),
+            Some(Command::Name(Some("refactor".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_name_without_argument_clears() {
+        assert_eq!(Command::parse("/name"), Some(Command::Name(None)));
+        assert_eq!(Command::parse("/name   "), Some(Command::Name(None)));
+        assert_eq!(Command::parse("/name "), Some(Command::Name(None)));
+    }
+
+    #[test]
+    fn test_parse_name_preserves_case() {
+        assert_eq!(
+            Command::parse("/name Refactor Sessions Window"),
+            Some(Command::Name(Some("Refactor Sessions Window".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_name_utf8() {
+        assert_eq!(
+            Command::parse("/name häuser & 漢字 🚀"),
+            Some(Command::Name(Some("häuser & 漢字 🚀".into())))
+        );
+    }
+
+    #[test]
     fn test_parse_none_for_regular_text() {
         assert_eq!(Command::parse("hello world"), None);
         assert_eq!(Command::parse("what is rust?"), None);
@@ -317,6 +369,7 @@ mod tests {
         assert!(COMMANDS_HELP.contains("/sessions"), "must mention /sessions");
         assert!(COMMANDS_HELP.contains("/resume"), "must mention /resume");
         assert!(COMMANDS_HELP.contains("/save"), "must mention /save");
+        assert!(COMMANDS_HELP.contains("/name"), "must mention /name");
     }
 
     // ── help_markdown tests ─────────────────────────────────────

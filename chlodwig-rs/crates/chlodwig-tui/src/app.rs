@@ -471,6 +471,8 @@ pub(crate) struct App {
     pub(crate) git_status_output: String,                // Raw `git status` output
     pub(crate) git_lines: Vec<RenderedLine>,             // Pre-rendered git tab lines
     pub(crate) git_scroll: usize,                        // Scroll position in git tab
+    /// Optional human-readable session name set via `/name`.
+    pub(crate) session_name: Option<String>,
 }
 
 impl App {
@@ -521,6 +523,7 @@ impl App {
             git_status_output: String::new(),
             git_lines: Vec::new(),
             git_scroll: 0,
+            session_name: None,
         };
         app.refresh_git_branch();
         app
@@ -1917,6 +1920,7 @@ impl App {
         // Reset context timer and compaction count (session timer stays!)
         self.context_start = Instant::now();
         self.compaction_count = 0;
+        self.session_name = None;
 
         // Show a confirmation message
         self.display_blocks.push(DisplayBlock::SystemMessage(

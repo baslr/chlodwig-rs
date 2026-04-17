@@ -38,6 +38,10 @@ pub struct SessionSnapshot {
     /// Empty by default; skipped in JSON when empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub table_sorts: Vec<TableSortState>,
+    /// Optional human-readable name for this session, set via `/name`.
+    /// Used in window titles and the sessions browser.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Persisted sort state for a single table.
@@ -284,6 +288,8 @@ pub struct SessionInfo {
     pub message_count: usize,
     /// Full path to the session file.
     pub path: PathBuf,
+    /// Optional human-readable name (from `/name`), if set.
+    pub name: Option<String>,
 }
 
 /// List all saved sessions, sorted chronologically (oldest first).
@@ -329,6 +335,7 @@ pub fn list_sessions_in(dir: &std::path::Path) -> std::io::Result<Vec<SessionInf
                             model: snap.model,
                             message_count: snap.messages.len(),
                             path: path.clone(),
+                            name: snap.name,
                         });
                     }
                     Err(e) => {
@@ -510,7 +517,7 @@ mod tests {
             model: "test-model".into(),
             messages,
             system_prompt: vec![SystemBlock::text("You are helpful.")],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         }
     }
 
@@ -740,7 +747,7 @@ mod tests {
             model: "test-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
 
         let path = sessions.join(session_filename_for(&snap.started_at));
@@ -780,7 +787,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "old".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let new_snap = SessionSnapshot {
             saved_at: "2026-04-13T15:00:00+02:00".into(),
@@ -791,7 +798,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "new".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
 
         let old_path = sessions.join(session_filename_for(&old_snap.started_at));
@@ -831,7 +838,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "first".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
 
         let path = sessions.join(session_filename_for(&snap.started_at));
@@ -890,7 +897,7 @@ mod tests {
                 SystemBlock::text("block 1"),
                 SystemBlock::cached("block 2 (cached)"),
             ],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
@@ -1120,7 +1127,7 @@ mod tests {
                     content: vec![ContentBlock::Text { text: text.to_string() }],
                 }],
                 system_prompt: vec![],
-                constants: None, table_sorts: vec![],
+                constants: None, table_sorts: vec![], name: None,
             };
             let path = sessions.join(session_filename_for(started));
             save_session_to(&snap, &path).unwrap();
@@ -1150,7 +1157,7 @@ mod tests {
                 Message { role: Role::User, content: vec![ContentBlock::Text { text: "q2".into() }] },
             ],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1178,7 +1185,7 @@ mod tests {
             model: "good-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1214,7 +1221,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "hello".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1239,7 +1246,7 @@ mod tests {
             model: "found-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1263,7 +1270,7 @@ mod tests {
             model: "partial-match".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1292,7 +1299,7 @@ mod tests {
                 model: model.to_string(),
                 messages: vec![],
                 system_prompt: vec![],
-                constants: None, table_sorts: vec![],
+                constants: None, table_sorts: vec![], name: None,
             };
             let path = sessions.join(session_filename_for(started));
             save_session_to(&snap, &path).unwrap();
@@ -1317,7 +1324,7 @@ mod tests {
             model: "test".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![],
+            constants: None, table_sorts: vec![], name: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1387,6 +1394,7 @@ mod tests {
             table_sorts: vec![
                 TableSortState { block_index: 0, table_index: 0, sort_column: 2, sort_descending: true },
             ],
+            name: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
@@ -1404,7 +1412,7 @@ mod tests {
             messages: vec![],
             system_prompt: vec![],
             constants: None,
-            table_sorts: vec![],
+            table_sorts: vec![], name: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         assert!(!json.contains("table_sorts"), "Empty table_sorts should be skipped: {json}");

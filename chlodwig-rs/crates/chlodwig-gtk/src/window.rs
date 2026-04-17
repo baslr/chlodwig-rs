@@ -158,6 +158,28 @@ pub struct UiWidgets {
     pub status_right_label: Label,
 }
 
+/// Format the window title.
+///
+/// Layout: `<name> ・ <cwd> ・ Chlodwig` (specific → generic, macOS convention).
+/// Uses the Katakana middle dot `・` (U+30FB) as separator.
+/// If `name` is `None`, omits the leading segment.
+/// If `cwd` is `None`, omits that segment.
+pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
+    let mut parts: Vec<&str> = Vec::with_capacity(3);
+    if let Some(n) = name {
+        if !n.is_empty() {
+            parts.push(n);
+        }
+    }
+    if let Some(c) = cwd {
+        if !c.is_empty() {
+            parts.push(c);
+        }
+    }
+    parts.push("Chlodwig");
+    parts.join(" \u{30FB} ")
+}
+
 /// Build the main application window and return widget references.
 pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidgets) {
     // --- Load application CSS ---
@@ -290,10 +312,7 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
     let cwd_name = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-    let title = match cwd_name {
-        Some(name) => format!("Chlodwig - {name}"),
-        None => "Chlodwig".to_string(),
-    };
+    let title = format_window_title(cwd_name.as_deref(), None);
 
     let window = ApplicationWindow::builder()
         .application(app)
@@ -1126,5 +1145,62 @@ pub fn show_user_question_dialog(
     // Focus: text view if text-only, otherwise first option button is already focusable
     if options.is_empty() {
         text_view.grab_focus();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_window_title;
+
+    #[test]
+    fn test_title_chlodwig_only() {
+        assert_eq!(format_window_title(None, None), "Chlodwig");
+    }
+
+    #[test]
+    fn test_title_with_cwd() {
+        assert_eq!(
+            format_window_title(Some("chlodwig-rs"), None),
+            "chlodwig-rs \u{30FB} Chlodwig"
+        );
+    }
+
+    #[test]
+    fn test_title_with_name_and_cwd() {
+        assert_eq!(
+            format_window_title(Some("chlodwig-rs"), Some("refactor sessions")),
+            "refactor sessions \u{30FB} chlodwig-rs \u{30FB} Chlodwig"
+        );
+    }
+
+    #[test]
+    fn test_title_with_name_only() {
+        assert_eq!(
+            format_window_title(None, Some("refactor")),
+            "refactor \u{30FB} Chlodwig"
+        );
+    }
+
+    #[test]
+    fn test_title_uses_katakana_middle_dot() {
+        let title = format_window_title(Some("foo"), Some("bar"));
+        assert!(title.contains('\u{30FB}'), "must use U+30FB Katakana middle dot");
+        assert!(!title.contains(" - "), "must not use ASCII hyphen");
+    }
+
+    #[test]
+    fn test_title_empty_name_omitted() {
+        assert_eq!(
+            format_window_title(Some("cwd"), Some("")),
+            "cwd \u{30FB} Chlodwig"
+        );
+    }
+
+    #[test]
+    fn test_title_utf8_name() {
+        assert_eq!(
+            format_window_title(Some("dir"), Some("häuser & 漢字")),
+            "häuser & 漢字 \u{30FB} dir \u{30FB} Chlodwig"
+        );
     }
 }

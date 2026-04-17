@@ -134,10 +134,16 @@ fn build_session_row(
     header.set_hexpand(true);
 
     let display_name = info.filename.trim_end_matches(".json");
-    let header_text = format!(
-        "{} — {} ({} messages)",
-        display_name, info.model, info.message_count,
-    );
+    let header_text = match &info.name {
+        Some(name) => format!(
+            "{} \u{30FB} {} \u{30FB} {} ({} messages)",
+            name, display_name, info.model, info.message_count,
+        ),
+        None => format!(
+            "{} — {} ({} messages)",
+            display_name, info.model, info.message_count,
+        ),
+    };
     let header_label = Label::new(Some(&header_text));
     header_label.set_xalign(0.0);
     header_label.set_hexpand(true);

@@ -369,6 +369,7 @@ fn trigger_session_save(
     model: &str,
     constants: chlodwig_core::ConstantsSnapshot,
     started_at: &str,
+    name: Option<String>,
 ) {
     let state_clone = state.clone();
     let model = model.to_string();
@@ -382,7 +383,7 @@ fn trigger_session_save(
             messages: guard.messages.clone(),
             system_prompt: guard.system_prompt.clone(),
             constants: Some(constants),
-            table_sorts: vec![],
+            table_sorts: vec![], name,
         };
         drop(guard); // release lock before blocking I/O
 
@@ -905,10 +906,14 @@ pub async fn run_tui_with_permissions(
                                         for (i, info) in sessions_list.iter().enumerate() {
                                             // Strip the .json extension from filename for the prefix hint
                                             let prefix = info.filename.trim_end_matches(".json");
+                                            let name_part = info.name.as_deref()
+                                                .map(|n| format!(" [{n}]"))
+                                                .unwrap_or_default();
                                             lines.push(format!(
-                                                "  {}. {} — {} ({} msgs, {})",
+                                                "  {}. {}{} — {} ({} msgs, {})",
                                                 i + 1,
                                                 prefix,
+                                                name_part,
                                                 info.model,
                                                 info.message_count,
                                                 info.saved_at,
@@ -943,6 +948,7 @@ pub async fn run_tui_with_permissions(
                                     // Restore display blocks so the user can scroll back
                                     app.clear_conversation();
                                     app.restore_messages_to_display(&snapshot.messages);
+                                    app.session_name = snapshot.name.clone();
                                     // Restore constants if present in the snapshot
                                     if let Some(ref constants_snap) = snapshot.constants {
                                         app.constants.from_snapshot(constants_snap);
@@ -980,8 +986,21 @@ pub async fn run_tui_with_permissions(
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
                                 }
+                                Command::Name(new_name) => {
+                            app.session_name = new_name.clone();
+                            // Persist immediately
+                            trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at, new_name.clone());
+                            let msg = match new_name {
+                                Some(n) => format!("✓ Session named: {n}"),
+                                None => "✓ Session name cleared.".to_string(),
+                            };
+                            app.display_blocks.push(DisplayBlock::SystemMessage(msg));
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
+                            break; // exit inner drain loop
+                                }
                                 Command::Save => {
-                            trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at);
+                            trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at, app.session_name.clone());
                             app.display_blocks.push(DisplayBlock::SystemMessage(
                                 "✓ Session saved.".into(),
                             ));
@@ -1721,7 +1740,7 @@ pub async fn run_tui_with_permissions(
                     // (run_turn sends one, and the spawned task sends another)
                     if was_loading {
                         // Auto-save session after every completed turn
-                        trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at);
+                        trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at, app.session_name.clone());
                         // Send system notification only when the terminal is NOT focused
                         // (user switched to another app while waiting for the turn to finish)
                         if !crate::notification::is_terminal_focused() {
@@ -1805,7 +1824,7 @@ pub async fn run_tui_with_permissions(
                 } => {
                     app.on_compaction_complete(old_messages, summary_tokens);
                     // Auto-save session after compaction (messages were replaced)
-                    trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at);
+                    trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at, app.session_name.clone());
                 }
                 _ => {}
             }
