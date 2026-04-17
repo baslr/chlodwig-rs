@@ -58,7 +58,19 @@ pub enum RestoredBlock {
     },
     /// System message (e.g. "Resumed session").
     SystemMessage(String),
+    /// A compaction-continuation user message — semantically a "summary"
+    /// produced by the model during compaction, then re-injected as a User
+    /// message to seed the new context window. Should be rendered as
+    /// markdown (it contains headings, lists, code blocks), NOT as plain
+    /// user text. Detected by the well-known prefix from `compact_now()`.
+    CompactionSummary(String),
 }
+
+/// Prefix that identifies a compaction-continuation user message.
+/// Defined in `conversation::compact_now()`. Used by the restore logic
+/// to render these messages as markdown rather than as plain user text.
+pub const COMPACTION_SUMMARY_PREFIX: &str =
+    "This session is being continued from a previous conversation that ran out of context.";
 
 /// Truncate a string for preview, respecting UTF-8 char boundaries.
 ///
@@ -105,7 +117,11 @@ pub fn restore_messages(messages: &[Message]) -> Vec<RestoredBlock> {
                 for block in &msg.content {
                     match block {
                         ContentBlock::Text { text } => {
-                            blocks.push(RestoredBlock::UserMessage(text.clone()));
+                            if text.starts_with(COMPACTION_SUMMARY_PREFIX) {
+                                blocks.push(RestoredBlock::CompactionSummary(text.clone()));
+                            } else {
+                                blocks.push(RestoredBlock::UserMessage(text.clone()));
+                            }
                         }
                         ContentBlock::ToolResult {
                             tool_use_id,
@@ -708,5 +724,44 @@ mod tests {
             }
             other => panic!("Expected GrepOutput, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_restore_compaction_summary_user_message_is_classified_as_summary() {
+        // The compaction-continuation message is stored as a User message
+        // but should be displayed as a markdown summary, not plain user text.
+        let summary = format!("{COMPACTION_SUMMARY_PREFIX} The summary below covers the earlier portion...\n\n## Heading\n- bullet");
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: summary.clone() }],
+        }];
+        let blocks = restore_messages(&messages);
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            matches!(&blocks[0], RestoredBlock::CompactionSummary(t) if t == &summary),
+            "compaction-continuation must restore as CompactionSummary, got {:?}",
+            blocks[0]
+        );
+    }
+
+    #[test]
+    fn test_restore_regular_user_message_is_not_classified_as_summary() {
+        let messages = vec![Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: "Just a normal user message".into() }],
+        }];
+        let blocks = restore_messages(&messages);
+        assert!(matches!(&blocks[0], RestoredBlock::UserMessage(_)));
+    }
+
+    #[test]
+    fn test_compaction_summary_prefix_matches_actual_compact_now_text() {
+        // Sanity check: this prefix must match what conversation::compact_now()
+        // actually generates. If you change the message in compact_now(),
+        // update COMPACTION_SUMMARY_PREFIX too.
+        assert!(
+            COMPACTION_SUMMARY_PREFIX.starts_with("This session is being continued"),
+            "prefix must match the start of the compaction continuation message"
+        );
     }
 }

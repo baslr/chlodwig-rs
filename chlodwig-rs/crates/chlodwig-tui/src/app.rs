@@ -2026,6 +2026,14 @@ impl App {
                 RestoredBlock::SystemMessage(text) => {
                     self.display_blocks.push(DisplayBlock::SystemMessage(text));
                 }
+                RestoredBlock::CompactionSummary(text) => {
+                    // Render the compaction summary as markdown (it contains
+                    // headings, lists, code blocks). Stored as a User message
+                    // in the API history but visually it's a model-generated
+                    // summary. AssistantText already gets full markdown
+                    // rendering, so reuse it.
+                    self.display_blocks.push(DisplayBlock::AssistantText(text));
+                }
             }
         }
         self.mark_dirty();
