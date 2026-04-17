@@ -940,7 +940,14 @@ pub async fn run_tui_with_permissions(
                                 Command::Resume(prefix) => {
                             let load_result = match &prefix {
                                 None => chlodwig_core::load_latest_session(),
-                                Some(p) => chlodwig_core::load_session_by_prefix(p),
+                                Some(p) => {
+                                    // Exact name first (preserves spaces), then prefix.
+                                    match chlodwig_core::load_session_by_name(p) {
+                                        Ok(Some(snap)) => Ok(Some(snap)),
+                                        Ok(None) => chlodwig_core::load_session_by_prefix(p),
+                                        Err(e) => Err(e),
+                                    }
+                                }
                             };
                             match load_result {
                                 Ok(Some(snapshot)) => {
@@ -987,6 +994,29 @@ pub async fn run_tui_with_permissions(
                             break; // exit inner drain loop
                                 }
                                 Command::Name(new_name) => {
+                            // Duplicate check: another session must not already have this name.
+                            if let Some(ref n) = new_name {
+                                let my_path = chlodwig_core::session_path_for(&session_started_at);
+                                match chlodwig_core::session_name_exists(n, Some(&my_path)) {
+                                    Ok(true) => {
+                                        app.display_blocks.push(DisplayBlock::SystemMessage(
+                                            format!("✗ A session with the name \"{n}\" already exists. Choose a different name.")
+                                        ));
+                                        app.mark_dirty();
+                                        app.scroll_to_bottom();
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        app.display_blocks.push(DisplayBlock::SystemMessage(
+                                            format!("✗ Could not check session names: {e}")
+                                        ));
+                                        app.mark_dirty();
+                                        app.scroll_to_bottom();
+                                        break;
+                                    }
+                                    Ok(false) => {}
+                                }
+                            }
                             app.session_name = new_name.clone();
                             // Persist immediately
                             trigger_session_save(&state, &app.model, app.constants.to_snapshot(), &session_started_at, new_name.clone());

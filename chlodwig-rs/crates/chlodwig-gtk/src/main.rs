@@ -554,7 +554,15 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 Command::Resume(prefix) => {
                     let load_result = match &prefix {
                         None => chlodwig_core::load_latest_session(),
-                        Some(p) => chlodwig_core::load_session_by_prefix(p),
+                        Some(p) => {
+                            // Try exact-name match first (preserves spaces),
+                            // then fall back to filename-prefix match.
+                            match chlodwig_core::load_session_by_name(p) {
+                                Ok(Some(snap)) => Ok(Some(snap)),
+                                Ok(None) => chlodwig_core::load_session_by_prefix(p),
+                                Err(e) => Err(e),
+                            }
+                        }
                     };
                     match load_result {
                         Ok(Some(snapshot)) => {
@@ -628,6 +636,31 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                     return;
                 }
                 Command::Name(new_name) => {
+                    // Duplicate check: another session must not already have this name.
+                    if let Some(ref n) = new_name {
+                        let my_path = chlodwig_core::session_path_for(&session_started_at_for_submit);
+                        match chlodwig_core::session_name_exists(n, Some(&my_path)) {
+                            Ok(true) => {
+                                window::append_styled(
+                                    &output_buf_for_submit,
+                                    &format!("\n✗ A session with the name \"{n}\" already exists. Choose a different name.\n"),
+                                    "error",
+                                );
+                                window::scroll_to_bottom(&scroll_for_submit);
+                                return;
+                            }
+                            Err(e) => {
+                                window::append_styled(
+                                    &output_buf_for_submit,
+                                    &format!("\n✗ Could not check session names: {e}\n"),
+                                    "error",
+                                );
+                                window::scroll_to_bottom(&scroll_for_submit);
+                                return;
+                            }
+                            Ok(false) => {} // unique → proceed
+                        }
+                    }
                     {
                         let mut state = state_for_submit.borrow_mut();
                         state.session_name = new_name.clone();

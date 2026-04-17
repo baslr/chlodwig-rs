@@ -419,6 +419,56 @@ pub fn load_session_by_prefix_in(
     Ok(Some(snapshot))
 }
 
+/// Load a session by exact name match (set via `/name`).
+///
+/// Returns `Ok(None)` if no session has that name.
+/// Names are matched case-sensitively and exactly (no fuzzy/prefix).
+pub fn load_session_by_name(name: &str) -> std::io::Result<Option<SessionSnapshot>> {
+    load_session_by_name_in(&sessions_dir(), name)
+}
+
+pub fn load_session_by_name_in(
+    dir: &std::path::Path,
+    name: &str,
+) -> std::io::Result<Option<SessionSnapshot>> {
+    let infos = list_sessions_in(dir)?;
+    for info in infos {
+        if info.name.as_deref() == Some(name) {
+            let json = std::fs::read_to_string(&info.path)?;
+            let snapshot: SessionSnapshot = serde_json::from_str(&json)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            return Ok(Some(snapshot));
+        }
+    }
+    Ok(None)
+}
+
+/// Check whether a session with the given name already exists (excluding the
+/// session at `exclude_path` if provided — used so renaming the current
+/// session to its existing name does not trip the duplicate check).
+pub fn session_name_exists(name: &str, exclude_path: Option<&std::path::Path>) -> std::io::Result<bool> {
+    session_name_exists_in(&sessions_dir(), name, exclude_path)
+}
+
+pub fn session_name_exists_in(
+    dir: &std::path::Path,
+    name: &str,
+    exclude_path: Option<&std::path::Path>,
+) -> std::io::Result<bool> {
+    let infos = list_sessions_in(dir)?;
+    for info in infos {
+        if info.name.as_deref() == Some(name) {
+            if let Some(excl) = exclude_path {
+                if info.path == excl {
+                    continue;
+                }
+            }
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Load a session snapshot from an arbitrary file path.
 ///
 /// Returns `Err` on I/O or parse errors.
@@ -1493,5 +1543,89 @@ mod tests {
         }];
         let preview = session_preview_messages(&messages, 100);
         assert_eq!(preview[0].1, "line1 line2 line3");
+    }
+
+    fn make_named(dir: &std::path::Path, started: &str, name: Option<&str>) {
+        let mut snap = make_snapshot(vec![]);
+        snap.started_at = started.into();
+        snap.saved_at = started.into();
+        snap.name = name.map(|s| s.to_string());
+        let path = dir.join(session_filename_for(started));
+        save_session_to(&snap, &path).unwrap();
+    }
+
+    #[test]
+    fn test_load_session_by_name_finds_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("ein test"));
+        make_named(tmp.path(), "2026-01-02T10:00:00+00:00", Some("other"));
+        let loaded = load_session_by_name_in(tmp.path(), "ein test").unwrap();
+        assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().name.as_deref(), Some("ein test"));
+    }
+
+    #[test]
+    fn test_load_session_by_name_returns_none_for_no_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("foo"));
+        let loaded = load_session_by_name_in(tmp.path(), "bar").unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_load_session_by_name_handles_unnamed() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", None);
+        let loaded = load_session_by_name_in(tmp.path(), "anything").unwrap();
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_load_session_by_name_with_spaces_preserved() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("ein test mit spaces"));
+        let loaded = load_session_by_name_in(tmp.path(), "ein test mit spaces").unwrap();
+        assert!(loaded.is_some(), "must match exact string with spaces (not kebab-case)");
+    }
+
+    #[test]
+    fn test_load_session_by_name_does_not_match_kebab_variant() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("ein test"));
+        let loaded = load_session_by_name_in(tmp.path(), "ein-test").unwrap();
+        assert!(loaded.is_none(), "spaces must NOT be matched against hyphens");
+    }
+
+    #[test]
+    fn test_session_name_exists_true() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("foo"));
+        assert!(session_name_exists_in(tmp.path(), "foo", None).unwrap());
+    }
+
+    #[test]
+    fn test_session_name_exists_false() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("foo"));
+        assert!(!session_name_exists_in(tmp.path(), "bar", None).unwrap());
+    }
+
+    #[test]
+    fn test_session_name_exists_excludes_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("mine"));
+        let my_path = tmp.path().join(session_filename_for("2026-01-01T10:00:00+00:00"));
+        // Excluding own path → not a duplicate
+        assert!(!session_name_exists_in(tmp.path(), "mine", Some(&my_path)).unwrap());
+    }
+
+    #[test]
+    fn test_session_name_exists_with_other_session_having_same_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        make_named(tmp.path(), "2026-01-01T10:00:00+00:00", Some("dup"));
+        make_named(tmp.path(), "2026-01-02T10:00:00+00:00", Some("dup"));
+        let path1 = tmp.path().join(session_filename_for("2026-01-01T10:00:00+00:00"));
+        // Excluding the FIRST should still find the SECOND with same name
+        assert!(session_name_exists_in(tmp.path(), "dup", Some(&path1)).unwrap());
     }
 }

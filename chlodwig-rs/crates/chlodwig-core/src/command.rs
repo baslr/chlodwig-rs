@@ -78,11 +78,19 @@ impl Command {
             return Some(Command::Name(None));
         }
         if lower.starts_with("/name ") {
-            let name = trimmed["/name ".len()..].trim().to_string();
-            if name.is_empty() {
+            // Take everything after "/name " from the original (case-preserving)
+            // string. Trim leading/trailing whitespace but keep internal spaces
+            // exactly as typed (collapse only runs of whitespace > 1).
+            let raw = trimmed["/name ".len()..].trim();
+            if raw.is_empty() {
                 return Some(Command::Name(None));
             }
-            return Some(Command::Name(Some(name)));
+            // Collapse internal runs of whitespace into single spaces.
+            let collapsed: String = raw
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            return Some(Command::Name(Some(collapsed)));
         }
 
         match lower.as_str() {
@@ -325,6 +333,32 @@ mod tests {
         assert_eq!(
             Command::parse("/name häuser & 漢字 🚀"),
             Some(Command::Name(Some("häuser & 漢字 🚀".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_name_preserves_internal_spaces() {
+        // Spaces inside the name MUST be preserved, NOT replaced with hyphens or removed.
+        assert_eq!(
+            Command::parse("/name ein test"),
+            Some(Command::Name(Some("ein test".into())))
+        );
+        assert_eq!(
+            Command::parse("/name foo bar baz"),
+            Some(Command::Name(Some("foo bar baz".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_name_collapses_multiple_spaces() {
+        // Runs of whitespace collapse to a single space (cosmetic cleanup).
+        assert_eq!(
+            Command::parse("/name foo    bar"),
+            Some(Command::Name(Some("foo bar".into())))
+        );
+        assert_eq!(
+            Command::parse("/name foo\tbar"),
+            Some(Command::Name(Some("foo bar".into())))
         );
     }
 
