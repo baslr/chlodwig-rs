@@ -40,4 +40,5 @@ fi
 echo "📋 Current HEAD: $(git log --oneline -1)"
 echo ""
 echo "🔨 Computing vanity hash (prefix: $PREFIX)..."
-cargo run --release --bin git-vanity -- "$PREFIX"
+echo "🐢 Running with nice 19 (lowest priority, won't block other work)"
+nice -n 19 cargo run --release --bin git-vanity -- "$PREFIX"
