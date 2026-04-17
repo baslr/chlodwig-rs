@@ -5,7 +5,7 @@ use clap::Parser;
 use chlodwig_api::AnthropicClient;
 use chlodwig_core::{
     AutoApprovePrompter, ContentBlock, ConversationEvent, ConversationState, Message,
-    PermissionDecision, PermissionPrompter, Role, SessionSnapshot, ToolContext,
+    PermissionDecision, PermissionPrompter, Role, ToolContext,
     ToolResultContent,
 };
 use std::io::Write;
@@ -262,15 +262,7 @@ async fn run_headless(
 
     // Auto-save session after headless turn
     let started_at = chrono::Local::now().to_rfc3339();
-    let snapshot = SessionSnapshot {
-        saved_at: started_at.clone(),
-        started_at,
-        model: state.model.clone(),
-        messages: state.messages.clone(),
-        system_prompt: state.system_prompt.clone(),
-        constants: None, // headless mode doesn't have editable constants
-        table_sorts: vec![], name: None,
-    };
+    let snapshot = chlodwig_core::build_snapshot(&state, started_at, vec![], None, None);
     if let Err(e) = chlodwig_core::save_session(&snapshot) {
         eprintln!("\x1b[33mWarning: failed to save session: {e}\x1b[0m");
     }

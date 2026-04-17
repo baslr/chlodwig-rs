@@ -1297,16 +1297,13 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                         continue;
                     }
                     BackgroundCommand::SaveSession { started_at, table_sorts, name } => {
-                        let snapshot = chlodwig_core::SessionSnapshot {
-                            saved_at: chrono::Local::now().to_rfc3339(),
+                        let snapshot = chlodwig_core::build_snapshot(
+                            &conv_state,
                             started_at,
-                            model: conv_state.model.clone(),
-                            messages: conv_state.messages.clone(),
-                            system_prompt: conv_state.system_prompt.clone(),
-                            constants: None,
                             table_sorts,
                             name,
-                        };
+                            None,
+                        );
                         if let Err(e) = chlodwig_core::save_session(&snapshot) {
                             tracing::warn!("Failed to auto-save session: {e}");
                         }

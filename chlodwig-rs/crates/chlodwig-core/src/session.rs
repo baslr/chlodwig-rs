@@ -554,10 +554,126 @@ pub fn load_constants_from(path: &std::path::Path) -> std::io::Result<Option<Con
     Ok(Some(snapshot))
 }
 
+/// Build a `SessionSnapshot` from a `ConversationState` plus per-call metadata.
+///
+/// Centralises the snapshot-construction logic that was previously duplicated
+/// between CLI, TUI and GTK frontends. Each frontend just provides the bits
+/// it owns (when the session was started, current table-sort state, optional
+/// session name, and the optional editable-constants snapshot); model,
+/// messages and system prompt are read from the conversation state.
+///
+/// `saved_at` is set to "now" (RFC-3339 local time) at call time.
+pub fn build_snapshot(
+    state: &crate::ConversationState,
+    started_at: impl Into<String>,
+    table_sorts: Vec<TableSortState>,
+    name: Option<String>,
+    constants: Option<ConstantsSnapshot>,
+) -> SessionSnapshot {
+    SessionSnapshot {
+        saved_at: chrono::Local::now().to_rfc3339(),
+        started_at: started_at.into(),
+        model: state.model.clone(),
+        messages: state.messages.clone(),
+        system_prompt: state.system_prompt.clone(),
+        constants,
+        table_sorts,
+        name,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ContentBlock, Role};
+    use crate::{ContentBlock, ConversationState, Role, ToolContext};
+
+    /// Helper: build a minimal `ConversationState` for snapshot tests.
+    fn make_state(messages: Vec<Message>, model: &str) -> ConversationState {
+        ConversationState {
+            messages,
+            model: model.into(),
+            system_prompt: vec![SystemBlock::text("sys")],
+            max_tokens: 1024,
+            tools: vec![],
+            tool_context: ToolContext::default(),
+        }
+    }
+
+    #[test]
+    fn test_build_snapshot_copies_state_fields() {
+        let state = make_state(
+            vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "hi".into() }],
+            }],
+            "test-model",
+        );
+        let snap = build_snapshot(
+            &state,
+            "2026-04-18T10:00:00+02:00",
+            vec![],
+            None,
+            None,
+        );
+        assert_eq!(snap.started_at, "2026-04-18T10:00:00+02:00");
+        assert_eq!(snap.model, "test-model");
+        assert_eq!(snap.messages.len(), 1);
+        assert_eq!(snap.messages[0].text(), "hi");
+        assert_eq!(snap.system_prompt.len(), 1);
+        assert_eq!(snap.system_prompt[0].text, "sys");
+        assert!(snap.constants.is_none());
+        assert!(snap.table_sorts.is_empty());
+        assert!(snap.name.is_none());
+        // saved_at must be a parseable RFC-3339 string set to "now"
+        assert!(chrono::DateTime::parse_from_rfc3339(&snap.saved_at).is_ok());
+    }
+
+    #[test]
+    fn test_build_snapshot_passes_through_metadata() {
+        let state = make_state(vec![], "m");
+        let sorts = vec![TableSortState {
+            block_index: 2,
+            table_index: 0,
+            sort_column: 1,
+            sort_descending: true,
+        }];
+        let consts = ConstantsSnapshot::default();
+        let snap = build_snapshot(
+            &state,
+            "2026-04-18T10:00:00+02:00",
+            sorts.clone(),
+            Some("my session".into()),
+            Some(consts.clone()),
+        );
+        assert_eq!(snap.name.as_deref(), Some("my session"));
+        assert_eq!(snap.table_sorts.len(), 1);
+        assert_eq!(snap.table_sorts[0].block_index, 2);
+        assert!(snap.table_sorts[0].sort_descending);
+        assert!(snap.constants.is_some());
+        assert_eq!(snap.constants.unwrap().max_retries, consts.max_retries);
+    }
+
+    #[test]
+    fn test_build_snapshot_clones_does_not_borrow_state() {
+        // Ensure messages/system_prompt are owned (cloned), not shared references —
+        // mutating the source state must not affect the snapshot.
+        let mut state = make_state(
+            vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "first".into() }],
+            }],
+            "m1",
+        );
+        let snap = build_snapshot(&state, "t", vec![], None, None);
+        state.messages.push(Message {
+            role: Role::User,
+            content: vec![ContentBlock::Text { text: "second".into() }],
+        });
+        state.model = "m2".into();
+        assert_eq!(snap.messages.len(), 1);
+        assert_eq!(snap.messages[0].text(), "first");
+        assert_eq!(snap.model, "m1");
+    }
 
     /// Helper: build a minimal snapshot with the given messages.
     fn make_snapshot(messages: Vec<Message>) -> SessionSnapshot {

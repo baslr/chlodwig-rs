@@ -2,7 +2,7 @@
 
 use chlodwig_core::{
     ApiClient, ConversationEvent, ConversationState, PermissionDecision, PermissionPrompter,
-    SessionSnapshot, ToolResultContent,
+    ToolResultContent,
 };
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -376,15 +376,19 @@ fn trigger_session_save(
     let started_at = started_at.to_string();
     tokio::spawn(async move {
         let guard = state_clone.lock().await;
-        let snapshot = SessionSnapshot {
-            saved_at: chrono::Local::now().to_rfc3339(),
+        // Use the shared `build_snapshot` helper so CLI/TUI/GTK all build
+        // SessionSnapshots the same way. The TUI doesn't have per-table
+        // sort state (no clickable table headers), so table_sorts is empty.
+        // We override `model` because callers may have changed it after the
+        // ConversationState was constructed (rare, but possible).
+        let mut snapshot = chlodwig_core::build_snapshot(
+            &guard,
             started_at,
-            model,
-            messages: guard.messages.clone(),
-            system_prompt: guard.system_prompt.clone(),
-            constants: Some(constants),
-            table_sorts: vec![], name,
-        };
+            vec![],
+            name,
+            Some(constants),
+        );
+        snapshot.model = model;
         drop(guard); // release lock before blocking I/O
 
         // Write to disk on the blocking thread pool so we never block the
