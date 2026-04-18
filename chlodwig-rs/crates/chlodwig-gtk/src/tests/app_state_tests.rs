@@ -1198,7 +1198,7 @@ fn test_finalized_streaming_render_uses_table_headers() {
     // call so that table sort tags are present immediately — not only after
     // a resize. (The function signature with `&state.tables` distinguishes
     // it from accidental calls without table info.)
-    let source = include_str!("../main.rs");
+    let source = include_str!("../event_dispatch.rs");
     assert!(
         source.contains("streaming_finalized") && source.contains("&state.tables"),
         "Finalized streaming render must pass &state.tables to append_styled_lines \
@@ -1251,9 +1251,14 @@ fn test_apply_table_sort_states_restores_sort() {
 
 #[test]
 fn test_session_save_includes_table_sorts() {
-    let source = include_str!("../main.rs");
+    // After Stage 3/4 refactor, SaveSession is sent from both submit.rs
+    // (manual /save and /name commands) and event_dispatch.rs (auto-save
+    // on TurnComplete/CompactionComplete). Either source proves the chain.
+    let submit_src = include_str!("../submit.rs");
+    let dispatch_src = include_str!("../event_dispatch.rs");
+    let combined = format!("{submit_src}{dispatch_src}");
     assert!(
-        source.contains("table_sort_states()") && source.contains("table_sorts"),
+        combined.contains("table_sort_states()") && combined.contains("table_sorts"),
         "SaveSession must include table_sort_states from AppState"
     );
 }

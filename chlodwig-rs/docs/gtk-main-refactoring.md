@@ -78,6 +78,22 @@ Bewertet nach **Aufwand × Wert × Risiko**:
 
 Nach Schritt 4 sollte `main.rs` bei **~400 Zeilen** liegen (Setup + Viewport + State + Wiring-Aufrufe).
 
+## Status (Stand 2026-04-18)
+
+| Stage | Modul | Status | Commit | `main.rs` LoC |
+|---|---|---|---|---|
+| – | (Ausgangslage) | – | – | 1298 |
+| 1 | `menu.rs` (230 LoC) | ✅ | `a8eda0b` | 1152 |
+| 2 | `table_interactions.rs` (196 LoC) | ✅ | `636464f` | 1026 |
+| 3 | `submit.rs` (350 LoC) | ✅ | `1fb91af` | 733 |
+| 4 | `event_dispatch.rs` (350 LoC) | ✅ | _this commit_ | **458** |
+
+**Ergebnis: −65 % `main.rs`-LoC, +47 GTK-Tests (352 → 399), 0 Regressionen.**
+Tatsächlich landete `main.rs` bei 458 statt der prognostizierten 400 LoC — der
+Unterschied ist hauptsächlich der Toggle-Tool-Usage-Block (50 LoC) und der
+Background-Task-Spawn (~138 LoC), die bewusst im Binary geblieben sind
+(Tier-3-Items im obigen Plan).
+
 ## Risiken & Stolperfallen
 
 1. **Closure-Captures**: GTK-Closures müssen `'static` sein, also alles per `Rc::clone()` rein. Beim Auslagern: entweder

@@ -44,14 +44,21 @@ fn test_main_rs_creates_user_question_channel() {
 
 #[test]
 fn test_main_rs_drains_user_question_requests() {
-    let source = include_str!("../main.rs");
+    // After Stage 4 refactor, main.rs creates the uq_rx channel and passes it
+    // to event_dispatch::wire(...), which drains it and shows the dialog.
+    let main_src = include_str!("../main.rs");
+    let dispatch_src = include_str!("../event_dispatch.rs");
     assert!(
-        source.contains("uq_rx"),
-        "main.rs must drain UserQuestion requests from the channel"
+        main_src.contains("uq_rx"),
+        "main.rs must hold a handle to the UserQuestion receiver"
     );
     assert!(
-        source.contains("show_user_question_dialog"),
-        "main.rs must show UserQuestion dialog"
+        dispatch_src.contains("uq_rx"),
+        "event_dispatch.rs must drain UserQuestion requests from the channel"
+    );
+    assert!(
+        dispatch_src.contains("show_user_question_dialog"),
+        "event_dispatch.rs must show UserQuestion dialog"
     );
 }
 
@@ -59,14 +66,15 @@ fn test_main_rs_drains_user_question_requests() {
 
 #[test]
 fn test_main_rs_queues_dialogs_sequentially() {
-    let source = include_str!("../main.rs");
+    // After Stage 4 refactor, the dialog queue lives in event_dispatch.rs.
+    let source = include_str!("../event_dispatch.rs");
     assert!(
         source.contains("uq_queue"),
-        "main.rs must use a queue (uq_queue) for sequential dialog handling"
+        "event_dispatch.rs must use a queue (uq_queue) for sequential dialog handling"
     );
     assert!(
         source.contains("uq_dialog_open"),
-        "main.rs must track whether a dialog is currently open (uq_dialog_open)"
+        "event_dispatch.rs must track whether a dialog is currently open (uq_dialog_open)"
     );
 }
 

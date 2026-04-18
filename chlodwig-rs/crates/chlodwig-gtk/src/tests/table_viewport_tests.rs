@@ -129,10 +129,10 @@ fn test_core_table_narrow_gtk_viewport() {
 fn test_event_loop_has_resize_rerender() {
     // The GTK event loop must re-render all blocks when the viewport width
     // changes, so tables adapt to the new column count.
-    let source = include_str!("../main.rs");
+    let source = include_str!("../event_dispatch.rs");
     assert!(
         source.contains("rerender_all_blocks") && source.contains("resize_stable_ticks"),
-        "main.rs must contain resize-debounced rerender_all_blocks call"
+        "event_dispatch.rs must contain resize-debounced rerender_all_blocks call"
     );
 }
 
@@ -140,7 +140,7 @@ fn test_event_loop_has_resize_rerender() {
 fn test_event_loop_resize_skips_during_streaming() {
     // Re-render on resize must NOT happen during active streaming —
     // the streaming re-render already uses the current viewport width.
-    let source = include_str!("../main.rs");
+    let source = include_str!("../event_dispatch.rs");
     assert!(
         source.contains("!state.is_streaming"),
         "resize rerender must be gated on !state.is_streaming"
