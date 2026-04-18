@@ -10,6 +10,7 @@ pub mod log_paths;
 pub mod markdown;
 pub mod messages;
 pub mod permissions;
+pub mod reducers;
 pub mod restore;
 pub mod session;
 pub mod status_line;

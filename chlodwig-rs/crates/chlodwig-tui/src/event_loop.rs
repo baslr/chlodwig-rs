@@ -1158,150 +1158,63 @@ pub async fn run_tui_with_permissions(
                         let _ = perm.respond.send(PermissionDecision::AllowAlways);
                     }
 
-                    // ── User question dialog keys ─────────────────────────
-                    // Up: move selection up (through options)
-                    KeyCode::Up if app.pending_user_question.is_some() => {
-                        let q = app.pending_user_question.as_mut().unwrap();
-                        if !q.options.is_empty() {
-                            match q.selected {
-                                Some(0) => {} // already at top
-                                Some(i) => q.selected = Some(i - 1),
-                                None => q.selected = Some(q.options.len() - 1), // from text → last option
-                            }
-                        }
-                    }
-                    // Down: move selection down (through options → text input)
-                    KeyCode::Down if app.pending_user_question.is_some() => {
-                        let q = app.pending_user_question.as_mut().unwrap();
-                        if !q.options.is_empty() {
-                            match q.selected {
-                                Some(i) if i + 1 < q.options.len() => q.selected = Some(i + 1),
-                                Some(_) => q.selected = None, // last option → text input
-                                None => {} // already in text input
-                            }
-                        }
-                    }
-                    // Tab: toggle between options and text input
-                    KeyCode::Tab if app.pending_user_question.is_some() => {
-                        let q = app.pending_user_question.as_mut().unwrap();
-                        if q.options.is_empty() {
-                            // No options, always in text mode — do nothing
-                        } else if q.selected.is_some() {
-                            q.selected = None; // switch to text input
-                        } else {
-                            q.selected = Some(0); // switch to options
-                        }
-                    }
-                    // Enter: submit selection or text
-                    KeyCode::Enter if app.pending_user_question.is_some() => {
-                        let q = app.pending_user_question.take().unwrap();
-                        let answer = if let Some(idx) = q.selected {
-                            q.options[idx].clone()
-                        } else {
-                            q.input.text
-                        };
-                        let _ = q.respond.send(answer);
-                    }
-                    // Esc: cancel (send empty string)
-                    KeyCode::Esc if app.pending_user_question.is_some() => {
-                        let q = app.pending_user_question.take().unwrap();
-                        let _ = q.respond.send(String::new());
-                    }
-                    // Alt+b: word left in text mode
-                    KeyCode::Char('b') if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && key.modifiers.contains(KeyModifiers::ALT) =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.move_cursor_word_left();
-                    }
-                    // Alt+f: word right in text mode
-                    KeyCode::Char('f') if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && key.modifiers.contains(KeyModifiers::ALT) =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.move_cursor_word_right();
-                    }
-                    // Alt+d: delete word forward in text mode
-                    KeyCode::Char('d') if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && key.modifiers.contains(KeyModifiers::ALT) =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.delete_word_forward();
-                    }
-                    // Ctrl+J: insert newline in text mode
-                    KeyCode::Char('j') if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.insert_newline();
-                    }
-                    // Text input when in text mode (no option selected) — general Char handler
-                    KeyCode::Char(c) if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
-                    {
-                        let q = app.pending_user_question.as_mut().unwrap();
-                        q.input.insert_char(c);
-                    }
-                    // Alt+Backspace: delete word back in text mode (must be before plain Backspace)
-                    KeyCode::Backspace if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && key.modifiers.contains(KeyModifiers::ALT) =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.delete_word_back();
-                    }
-                    // Backspace in text mode
-                    KeyCode::Backspace if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && app.pending_user_question.as_ref().unwrap().input.cursor > 0 =>
-                    {
-                        let q = app.pending_user_question.as_mut().unwrap();
-                        q.input.delete_back();
-                    }
-                    // Left/Right cursor in text mode
-                    KeyCode::Left if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && app.pending_user_question.as_ref().unwrap().input.cursor > 0 =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.move_left();
-                    }
-                    KeyCode::Right if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none()
-                        && app.pending_user_question.as_ref().unwrap().input.cursor
-                            < app.pending_user_question.as_ref().unwrap().input.char_count() =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.move_right();
-                    }
-                    // Home/End in text mode
-                    KeyCode::Home if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.move_home();
-                    }
-                    KeyCode::End if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.move_end();
-                    }
-                    // Delete key (fn+Backspace) in text mode
-                    KeyCode::Delete if app.pending_user_question.is_some()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_none() =>
-                    {
-                        app.pending_user_question.as_mut().unwrap().input.delete_forward();
-                    }
-                    // Number keys 1-9: quick-select option (when options exist)
-                    KeyCode::Char(c @ '1'..='9') if app.pending_user_question.is_some()
-                        && !app.pending_user_question.as_ref().unwrap().options.is_empty()
-                        && app.pending_user_question.as_ref().unwrap().selected.is_some() =>
-                    {
-                        let idx = (c as usize) - ('1' as usize);
+                    // ── User question dialog ──────────────────────────────
+                    //
+                    // While the dialog is open, ALL key events go through the
+                    // UserQuestion reducer (chlodwig_core::reducers::user_question).
+                    // This single arm replaces ~14 separate match arms by
+                    // translating crossterm KeyEvents into reducer Msg values
+                    // and applying them via PendingUserQuestion::apply().
+                    //
+                    // Tests for the underlying state machine live in
+                    // chlodwig-core/src/reducers/user_question.rs — they run
+                    // without ratatui or crossterm.
+                    _ if app.pending_user_question.is_some() => {
+                        use chlodwig_core::reducers::user_question::Msg as UqMsg;
                         let q = app.pending_user_question.as_ref().unwrap();
-                        if idx < q.options.len() {
-                            // Submit directly with that option
-                            let answer = q.options[idx].clone();
+                        let in_text = q.model.is_text_mode();
+                        let alt = key.modifiers.contains(KeyModifiers::ALT);
+                        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+                        let msg: Option<UqMsg> = match key.code {
+                            KeyCode::Up => Some(UqMsg::NavUp),
+                            KeyCode::Down => Some(UqMsg::NavDown),
+                            KeyCode::Tab => Some(UqMsg::ToggleFocus),
+                            KeyCode::Enter => Some(UqMsg::Submit),
+                            KeyCode::Esc => Some(UqMsg::Cancel),
+
+                            // Number keys: quick-select while in option mode.
+                            // While in text mode they're regular characters.
+                            KeyCode::Char(c @ '1'..='9') if !in_text => {
+                                Some(UqMsg::QuickSelect((c as u8) - b'0'))
+                            }
+
+                            // ── Editing keys (text mode only) ──────────────
+                            KeyCode::Char('b') if in_text && alt => Some(UqMsg::CursorWordLeft),
+                            KeyCode::Char('f') if in_text && alt => Some(UqMsg::CursorWordRight),
+                            KeyCode::Char('d') if in_text && alt => Some(UqMsg::DeleteWordForward),
+                            KeyCode::Char('j') if in_text && ctrl => Some(UqMsg::InsertNewline),
+                            KeyCode::Char(c) if in_text => Some(UqMsg::InsertChar(c)),
+
+                            KeyCode::Backspace if in_text && alt => Some(UqMsg::DeleteWordBack),
+                            KeyCode::Backspace if in_text => Some(UqMsg::DeleteBack),
+                            KeyCode::Delete if in_text => Some(UqMsg::DeleteForward),
+                            KeyCode::Left if in_text => Some(UqMsg::CursorLeft),
+                            KeyCode::Right if in_text => Some(UqMsg::CursorRight),
+                            KeyCode::Home if in_text => Some(UqMsg::CursorHome),
+                            KeyCode::End if in_text => Some(UqMsg::CursorEnd),
+
+                            _ => None,
+                        };
+
+                        if let Some(m) = msg {
                             let q = app.pending_user_question.take().unwrap();
-                            let _ = q.respond.send(answer);
+                            app.pending_user_question = q.apply(m);
                         }
+                        needs_redraw = true;
                     }
+
+
 
                     // ── Constants tab: inline editing ─────────────────────
                     // When editing a constant value, all input goes to the edit buffer.
@@ -1878,13 +1791,11 @@ pub async fn run_tui_with_permissions(
 
         // Drain user question requests
         while let Ok(req) = uq_rx.try_recv() {
-            app.pending_user_question = Some(PendingUserQuestion {
-                question: req.question,
-                options: req.options.clone(),
-                selected: if req.options.is_empty() { None } else { Some(0) },
-                input: chlodwig_core::InputState::new(),
-                respond: req.respond,
-            });
+            app.pending_user_question = Some(PendingUserQuestion::new(
+                req.question,
+                req.options,
+                req.respond,
+            ));
             needs_redraw = true;
         }
 

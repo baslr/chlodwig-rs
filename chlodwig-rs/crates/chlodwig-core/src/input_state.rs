@@ -7,7 +7,7 @@ use unicode_width::UnicodeWidthChar;
 /// A self-contained text input with cursor, supporting insert, delete,
 /// word-movement, paste, and visual cursor position calculation
 /// (matching ratatui's `Wrap { trim: false }` word-wrapper).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputState {
     pub text: String,
     /// Cursor position as a **char index** (not byte index).

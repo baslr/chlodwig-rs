@@ -583,12 +583,15 @@ pub(crate) fn render_permission_dialog(f: &mut Frame, perm: &PendingPermission) 
 
 pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion) {
     let area = centered_rect(70, 60, f.area());
+    // The pure dialog state lives in q.model (chlodwig_core::reducers::user_question::Model).
+    // The wrapper just adds the oneshot::Sender for the response.
+    let m = &q.model;
 
     let mut lines: Vec<Line> = Vec::new();
 
     // Question text (bold, cyan)
     lines.push(Line::from(Span::styled(
-        &q.question,
+        &m.question,
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
@@ -596,9 +599,9 @@ pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion
     lines.push(Line::from(""));
 
     // Options (if any)
-    if !q.options.is_empty() {
-        for (i, opt) in q.options.iter().enumerate() {
-            let is_selected = q.selected == Some(i);
+    if !m.options.is_empty() {
+        for (i, opt) in m.options.iter().enumerate() {
+            let is_selected = m.selected == Some(i);
             let prefix = if is_selected { "▸ " } else { "  " };
             let label = format!("{prefix}{}. {opt}", i + 1);
             let style = if is_selected {
@@ -614,7 +617,7 @@ pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion
     }
 
     // Free-text input area
-    let input_focused = q.selected.is_none();
+    let input_focused = m.selected.is_none();
     let input_style = if input_focused {
         Style::default()
             .fg(Color::Green)
@@ -623,17 +626,17 @@ pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion
         Style::default().fg(Color::DarkGray)
     };
     let input_prefix = if input_focused { "▸ " } else { "  " };
-    let input_label = if q.input.is_empty() {
+    let input_label = if m.input.is_empty() {
         format!("{input_prefix}Type your answer...")
     } else {
-        format!("{input_prefix}{}", q.input.text)
+        format!("{input_prefix}{}", m.input.text)
     };
     lines.push(Line::from(Span::styled(input_label, input_style)));
 
     lines.push(Line::from(""));
 
     // Help line
-    let help = if q.options.is_empty() {
+    let help = if m.options.is_empty() {
         "Enter: submit │ Esc: cancel"
     } else {
         "↑↓: select │ Tab: text input │ Enter: submit │ Esc: cancel"
@@ -659,8 +662,8 @@ pub(crate) fn render_user_question_dialog(f: &mut Frame, q: &PendingUserQuestion
     if input_focused {
         // Compute cursor position within the dialog
         // The text input line is after: question, blank, options..., blank
-        let text_line_offset = 2 + if q.options.is_empty() { 0 } else { q.options.len() + 1 };
-        let cursor_x = area.x + 1 + 2 + q.input.text[..q.input.cursor_byte_pos()]
+        let text_line_offset = 2 + if m.options.is_empty() { 0 } else { m.options.len() + 1 };
+        let cursor_x = area.x + 1 + 2 + m.input.text[..m.input.cursor_byte_pos()]
             .width() as u16;
         let cursor_y = area.y + 1 + text_line_offset as u16;
         if cursor_y < area.y + area.height - 1 && cursor_x < area.x + area.width - 1 {

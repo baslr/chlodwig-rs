@@ -1,6 +1,7 @@
 //! Shared types, enums, and constants for the TUI.
 
-use chlodwig_core::{InputState, PermissionDecision};
+use chlodwig_core::PermissionDecision;
+use chlodwig_core::reducers::user_question as uq;
 use tokio::sync::oneshot;
 
 // ── Display model ──────────────────────────────────────────────────
@@ -81,15 +82,50 @@ pub(crate) struct PendingPermission {
 
 /// A pending user question dialog — the LLM asked a question and is waiting
 /// for the user's answer.
+///
+/// The pure state lives in [`uq::Model`] (in `chlodwig-core::reducers`).
+/// This wrapper just adds the `oneshot::Sender<String>` that the reducer
+/// cannot own (because reducers are pure / `Clone`-able).
 pub(crate) struct PendingUserQuestion {
-    pub(crate) question: String,
-    pub(crate) options: Vec<String>,
-    /// Currently selected option index (0..options.len()), or `None` when
-    /// the free-text input is focused.
-    pub(crate) selected: Option<usize>,
-    /// Free-text input state (reusable InputState with full editing support).
-    pub(crate) input: InputState,
+    pub(crate) model: uq::Model,
     pub(crate) respond: oneshot::Sender<String>,
+}
+
+impl PendingUserQuestion {
+    /// Convenience constructor used by the conversation event handler when
+    /// a `UserQuestionRequest` arrives from the tool.
+    pub(crate) fn new(
+        question: String,
+        options: Vec<String>,
+        respond: oneshot::Sender<String>,
+    ) -> Self {
+        Self {
+            model: uq::Model::new(question, options),
+            respond,
+        }
+    }
+
+    /// Apply a reducer message. If the dialog wants to close (user pressed
+    /// Enter / Esc / number key), this method consumes `self`, sends the
+    /// answer, and returns `None`. Otherwise it returns `Some(self)` so the
+    /// caller can re-store the still-open dialog.
+    ///
+    /// Typical usage in the event loop:
+    /// ```ignore
+    /// if let Some(q) = app.pending_user_question.take() {
+    ///     app.pending_user_question = q.apply(uq::Msg::NavDown);
+    /// }
+    /// ```
+    pub(crate) fn apply(self, msg: uq::Msg) -> Option<Self> {
+        let mut model = self.model;
+        match model.update(msg) {
+            uq::Outcome::None => Some(Self { model, respond: self.respond }),
+            uq::Outcome::Submit(answer) => {
+                let _ = self.respond.send(answer);
+                None
+            }
+        }
+    }
 }
 
 /// Which area of the UI has keyboard focus.
