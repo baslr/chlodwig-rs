@@ -517,6 +517,7 @@ pub(crate) fn render_status_line(f: &mut Frame, app: &App, area: Rect) {
         spinner: &spinner_str,
         build_id: BUILD_ID,
         build_time: BUILD_TIME,
+        cwd: &app.cwd,
     };
 
     let status_left = format!(" {}", chlodwig_core::format_status_left(&d));

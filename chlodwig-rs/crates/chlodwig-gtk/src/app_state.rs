@@ -51,6 +51,8 @@ pub struct AppState {
     pub request_count: u32,
     /// Model name.
     pub model: String,
+    /// Current working directory.
+    pub cwd: String,
     /// Transient copy-feedback message (e.g. "Copied!"), shown briefly in status bar.
     pub copy_feedback: Option<String>,
     /// Set to `true` when a turn completes and the UI should consider sending
@@ -78,6 +80,9 @@ impl AppState {
             turn_count: 0,
             request_count: 0,
             model,
+            cwd: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
             copy_feedback: None,
             should_notify: false,
             auto_scroll: chlodwig_core::AutoScroll::new(),

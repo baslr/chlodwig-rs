@@ -63,6 +63,7 @@ pub struct StatusLineData<'a> {
     pub spinner: &'a str,
     pub build_id: &'a str,
     pub build_time: &'a str,
+    pub cwd: &'a str,
 }
 
 /// Format the left half of the status line (model, turns, context, totals).
@@ -74,7 +75,7 @@ pub fn format_status_left(d: &StatusLineData<'_>) -> String {
     let context = d.turn_usage.context_window_size();
     let cost_ind = cost_indicator(context);
     format!(
-        "{} │ turns: {} │ reqs: {} │ ctx: {} [{}] │ tx:{} rx:{}",
+        "{} │ turns: {} │ reqs: {} │ ctx: {} [{}] │ tx:{} rx:{} │ 📂 {}",
         d.model,
         d.turn_count,
         d.request_count,
@@ -82,6 +83,7 @@ pub fn format_status_left(d: &StatusLineData<'_>) -> String {
         cost_ind,
         format_tokens(d.total_input_tokens),
         format_tokens(d.total_output_tokens),
+        d.cwd,
     )
 }
 
@@ -156,6 +158,7 @@ mod tests {
             spinner: "⏳",
             build_id: "99",
             build_time: "2026-04-13 14:00",
+            cwd: "/tmp",
         }
     }
 
@@ -228,6 +231,7 @@ mod tests {
             spinner: "⏳",
             build_id: "99",
             build_time: "2026-04-13 14:00",
+            cwd: "/tmp",
         };
         let right = format_status_right(&d);
         assert!(right.contains("ct:22.4k"), "should contain ct:22.4k, got: {right}");
@@ -250,6 +254,7 @@ mod tests {
             spinner: "⏳",
             build_id: "99",
             build_time: "2026-04-13 14:00",
+            cwd: "/tmp",
         };
         let right = format_status_right(&d);
         assert!(right.contains("ct:22.4k"), "should contain ct:22.4k, got: {right}");
@@ -275,6 +280,7 @@ mod tests {
             spinner: "⏳",
             build_id: "99",
             build_time: "2026-04-13 14:00",
+            cwd: "/tmp",
         };
         let left = format_status_left(&d);
         // ctx: should be 16k (8000 + 2000 + 6000)
@@ -297,6 +303,7 @@ mod tests {
             spinner: "⏳",
             build_id: "1",
             build_time: "now",
+            cwd: "/tmp",
         };
         let left = format_status_left(&d);
         // 6000 < 10000 → should be "░░░░"
@@ -318,6 +325,7 @@ mod tests {
             spinner: "⏳",
             build_id: "99",
             build_time: "2026-04-13 14:00",
+            cwd: "/tmp",
         };
         let right = format_status_right(&d);
         assert!(right.contains("ct:0"), "should contain ct:0, got: {right}");

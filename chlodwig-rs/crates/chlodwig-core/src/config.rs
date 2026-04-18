@@ -696,8 +696,11 @@ mod tests {
 
     #[test]
     fn test_enrich_path_does_not_duplicate_existing_dirs() {
-        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let _lock = PATH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = std::env::var("PATH").unwrap_or_default();
+
+        // Start from a known clean PATH to avoid pre-existing duplicates
+        unsafe { std::env::set_var("PATH", "/usr/bin:/bin") };
 
         enrich_path();
         let after = std::env::var("PATH").unwrap_or_default();
@@ -708,7 +711,7 @@ mod tests {
         assert_eq!(
             dirs.len(),
             unique.len(),
-            "PATH should not contain duplicate entries"
+            "PATH should not contain duplicate entries after enrich_path"
         );
 
         // Restore
@@ -717,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_enrich_path_preserves_original_entries() {
-        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let _lock = PATH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = std::env::var("PATH").unwrap_or_default();
 
         enrich_path();
@@ -735,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_enrich_path_adds_existing_dirs() {
-        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let _lock = PATH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = std::env::var("PATH").unwrap_or_default();
 
         // Set a minimal PATH that's missing common dirs
@@ -770,7 +773,7 @@ mod tests {
 
     #[test]
     fn test_enrich_path_skips_nonexistent_dirs() {
-        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let _lock = PATH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = std::env::var("PATH").unwrap_or_default();
 
         unsafe { std::env::set_var("PATH", "/usr/bin") };
@@ -790,7 +793,7 @@ mod tests {
 
     #[test]
     fn test_enrich_path_idempotent() {
-        let _lock = PATH_TEST_LOCK.lock().unwrap();
+        let _lock = PATH_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let before = std::env::var("PATH").unwrap_or_default();
 
         // Start from a known minimal state

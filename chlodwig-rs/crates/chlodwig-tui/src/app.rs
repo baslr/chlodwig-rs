@@ -436,6 +436,7 @@ pub(crate) struct App {
     pub(crate) turn_count: u32,
     pub(crate) api_request_count: u32,
     pub(crate) model: String,
+    pub(crate) cwd: String,
     // Cached rendered lines for scrollback
     pub(crate) rendered_lines: Vec<RenderedLine>,
     pub(crate) lines_dirty: bool,
@@ -494,6 +495,9 @@ impl App {
             turn_count: 0,
             api_request_count: 0,
             model,
+            cwd: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
             rendered_lines: Vec::new(),
             lines_dirty: true,
             wrap_width: 120, // sensible default, updated on first draw

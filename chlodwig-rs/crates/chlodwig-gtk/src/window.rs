@@ -738,6 +738,7 @@ pub fn update_status(left_label: &Label, right_label: &Label, state: &AppState) 
         spinner: &spinner_str,
         build_id: BUILD_ID,
         build_time: BUILD_TIME,
+        cwd: &state.cwd,
     };
 
     left_label.set_label(&chlodwig_core::format_status_left(&d));
