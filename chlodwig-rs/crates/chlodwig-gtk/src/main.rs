@@ -152,163 +152,15 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<BackgroundCommand>();
 
     // --- Native macOS menu bar ---
-    {
-        use gtk4::gio;
-        let menubar = gio::Menu::new();
-
-        // File menu
-        let file_menu = gio::Menu::new();
-        file_menu.append(Some("New Conversation"), Some("app.new-conversation"));
-        file_menu.append(Some("Quit"), Some("app.quit"));
-        menubar.append_submenu(Some("File"), &file_menu);
-
-        // Conversation menu
-        let conv_menu = gio::Menu::new();
-        conv_menu.append(Some("Compact History"), Some("app.compact"));
-        conv_menu.append(Some("Resume Last Session"), Some("app.resume"));
-        conv_menu.append(Some("Sessions…"), Some("app.sessions-browser"));
-        menubar.append_submenu(Some("Conversation"), &conv_menu);
-
-        app.set_menubar(Some(&menubar));
-
-        // "New Conversation" action (Cmd+N)
-        let new_conv_action = gio::SimpleAction::new("new-conversation", None);
-        let prompt_tx_new = prompt_tx.clone();
-        let state_new = app_state.clone();
-        let output_buf_new = widgets.output_buffer.clone();
-        let status_left_new = widgets.status_left_label.clone();
-        let status_right_new = widgets.status_right_label.clone();
-        new_conv_action.connect_activate(move |_, _| {
-            {
-                let mut state = state_new.borrow_mut();
-                state.clear();
-            }
-            let mut s = output_buf_new.start_iter();
-            let mut e = output_buf_new.end_iter();
-            chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf_new, 0);
-            output_buf_new.delete(&mut s, &mut e);
-            let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
-            window::append_styled(&output_buf_new, &format!("{cwd_msg}\n"), "system");
-            let _ = prompt_tx_new.send(BackgroundCommand::ClearMessages);
-            window::update_status(&status_left_new, &status_right_new, &state_new.borrow());
-        });
-        app.add_action(&new_conv_action);
-        app.set_accels_for_action("app.new-conversation", &["<Meta>n"]);
-
-        // "Compact" action
-        let compact_action = gio::SimpleAction::new("compact", None);
-        let prompt_tx_compact = prompt_tx.clone();
-        compact_action.connect_activate(move |_, _| {
-            let _ = prompt_tx_compact.send(BackgroundCommand::Compact { instructions: None });
-        });
-        app.add_action(&compact_action);
-
-        // "Resume" action
-        let resume_action = gio::SimpleAction::new("resume", None);
-        let prompt_tx_resume = prompt_tx.clone();
-        resume_action.connect_activate(move |_, _| {
-            if let Ok(Some(snapshot)) = chlodwig_core::load_latest_session() {
-                let _ = prompt_tx_resume.send(BackgroundCommand::RestoreMessages {
-                    messages: snapshot.messages,
-                });
-            }
-        });
-        app.add_action(&resume_action);
-
-        // "Sessions…" action — opens the sessions browser window
-        let sessions_action = gtk4::gio::SimpleAction::new("sessions-browser", None);
-        let prompt_tx_sessions = prompt_tx.clone();
-        let state_sessions = app_state.clone();
-        let output_buf_sessions = widgets.output_buffer.clone();
-        let output_view_sessions = widgets.output_view.clone();
-        let output_scroll_sessions = widgets.output_scroll.clone();
-        let viewport_cols_sessions = viewport_cols.clone();
-        let status_left_sessions = widgets.status_left_label.clone();
-        let status_right_sessions = widgets.status_right_label.clone();
-        let window_for_sessions = window.clone();
-        let session_started_at_for_sessions = session_started_at.clone();
-        sessions_action.connect_activate(move |_, _| {
-            let prompt_tx = prompt_tx_sessions.clone();
-            let state = state_sessions.clone();
-            let output_buf = output_buf_sessions.clone();
-            let output_view = output_view_sessions.clone();
-            let output_scroll = output_scroll_sessions.clone();
-            let viewport_cols = viewport_cols_sessions.clone();
-            let status_left = status_left_sessions.clone();
-            let status_right = status_right_sessions.clone();
-            let window_for_resume = window_for_sessions.clone();
-            let current_file = Some(chlodwig_core::session_filename_for(&session_started_at_for_sessions));
-            chlodwig_gtk::sessions_window::show_sessions_window(
-                &window_for_sessions,
-                current_file,
-                Box::new(move |path| {
-                    match chlodwig_core::load_session_from(&path) {
-                        Ok(snapshot) => {
-                            let cwd_name: Option<String> = std::env::current_dir()
-                                .ok()
-                                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
-                            let ctx = restore::RestoreContext {
-                                state: &state,
-                                output_buf: &output_buf,
-                                output_view: &output_view,
-                                output_scroll: &output_scroll,
-                                window: &window_for_resume,
-                                viewport_cols: &viewport_cols,
-                                status_left: &status_left,
-                                status_right: &status_right,
-                                prompt_tx: &prompt_tx,
-                                cwd_name: cwd_name.as_deref(),
-                            };
-                            restore::apply_restored_session_to_ui(snapshot, &ctx);
-                        }
-                        Err(e) => {
-                            window::append_styled(
-                                &output_buf,
-                                &format!("\n✗ Failed to load session: {e}\n"),
-                                "error",
-                            );
-                        }
-                    }
-                }),
-            );
-        });
-        app.add_action(&sessions_action);
-
-        // Window menu (macOS standard)
-        let window_menu = gio::Menu::new();
-        window_menu.append(Some("Minimize"), Some("app.minimize"));
-        window_menu.append(Some("Hide Chlodwig"), Some("app.hide"));
-        window_menu.append(Some("Show Chlodwig"), Some("app.show"));
-        menubar.append_submenu(Some("Window"), &window_menu);
-
-        // "Minimize" action (Cmd+M) — minimize the main window
-        let minimize_action = gio::SimpleAction::new("minimize", None);
-        let window_for_minimize = window.clone();
-        minimize_action.connect_activate(move |_, _| {
-            window_for_minimize.minimize();
-        });
-        app.add_action(&minimize_action);
-        app.set_accels_for_action("app.minimize", &["<Meta>m"]);
-
-        // "Hide" action (Cmd+H) — hide the main window (macOS "Hide App")
-        let hide_action = gio::SimpleAction::new("hide", None);
-        let window_for_hide = window.clone();
-        hide_action.connect_activate(move |_, _| {
-            window_for_hide.set_visible(false);
-        });
-        app.add_action(&hide_action);
-        app.set_accels_for_action("app.hide", &["<Meta>h"]);
-
-        // "Show" action (Shift+Cmd+H) — show the window again after hide
-        let show_action = gio::SimpleAction::new("show", None);
-        let window_for_show = window.clone();
-        show_action.connect_activate(move |_, _| {
-            window_for_show.set_visible(true);
-            window_for_show.present();
-        });
-        app.add_action(&show_action);
-        app.set_accels_for_action("app.show", &["<Shift><Meta>h"]);
-    }
+    menu::setup_menu(menu::MenuContext {
+        app: app.clone(),
+        window: window.clone(),
+        widgets: widgets.clone(),
+        app_state: app_state.clone(),
+        prompt_tx: prompt_tx.clone(),
+        viewport_cols: viewport_cols.clone(),
+        session_started_at: session_started_at.clone(),
+    });
 
     // Set initial status
     window::update_status(&widgets.status_left_label, &widgets.status_right_label, &app_state.borrow());
@@ -1296,3 +1148,5 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
 mod render;
 // Session-restore glue (shared by all 3 resume entry points).
 mod restore;
+// Native macOS menu bar setup.
+mod menu;

@@ -146,6 +146,7 @@ thread_local! {
 }
 
 /// Holds references to all important widgets so we can update them.
+#[derive(Clone)]
 pub struct UiWidgets {
     pub output_view: EmojiTextView,
     pub output_buffer: gtk4::TextBuffer,
