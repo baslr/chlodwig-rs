@@ -1193,19 +1193,15 @@ fn test_event_loop_has_table_sort_click_handler() {
 
 #[test]
 fn test_finalized_streaming_render_uses_table_headers() {
-    // The finalized streaming render (Case 2: TextComplete) must use
-    // append_styled_lines_with_table_headers so that table sort tags
-    // are present immediately — not only after a resize.
+    // The finalized streaming render (Case 2: TextComplete) must use the
+    // unified `md_renderer::append_styled_lines(..., &state.tables, block_idx)`
+    // call so that table sort tags are present immediately — not only after
+    // a resize. (The function signature with `&state.tables` distinguishes
+    // it from accidental calls without table info.)
     let source = include_str!("../main.rs");
-    // Find the rerender_streaming_markdown function — it must use
-    // append_styled_lines_with_table_headers, not plain append_styled_lines.
-    // OR the finalization block must call append_styled_lines_with_table_headers directly.
-    //
-    // The key check: after streaming_finalized, the render path must include table headers.
     assert!(
-        source.contains("finalize_streaming_with_table_headers")
-            || (source.contains("streaming_finalized") && source.contains("append_styled_lines_with_table_headers")),
-        "Finalized streaming render must use append_styled_lines_with_table_headers \
+        source.contains("streaming_finalized") && source.contains("&state.tables"),
+        "Finalized streaming render must pass &state.tables to append_styled_lines \
          so table sort tags are present immediately, not only after resize"
     );
 }

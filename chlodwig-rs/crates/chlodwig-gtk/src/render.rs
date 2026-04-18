@@ -44,7 +44,7 @@ pub fn rerender_all_blocks(
                 } else {
                     chlodwig_core::render_markdown_with_table_overrides(text, viewport_width, &overrides)
                 };
-                append_styled_lines_with_table_headers(buffer, &lines, &state.tables, block_idx);
+                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &state.tables, block_idx);
                 window::append_to_output(buffer, "\n");
             }
             DisplayBlock::ToolUseStart { name, input } => {
@@ -102,7 +102,7 @@ pub fn rerender_all_blocks(
     if !state.streaming_buffer.is_empty() {
         window::append_to_output(buffer, "\n");
         let lines = chlodwig_core::render_markdown_with_width(&state.streaming_buffer, viewport_width);
-        chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+        chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &[], 0);
     }
 }
 
@@ -132,7 +132,7 @@ pub fn render_restored_blocks(
                 } else {
                     chlodwig_core::render_markdown_with_table_overrides(text, viewport_width, &overrides)
                 };
-                append_styled_lines_with_table_headers(buffer, &lines, &state.tables, block_idx);
+                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &state.tables, block_idx);
                 window::append_to_output(buffer, "\n");
             }
             DisplayBlock::ToolUseStart { name, input } => {
@@ -220,7 +220,7 @@ pub fn rerender_streaming_markdown(
 
     // Re-render as Markdown
     let lines = chlodwig_core::render_markdown_with_width(markdown_text, viewport_width);
-    chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines);
+    chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &[], 0);
 }
 
 /// Render a single ConversationEvent into the GTK TextBuffer.
@@ -429,96 +429,10 @@ pub fn render_event_to_buffer(
     }
 }
 
-/// Append styled lines with clickable table sort tags on header cells.
-pub fn append_styled_lines_with_table_headers(
-    buffer: &gtk4::TextBuffer,
-    lines: &[chlodwig_core::StyledLine],
-    all_tables: &[(usize, usize, chlodwig_core::TableData)],
-    block_idx: usize,
-) {
-    // Find global table indices for this block
-    let block_tables: Vec<usize> = all_tables.iter().enumerate()
-        .filter(|(_, (bi, _, _))| *bi == block_idx)
-        .map(|(global_idx, _)| global_idx)
-        .collect();
-
-    // State machine: detect table regions by looking for border characters
-    let mut table_within_block: usize = 0;
-    let mut in_table = false;
-    let mut header_next = false;
-
-    for (line_idx, line) in lines.iter().enumerate() {
-        if line_idx > 0 {
-            let mut end = buffer.end_iter();
-            buffer.insert(&mut end, "\n");
-        }
-
-        let line_text = line.text();
-
-        if line_text.starts_with('┌') {
-            in_table = true;
-            header_next = true;
-        } else if line_text.starts_with('└') {
-            in_table = false;
-            table_within_block += 1;
-        } else if line_text.starts_with('├') {
-            header_next = false;
-        }
-
-        let is_header_row = in_table && header_next
-            && line.spans.iter().any(|s| s.style.bold && s.style.monospace);
-
-        if is_header_row {
-            let global_table_idx = if table_within_block < block_tables.len() {
-                block_tables[table_within_block]
-            } else {
-                usize::MAX
-            };
-
-            let mut col_idx: usize = 0;
-            for span in &line.spans {
-                let tag_name = chlodwig_gtk::md_renderer::ensure_tag(buffer, &span.style);
-
-                if span.style.bold && span.style.monospace && global_table_idx != usize::MAX {
-                    let sort_tag_name = format!("table_sort:{global_table_idx}:{col_idx}");
-                    let tag_table = buffer.tag_table();
-                    if tag_table.lookup(&sort_tag_name).is_none() {
-                        let sort_tag = gtk4::TextTag::builder()
-                            .name(&sort_tag_name)
-                            .build();
-                        tag_table.add(&sort_tag);
-                    }
-
-                    let mut end = buffer.end_iter();
-                    let start_offset = end.offset();
-                    buffer.insert(&mut end, &span.text);
-                    let start_iter = buffer.iter_at_offset(start_offset);
-                    let end_iter = buffer.end_iter();
-                    buffer.apply_tag_by_name(&tag_name, &start_iter, &end_iter);
-                    buffer.apply_tag_by_name(&sort_tag_name, &start_iter, &end_iter);
-                    col_idx += 1;
-                } else {
-                    chlodwig_gtk::md_renderer::insert_text_with_emoji_and_tag(
-                        buffer,
-                        &span.text,
-                        &tag_name,
-                        span.style.monospace,
-                    );
-                }
-            }
-        } else {
-            for span in &line.spans {
-                let tag_name = chlodwig_gtk::md_renderer::ensure_tag(buffer, &span.style);
-                chlodwig_gtk::md_renderer::insert_text_with_emoji_and_tag(
-                    buffer,
-                    &span.text,
-                    &tag_name,
-                    span.style.monospace,
-                );
-            }
-        }
-    }
-}
+// `append_styled_lines_with_table_headers` was removed — its functionality
+// is now part of the unified `chlodwig_gtk::md_renderer::append_styled_lines`,
+// which handles fenced code-block highlighting AND table-header sort tags
+// in one place. Call sites pass `&state.tables` and `block_idx` directly.
 
 /// Re-render a single table in-place in the TextBuffer after sorting.
 pub fn rerender_table_in_place(
@@ -599,7 +513,7 @@ pub fn rerender_table_in_place(
 
     chlodwig_gtk::emoji_overlay::clear_overlays_from(buffer, table_start.offset());
     buffer.delete(&mut table_start, &mut table_end);
-    append_styled_lines_with_table_headers(buffer, &table_lines, &state.tables, block_idx);
+    chlodwig_gtk::md_renderer::append_styled_lines(buffer, &table_lines, &state.tables, block_idx);
 }
 
 /// Extract text from a ToolResultContent (text or blocks → joined text).

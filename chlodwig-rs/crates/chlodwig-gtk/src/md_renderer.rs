@@ -105,6 +105,70 @@ pub fn highlight_tag_name_for(fg: Option<(u8, u8, u8)>, bold: bool, italic: bool
     format!("hl_{color_part}{style_part}")
 }
 
+// ── Table-header detection (GTK-independent, pure) ──────────────────
+
+/// Walk over a slice of `StyledLine`s and identify which lines are
+/// table-header rows. Returns a vector of the same length as `lines`,
+/// where `Some(i)` means "this line is the header row of the i-th table
+/// in the slice (0-based)". `None` means it's not a table-header row.
+///
+/// A line counts as a header row when:
+///   1. We are inside a table (the most recent border line started with `┌`
+///      and we have not yet seen the post-header `├` separator), AND
+///   2. At least one of its spans has `bold && monospace` styling
+///      (which `chlodwig_core::markdown` only sets on table-header cells).
+///
+/// This is a pure function so it can be unit-tested without a GTK display
+/// server. The actual GTK rendering uses this to know where to attach
+/// `table_sort:N:M` tags.
+pub fn detect_table_header_rows(lines: &[StyledLine]) -> Vec<Option<usize>> {
+    let mut result = Vec::with_capacity(lines.len());
+    let mut table_index: usize = 0;
+    let mut in_table = false;
+    let mut header_next = false;
+
+    for line in lines {
+        let line_text = line.text();
+
+        // State transitions on border characters
+        let starts_top = line_text.starts_with('┌');
+        let starts_mid = line_text.starts_with('├');
+        let starts_bot = line_text.starts_with('└');
+
+        if starts_top {
+            in_table = true;
+            header_next = true;
+            result.push(None);
+            continue;
+        }
+        if starts_mid {
+            header_next = false;
+            result.push(None);
+            continue;
+        }
+        if starts_bot {
+            in_table = false;
+            result.push(None);
+            table_index += 1;
+            continue;
+        }
+
+        let is_header = in_table
+            && header_next
+            && line.spans.iter().any(|s| s.style.bold && s.style.monospace);
+
+        if is_header {
+            result.push(Some(table_index));
+        } else {
+            result.push(None);
+        }
+    }
+
+    result
+}
+
+
+
 // ── GTK-dependent rendering ─────────────────────────────────────────
 
 #[cfg(feature = "gtk-ui")]
@@ -154,22 +218,51 @@ mod gtk_impl {
     }
 
     /// Render a slice of `StyledLine`s into a GTK TextBuffer at the end.
-    /// Each span gets its own TextTag based on its MdStyle.
-    /// Emoji characters are rendered as CoreText bitmaps and inserted as paintables.
     ///
-    /// Lines with `code_info` set (fenced code block content) get syntect-based
-    /// syntax highlighting: the border span is kept as-is, the code spans are
-    /// replaced with per-token colored tags.
-    pub fn append_styled_lines(buffer: &gtk4::TextBuffer, lines: &[StyledLine]) {
+    /// This is the **single** Markdown→TextBuffer render entry point. It
+    /// handles three cases per line, in priority order:
+    ///   1. **Fenced code-block content** (line has `code_info`) → syntect
+    ///      syntax highlighting via `insert_highlighted_spans`.
+    ///   2. **Table-header row** (detected by `detect_table_header_rows`) →
+    ///      each bold+monospace span gets a `table_sort:{global_idx}:{col}`
+    ///      tag in addition to its normal style tag, so the click handler
+    ///      can identify the column to sort.
+    ///   3. **Anything else** → plain span loop with emoji-as-overlay.
+    ///
+    /// `all_tables` is the full list of tables tracked by `AppState`
+    /// (`(block_idx, table_idx_within_block, TableData)`), and `block_idx`
+    /// is the AssistantText block currently being rendered. Pass `&[]` and
+    /// any `block_idx` if the caller doesn't need clickable headers
+    /// (e.g. live streaming render where tables aren't tracked yet).
+    pub fn append_styled_lines(
+        buffer: &gtk4::TextBuffer,
+        lines: &[StyledLine],
+        all_tables: &[(usize, usize, chlodwig_core::TableData)],
+        block_idx: usize,
+    ) {
+        // Map "i-th table within this slice" → "global table index in
+        // AppState.tables". When `all_tables` is empty, the lookup
+        // always returns None and no table_sort tags are emitted.
+        let block_tables: Vec<usize> = all_tables
+            .iter()
+            .enumerate()
+            .filter(|(_, (bi, _, _))| *bi == block_idx)
+            .map(|(global_idx, _)| global_idx)
+            .collect();
+
+        // Pre-compute which line indices are table headers (and which table
+        // they belong to, within this slice).
+        let header_map = detect_table_header_rows(lines);
+
         for (line_idx, line) in lines.iter().enumerate() {
             if line_idx > 0 {
                 let mut end = buffer.end_iter();
                 buffer.insert(&mut end, "\n");
             }
 
+            // Case 1: fenced code block → syntect highlighting
             if should_highlight_code_line(line) {
                 let lang = line.code_info.as_deref().unwrap_or("");
-                // spans[0] is the border ("  │ "), spans[1..] is the code text
                 let border_span = &line.spans[0];
                 let border_tag = ensure_tag(buffer, &border_span.style);
                 insert_text_with_emoji_and_tag(
@@ -179,17 +272,14 @@ mod gtk_impl {
                     border_span.style.monospace,
                 );
 
-                // Concatenate all code spans
                 let code_text: String =
                     line.spans[1..].iter().map(|s| s.text.as_str()).collect();
 
-                // Try syntax highlighting
                 match highlight_code_line(lang, &code_text) {
                     Some(spans) if !spans.is_empty() => {
                         insert_highlighted_spans(buffer, &spans);
                     }
                     _ => {
-                        // Fallback: render as plain monospace code
                         for span in &line.spans[1..] {
                             let tag_name = ensure_tag(buffer, &span.style);
                             insert_text_with_emoji_and_tag(
@@ -201,16 +291,62 @@ mod gtk_impl {
                         }
                     }
                 }
-            } else {
+                continue;
+            }
+
+            // Case 2: table-header row → emit table_sort:N:M tags on cells
+            if let Some(local_table_idx) = header_map[line_idx] {
+                let global_table_idx = block_tables
+                    .get(local_table_idx)
+                    .copied()
+                    .unwrap_or(usize::MAX);
+                let mut col_idx: usize = 0;
                 for span in &line.spans {
                     let tag_name = ensure_tag(buffer, &span.style);
-                    insert_text_with_emoji_and_tag(
-                        buffer,
-                        &span.text,
-                        &tag_name,
-                        span.style.monospace,
-                    );
+
+                    if span.style.bold
+                        && span.style.monospace
+                        && global_table_idx != usize::MAX
+                    {
+                        let sort_tag_name =
+                            format!("table_sort:{global_table_idx}:{col_idx}");
+                        let tag_table = buffer.tag_table();
+                        if tag_table.lookup(&sort_tag_name).is_none() {
+                            let sort_tag = gtk4::TextTag::builder()
+                                .name(&sort_tag_name)
+                                .build();
+                            tag_table.add(&sort_tag);
+                        }
+
+                        let mut end = buffer.end_iter();
+                        let start_offset = end.offset();
+                        buffer.insert(&mut end, &span.text);
+                        let start_iter = buffer.iter_at_offset(start_offset);
+                        let end_iter = buffer.end_iter();
+                        buffer.apply_tag_by_name(&tag_name, &start_iter, &end_iter);
+                        buffer.apply_tag_by_name(&sort_tag_name, &start_iter, &end_iter);
+                        col_idx += 1;
+                    } else {
+                        insert_text_with_emoji_and_tag(
+                            buffer,
+                            &span.text,
+                            &tag_name,
+                            span.style.monospace,
+                        );
+                    }
                 }
+                continue;
+            }
+
+            // Case 3: plain row
+            for span in &line.spans {
+                let tag_name = ensure_tag(buffer, &span.style);
+                insert_text_with_emoji_and_tag(
+                    buffer,
+                    &span.text,
+                    &tag_name,
+                    span.style.monospace,
+                );
             }
         }
     }
@@ -251,15 +387,17 @@ mod gtk_impl {
 
     /// Render Markdown text into a GTK TextBuffer at the end.
     /// Parses the text via core, then inserts styled spans.
+    /// Convenience wrapper for callers without table-sort support.
     pub fn append_markdown(buffer: &gtk4::TextBuffer, text: &str) {
         let lines = chlodwig_core::render_markdown(text);
-        append_styled_lines(buffer, &lines);
+        append_styled_lines(buffer, &lines, &[], 0);
     }
 
     /// Render Markdown text with viewport width constraint.
+    /// Convenience wrapper for callers without table-sort support.
     pub fn append_markdown_with_width(buffer: &gtk4::TextBuffer, text: &str, width: usize) {
         let lines = chlodwig_core::render_markdown_with_width(text, width);
-        append_styled_lines(buffer, &lines);
+        append_styled_lines(buffer, &lines, &[], 0);
     }
 
     /// Delete a range of text from the buffer (by char offsets) and insert

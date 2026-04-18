@@ -1078,7 +1078,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 }
 
                 // Re-render with table header tags
-                render::append_styled_lines_with_table_headers(&output_buf, &lines, &state.tables, block_idx);
+                chlodwig_gtk::md_renderer::append_styled_lines(&output_buf, &lines, &state.tables, block_idx);
                 window::append_to_output(&output_buf, "\n");
 
                 streaming_start_offset.set(-1);
