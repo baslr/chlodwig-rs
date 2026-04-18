@@ -164,8 +164,8 @@ pub(crate) fn input_title(input: &str) -> String {
 }
 
 pub(crate) fn render_input(f: &mut Frame, app: &App, area: Rect) {
-    let title = input_title(&app.input);
-    let input = Paragraph::new(app.input.as_str())
+    let title = input_title(&app.input.text);
+    let input = Paragraph::new(app.input.text.as_str())
         .wrap(Wrap { trim: false })
         .block(
             Block::default()

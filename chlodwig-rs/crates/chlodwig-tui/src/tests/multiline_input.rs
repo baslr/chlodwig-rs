@@ -4,8 +4,8 @@ use super::*;
 #[test]
 fn test_input_visual_lines_short_text() {
     let mut app = App::new("test".into());
-    app.input = "hello".to_string();
-    app.cursor = 5;
+    app.input = chlodwig_core::InputState::with_text("hello");
+    app.input.cursor = 5;
     assert_eq!(app.input_visual_line_count(80), 1);
 }
 
@@ -14,8 +14,9 @@ fn test_input_visual_lines_short_text() {
 fn test_input_visual_lines_long_text_wraps() {
     let mut app = App::new("test".into());
     // 26 chars of 'a' at width 10 → 3 visual lines (10 + 10 + 6)
-    app.input = "a".repeat(26);
-    app.cursor = 26;
+    app.input = chlodwig_core::InputState::with_text("a".repeat(26));
+
+    app.input.cursor = 26;
     assert_eq!(app.input_visual_line_count(10), 3);
 }
 
@@ -31,7 +32,7 @@ fn test_input_visual_lines_empty() {
 #[test]
 fn test_input_visual_lines_with_newlines() {
     let mut app = App::new("test".into());
-    app.input = "hello\nworld".to_string();
+    app.input = chlodwig_core::InputState::with_text("hello\nworld");
     assert_eq!(app.input_visual_line_count(80), 2);
 }
 
@@ -40,7 +41,8 @@ fn test_input_visual_lines_with_newlines() {
 #[test]
 fn test_input_visual_lines_newline_plus_wrap() {
     let mut app = App::new("test".into());
-    app.input = format!("{}\n{}", "a".repeat(20), "b".repeat(20));
+    app.input = chlodwig_core::InputState::with_text(format!("{}\n{}", "a".repeat(20), "b".repeat(20)));
+
     assert_eq!(app.input_visual_line_count(10), 4);
 }
 
@@ -48,8 +50,8 @@ fn test_input_visual_lines_newline_plus_wrap() {
 #[test]
 fn test_input_cursor_visual_pos_short() {
     let mut app = App::new("test".into());
-    app.input = "hello".to_string();
-    app.cursor = 5;
+    app.input = chlodwig_core::InputState::with_text("hello");
+    app.input.cursor = 5;
     let (row, col) = app.input_cursor_visual_pos(80);
     assert_eq!(row, 0);
     assert_eq!(col, 5);
@@ -59,8 +61,8 @@ fn test_input_cursor_visual_pos_short() {
 #[test]
 fn test_input_cursor_visual_pos_start() {
     let mut app = App::new("test".into());
-    app.input = "hello world".to_string();
-    app.cursor = 0;
+    app.input = chlodwig_core::InputState::with_text("hello world");
+    app.input.cursor = 0;
     let (row, col) = app.input_cursor_visual_pos(80);
     assert_eq!(row, 0);
     assert_eq!(col, 0);
@@ -71,8 +73,9 @@ fn test_input_cursor_visual_pos_start() {
 #[test]
 fn test_input_cursor_visual_pos_wrapped() {
     let mut app = App::new("test".into());
-    app.input = "a".repeat(15);
-    app.cursor = 12;
+    app.input = chlodwig_core::InputState::with_text("a".repeat(15));
+
+    app.input.cursor = 12;
     let (row, col) = app.input_cursor_visual_pos(10);
     assert_eq!(row, 1, "cursor should be on the second visual line");
     assert_eq!(col, 2, "cursor should be at column 2 on the second line");
@@ -83,8 +86,9 @@ fn test_input_cursor_visual_pos_wrapped() {
 #[test]
 fn test_input_cursor_visual_pos_at_wrap_boundary() {
     let mut app = App::new("test".into());
-    app.input = "a".repeat(20);
-    app.cursor = 10;
+    app.input = chlodwig_core::InputState::with_text("a".repeat(20));
+
+    app.input.cursor = 10;
     let (row, col) = app.input_cursor_visual_pos(10);
     assert_eq!(row, 1);
     assert_eq!(col, 0);
@@ -95,8 +99,8 @@ fn test_input_cursor_visual_pos_at_wrap_boundary() {
 #[test]
 fn test_input_cursor_visual_pos_after_newline() {
     let mut app = App::new("test".into());
-    app.input = "hello\nworld".to_string();
-    app.cursor = 6; // 'w' in "world"
+    app.input = chlodwig_core::InputState::with_text("hello\nworld");
+    app.input.cursor = 6; // 'w' in "world"
     let (row, col) = app.input_cursor_visual_pos(80);
     assert_eq!(row, 1);
     assert_eq!(col, 0);
@@ -112,8 +116,9 @@ fn test_input_cursor_visual_pos_after_newline() {
 #[test]
 fn test_input_cursor_visual_pos_wrap_plus_newline() {
     let mut app = App::new("test".into());
-    app.input = format!("{}\nbb", "a".repeat(15));
-    app.cursor = 17; // second 'b'
+    app.input = chlodwig_core::InputState::with_text(format!("{}\nbb", "a".repeat(15)));
+
+    app.input.cursor = 17; // second 'b'
     let (row, col) = app.input_cursor_visual_pos(10);
     assert_eq!(row, 2);
     assert_eq!(col, 1);
@@ -131,8 +136,8 @@ fn test_input_cursor_visual_pos_wrap_plus_newline() {
 #[test]
 fn test_input_cursor_visual_pos_cjk() {
     let mut app = App::new("test".into());
-    app.input = "日本語".to_string(); // 3 chars, 6 display columns
-    app.cursor = 3; // end of input
+    app.input = chlodwig_core::InputState::with_text("日本語"); // 3 chars, 6 display columns
+    app.input.cursor = 3; // end of input
     let (row, col) = app.input_cursor_visual_pos(5);
     assert_eq!(row, 0, "all CJK chars on single line (word-wrap, no spaces)");
     assert_eq!(col, 6, "cursor after all 3 CJK chars (6 display cols)");
@@ -143,7 +148,8 @@ fn test_input_cursor_visual_pos_cjk() {
 fn test_input_visual_lines_capped_at_max() {
     let mut app = App::new("test".into());
     // 200 chars at width 10 → 20 visual lines, but capped at 10
-    app.input = "a".repeat(200);
+    app.input = chlodwig_core::InputState::with_text("a".repeat(200));
+
     let lines = app.input_visual_line_count(10);
     assert!(lines <= 10, "Visual lines should be capped at 10, got {lines}");
 }
@@ -160,8 +166,8 @@ fn test_input_cursor_visual_pos_word_wrap_last_word() {
     // "hello worldtest" — "hello " is 6 cols, "worldtest" is 9 cols.
     // At width 10, "worldtest" doesn't fit after "hello " (6+9=15 > 10),
     // so the whole word wraps to line 1.
-    app.input = "hello worldtest".to_string();
-    app.cursor = 15; // end of input
+    app.input = chlodwig_core::InputState::with_text("hello worldtest");
+    app.input.cursor = 15; // end of input
     let (row, col) = app.input_cursor_visual_pos(10);
     // "worldtest" is on line 1, cursor at end = col 9
     assert_eq!(row, 1, "cursor should be on the second visual line (word-wrapped)");
@@ -175,8 +181,8 @@ fn test_input_cursor_visual_pos_word_wrap_last_word() {
 #[test]
 fn test_input_cursor_visual_pos_word_wrap_mid_word() {
     let mut app = App::new("test".into());
-    app.input = "hello worldtest".to_string();
-    app.cursor = 8; // 'r' in "worldtest" (h-e-l-l-o-' '-w-o-r)
+    app.input = chlodwig_core::InputState::with_text("hello worldtest");
+    app.input.cursor = 8; // 'r' in "worldtest" (h-e-l-l-o-' '-w-o-r)
     let (row, col) = app.input_cursor_visual_pos(10);
     // "worldtest" starts on line 1. Cursor at char 8 = 'r' → col 2 on line 1 (w, o, r→)
     assert_eq!(row, 1, "cursor should be on line 1 after word wrap");
@@ -194,7 +200,7 @@ fn test_input_cursor_visual_pos_word_wrap_mid_word() {
 #[test]
 fn test_input_visual_line_count_word_wrap() {
     let mut app = App::new("test".into());
-    app.input = "aaaa bbbbbbbbbb cccc".to_string();
+    app.input = chlodwig_core::InputState::with_text("aaaa bbbbbbbbbb cccc");
     assert_eq!(app.input_visual_line_count(10), 3);
 }
 
@@ -205,7 +211,8 @@ fn test_input_visual_line_count_word_wrap() {
 #[test]
 fn test_input_visual_line_count_word_longer_than_width() {
     let mut app = App::new("test".into());
-    app.input = "a".repeat(12);
+    app.input = chlodwig_core::InputState::with_text("a".repeat(12));
+
     assert_eq!(app.input_visual_line_count(10), 2);
 }
 
@@ -217,8 +224,8 @@ fn test_input_visual_line_count_word_longer_than_width() {
 #[test]
 fn test_input_cursor_visual_pos_word_wrap_at_space() {
     let mut app = App::new("test".into());
-    app.input = "hello worldtest".to_string();
-    app.cursor = 5; // the space character
+    app.input = chlodwig_core::InputState::with_text("hello worldtest");
+    app.input.cursor = 5; // the space character
     let (row, col) = app.input_cursor_visual_pos(10);
     // The space is consumed at the wrap point → cursor at start of line 1
     assert_eq!(row, 1, "consumed space → cursor on next line");
@@ -231,8 +238,8 @@ fn test_input_cursor_visual_pos_word_wrap_at_space() {
 #[test]
 fn test_input_cursor_visual_pos_word_wrap_start_of_wrapped_word() {
     let mut app = App::new("test".into());
-    app.input = "hello worldtest".to_string();
-    app.cursor = 6; // 'w' in "worldtest"
+    app.input = chlodwig_core::InputState::with_text("hello worldtest");
+    app.input.cursor = 6; // 'w' in "worldtest"
     let (row, col) = app.input_cursor_visual_pos(10);
     assert_eq!(row, 1, "'w' should be at start of line 1");
     assert_eq!(col, 0, "'w' should be at col 0 on the wrapped line");
@@ -242,41 +249,41 @@ fn test_input_cursor_visual_pos_word_wrap_start_of_wrapped_word() {
 #[test]
 fn test_shift_enter_inserts_newline() {
     let mut app = App::new("test".into());
-    app.input = "hello".to_string();
-    app.cursor = 5;
+    app.input = chlodwig_core::InputState::with_text("hello");
+    app.input.cursor = 5;
 
     // Simulate Shift+Enter → should insert '\n' at cursor
     app.insert_newline();
 
-    assert_eq!(app.input, "hello\n");
-    assert_eq!(app.cursor, 6);
+    assert_eq!(app.input.text, "hello\n");
+    assert_eq!(app.input.cursor, 6);
 }
 
 /// Shift+Enter in the middle of text should split the line.
 #[test]
 fn test_shift_enter_inserts_newline_mid_text() {
     let mut app = App::new("test".into());
-    app.input = "helloworld".to_string();
-    app.cursor = 5;
+    app.input = chlodwig_core::InputState::with_text("helloworld");
+    app.input.cursor = 5;
 
     app.insert_newline();
 
-    assert_eq!(app.input, "hello\nworld");
-    assert_eq!(app.cursor, 6);
+    assert_eq!(app.input.text, "hello\nworld");
+    assert_eq!(app.input.cursor, 6);
 }
 
 /// Multiple Shift+Enter presses should insert multiple newlines.
 #[test]
 fn test_shift_enter_multiple_newlines() {
     let mut app = App::new("test".into());
-    app.input = "abc".to_string();
-    app.cursor = 3;
+    app.input = chlodwig_core::InputState::with_text("abc");
+    app.input.cursor = 3;
 
     app.insert_newline();
     app.insert_newline();
 
-    assert_eq!(app.input, "abc\n\n");
-    assert_eq!(app.cursor, 5);
+    assert_eq!(app.input.text, "abc\n\n");
+    assert_eq!(app.input.cursor, 5);
 }
 
 /// Verify the event loop source has a Shift+Enter handler for insert_newline.
@@ -330,10 +337,10 @@ fn test_event_loop_has_ctrl_j_newline_binding() {
 #[test]
 fn test_ctrl_j_does_not_insert_j() {
     let mut app = App::new("test".into());
-    app.input = "hello".to_string();
-    app.cursor = 5;
+    app.input = chlodwig_core::InputState::with_text("hello");
+    app.input.cursor = 5;
     // Ctrl+J calls insert_newline(), not insert_char('j')
     app.insert_newline();
-    assert_eq!(app.input, "hello\n");
-    assert!(!app.input.contains('j'));
+    assert_eq!(app.input.text, "hello\n");
+    assert!(!app.input.text.contains('j'));
 }

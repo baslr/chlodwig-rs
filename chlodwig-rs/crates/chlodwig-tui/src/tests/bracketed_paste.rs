@@ -6,30 +6,30 @@ use super::*;
 fn test_insert_paste_multiline() {
     let mut app = App::new("test".into());
     app.insert_paste("hello\nworld\nfoo");
-    assert_eq!(app.input, "hello\nworld\nfoo");
-    assert_eq!(app.cursor, app.input_char_count());
+    assert_eq!(app.input.text, "hello\nworld\nfoo");
+    assert_eq!(app.input.cursor, app.input_char_count());
 }
 
 /// Pasting into an existing input inserts at the cursor position.
 #[test]
 fn test_insert_paste_at_cursor() {
     let mut app = App::new("test".into());
-    app.input = "abcdef".to_string();
-    app.cursor = 3; // between 'c' and 'd'
+    app.input = chlodwig_core::InputState::with_text("abcdef");
+    app.input.cursor = 3; // between 'c' and 'd'
     app.insert_paste("XY\nZ");
-    assert_eq!(app.input, "abcXY\nZdef");
-    assert_eq!(app.cursor, 3 + 4); // 4 chars inserted: X, Y, \n, Z
+    assert_eq!(app.input.text, "abcXY\nZdef");
+    assert_eq!(app.input.cursor, 3 + 4); // 4 chars inserted: X, Y, \n, Z
 }
 
 /// Pasting empty string is a no-op.
 #[test]
 fn test_insert_paste_empty() {
     let mut app = App::new("test".into());
-    app.input = "hello".to_string();
-    app.cursor = 5;
+    app.input = chlodwig_core::InputState::with_text("hello");
+    app.input.cursor = 5;
     app.insert_paste("");
-    assert_eq!(app.input, "hello");
-    assert_eq!(app.cursor, 5);
+    assert_eq!(app.input.text, "hello");
+    assert_eq!(app.input.cursor, 5);
 }
 
 /// Pasting a single line (no newlines) works like normal typing.
@@ -37,8 +37,8 @@ fn test_insert_paste_empty() {
 fn test_insert_paste_single_line() {
     let mut app = App::new("test".into());
     app.insert_paste("hello world");
-    assert_eq!(app.input, "hello world");
-    assert_eq!(app.cursor, 11);
+    assert_eq!(app.input.text, "hello world");
+    assert_eq!(app.input.cursor, 11);
 }
 
 /// Pasting text with trailing newline preserves it.
@@ -46,8 +46,8 @@ fn test_insert_paste_single_line() {
 fn test_insert_paste_trailing_newline() {
     let mut app = App::new("test".into());
     app.insert_paste("line1\nline2\n");
-    assert_eq!(app.input, "line1\nline2\n");
-    assert_eq!(app.cursor, app.input_char_count());
+    assert_eq!(app.input.text, "line1\nline2\n");
+    assert_eq!(app.input.cursor, app.input_char_count());
 }
 
 /// Pasting text with UTF-8 characters (umlauts, emoji) works correctly.
@@ -55,8 +55,8 @@ fn test_insert_paste_trailing_newline() {
 fn test_insert_paste_utf8() {
     let mut app = App::new("test".into());
     app.insert_paste("Ölpreis: 80€\n🎉 Fertig!");
-    assert_eq!(app.input, "Ölpreis: 80€\n🎉 Fertig!");
-    assert_eq!(app.cursor, app.input_char_count());
+    assert_eq!(app.input.text, "Ölpreis: 80€\n🎉 Fertig!");
+    assert_eq!(app.input.cursor, app.input_char_count());
 }
 
 /// Pasting text with \r\n (Windows line endings) normalizes to \n.
@@ -64,18 +64,18 @@ fn test_insert_paste_utf8() {
 fn test_insert_paste_crlf_normalized() {
     let mut app = App::new("test".into());
     app.insert_paste("line1\r\nline2\r\nline3");
-    assert_eq!(app.input, "line1\nline2\nline3");
-    assert_eq!(app.cursor, app.input_char_count());
+    assert_eq!(app.input.text, "line1\nline2\nline3");
+    assert_eq!(app.input.cursor, app.input_char_count());
 }
 
 /// Pasting into the middle of existing multiline input.
 #[test]
 fn test_insert_paste_into_multiline_input() {
     let mut app = App::new("test".into());
-    app.input = "abc\ndef".to_string();
-    app.cursor = 4; // right after '\n', at 'd'
+    app.input = chlodwig_core::InputState::with_text("abc\ndef");
+    app.input.cursor = 4; // right after '\n', at 'd'
     app.insert_paste("X\nY");
-    assert_eq!(app.input, "abc\nX\nYdef");
+    assert_eq!(app.input.text, "abc\nX\nYdef");
 }
 
 /// Verify that the event loop source matches `Event::Paste` — this is a

@@ -30,17 +30,17 @@ fn history_up(app: &mut App) {
     }
     match app.history_index {
         None => {
-            app.saved_input = app.input.clone();
+            app.saved_input = app.input.text.clone();
             app.history_index = Some(0);
-            app.input = app.prompt_history[app.prompt_history.len() - 1].clone();
+            app.input = chlodwig_core::InputState::with_text(app.prompt_history[app.prompt_history.len() - 1].clone());
         }
         Some(idx) if idx + 1 < app.prompt_history.len() => {
             app.history_index = Some(idx + 1);
-            app.input = app.prompt_history[app.prompt_history.len() - 1 - idx - 1].clone();
+            app.input = chlodwig_core::InputState::with_text(app.prompt_history[app.prompt_history.len() - 1 - idx - 1].clone());
         }
         _ => {}
     }
-    app.cursor = app.input_char_count();
+    app.input.cursor = app.input_char_count();
 }
 
 /// Helper: simulate pressing Down arrow in the input
@@ -48,13 +48,13 @@ fn history_down(app: &mut App) {
     match app.history_index {
         Some(0) => {
             app.history_index = None;
-            app.input = std::mem::take(&mut app.saved_input);
-            app.cursor = app.input_char_count();
+            app.input = chlodwig_core::InputState::with_text(std::mem::take(&mut app.saved_input));
+            app.input.cursor = app.input_char_count();
         }
         Some(idx) => {
             app.history_index = Some(idx - 1);
-            app.input = app.prompt_history[app.prompt_history.len() - idx].clone();
-            app.cursor = app.input_char_count();
+            app.input = chlodwig_core::InputState::with_text(app.prompt_history[app.prompt_history.len() - idx].clone());
+            app.input.cursor = app.input_char_count();
         }
         None => {}
     }
@@ -98,3 +98,4 @@ mod git_tab;
 mod grep_output;
 mod multiline_user_message;
 mod startup_pwd;
+mod input_state_field;

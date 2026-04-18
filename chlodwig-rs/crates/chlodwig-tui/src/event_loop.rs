@@ -854,8 +854,7 @@ pub async fn run_tui_with_permissions(
                             && !app.input.is_empty()
                             && !app.has_modal() =>
                     {
-                        let prompt: String = app.input.drain(..).collect();
-                        app.cursor = 0;
+                        let prompt: String = app.input.take();
 
                         // Reset history navigation
                         app.history_index = None;
@@ -1364,29 +1363,27 @@ pub async fn run_tui_with_permissions(
                             "Text input char event"
                         );
                         let byte_pos = app.cursor_byte_pos();
-                        app.input.insert(byte_pos, c);
-                        app.cursor += 1;
+                        app.input.text.insert(byte_pos, c);
+                        app.input.cursor += 1;
                     }
                     KeyCode::Backspace
                         if !app.is_loading
                             && !app.has_modal()
-                            && app.cursor > 0 =>
+                            && app.input.cursor > 0 =>
                     {
-                        app.cursor -= 1;
-                        let byte_pos = app.cursor_byte_pos();
-                        app.input.remove(byte_pos);
+                        app.input.delete_back();
                     }
-                    KeyCode::Left if matches!(app.focus, Focus::Input) && app.cursor > 0 => {
-                        app.cursor -= 1;
+                    KeyCode::Left if matches!(app.focus, Focus::Input) && app.input.cursor > 0 => {
+                        app.input.move_left();
                     }
-                    KeyCode::Right if matches!(app.focus, Focus::Input) && app.cursor < app.input_char_count() => {
-                        app.cursor += 1;
+                    KeyCode::Right if matches!(app.focus, Focus::Input) && app.input.cursor < app.input_char_count() => {
+                        app.input.move_right();
                     }
                     KeyCode::Home => {
-                        app.cursor = 0;
+                        app.input.move_home();
                     }
                     KeyCode::End => {
-                        app.cursor = app.input_char_count();
+                        app.input.move_end();
                     }
 
                     // Scroll
@@ -1423,18 +1420,18 @@ pub async fn run_tui_with_permissions(
                                     if let Some(idx) = app.history_index {
                                         if idx + 1 < app.prompt_history.len() {
                                             app.history_index = Some(idx + 1);
-                                            app.input = app.prompt_history[app.prompt_history.len() - 1 - idx - 1].clone();
-                                            app.cursor = app.input_char_count();
+                                            app.input = chlodwig_core::InputState::with_text(app.prompt_history[app.prompt_history.len() - 1 - idx - 1].clone());
+                                            app.input.move_end();
                                             app.mark_dirty();
                                         }
                                     }
                                 } else if !app.move_cursor_up(app.wrap_width) {
                                     // Cursor was on first visual line — fall through to history
                                     if !app.prompt_history.is_empty() {
-                                        app.saved_input = app.input.clone();
+                                        app.saved_input = app.input.text.clone();
                                         app.history_index = Some(0);
-                                        app.input = app.prompt_history[app.prompt_history.len() - 1].clone();
-                                        app.cursor = app.input_char_count();
+                                        app.input = chlodwig_core::InputState::with_text(app.prompt_history[app.prompt_history.len() - 1].clone());
+                                        app.input.move_end();
                                         app.mark_dirty();
                                     }
                                 }
@@ -1450,14 +1447,14 @@ pub async fn run_tui_with_permissions(
                                 match app.history_index {
                                     Some(0) => {
                                         app.history_index = None;
-                                        app.input = std::mem::take(&mut app.saved_input);
-                                        app.cursor = app.input_char_count();
+                                        app.input = chlodwig_core::InputState::with_text(std::mem::take(&mut app.saved_input));
+                                        app.input.move_end();
                                         app.mark_dirty();
                                     }
                                     Some(idx) => {
                                         app.history_index = Some(idx - 1);
-                                        app.input = app.prompt_history[app.prompt_history.len() - idx].clone();
-                                        app.cursor = app.input_char_count();
+                                        app.input = chlodwig_core::InputState::with_text(app.prompt_history[app.prompt_history.len() - idx].clone());
+                                        app.input.move_end();
                                         app.mark_dirty();
                                     }
                                     None => {

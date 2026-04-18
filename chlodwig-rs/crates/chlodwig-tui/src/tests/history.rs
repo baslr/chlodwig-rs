@@ -6,7 +6,7 @@ fn test_history_up_loads_last_prompt() {
     app.prompt_history = vec!["first".into(), "second".into(), "third".into()];
 
     history_up(&mut app);
-    assert_eq!(app.input, "third");
+    assert_eq!(app.input.text, "third");
     assert_eq!(app.history_index, Some(0));
 }
 
@@ -17,11 +17,11 @@ fn test_history_up_down_navigation() {
 
     history_up(&mut app);
     history_up(&mut app);
-    assert_eq!(app.input, "second");
+    assert_eq!(app.input.text, "second");
     assert_eq!(app.history_index, Some(1));
 
     history_down(&mut app);
-    assert_eq!(app.input, "third");
+    assert_eq!(app.input.text, "third");
     assert_eq!(app.history_index, Some(0));
 }
 
@@ -29,15 +29,15 @@ fn test_history_up_down_navigation() {
 fn test_history_restores_saved_input() {
     let mut app = App::new("test".into());
     app.prompt_history = vec!["old prompt".into()];
-    app.input = "I was typing this".into();
-    app.cursor = app.input_char_count();
+    app.input = chlodwig_core::InputState::with_text("I was typing this");
+    app.input.cursor = app.input_char_count();
 
     history_up(&mut app);
-    assert_eq!(app.input, "old prompt");
+    assert_eq!(app.input.text, "old prompt");
     assert_eq!(app.saved_input, "I was typing this");
 
     history_down(&mut app);
-    assert_eq!(app.input, "I was typing this");
+    assert_eq!(app.input.text, "I was typing this");
     assert_eq!(app.history_index, None);
     assert!(app.saved_input.is_empty());
 }
@@ -49,34 +49,34 @@ fn test_history_up_at_start_stays() {
 
     history_up(&mut app);
     history_up(&mut app);
-    assert_eq!(app.input, "only");
+    assert_eq!(app.input.text, "only");
     assert_eq!(app.history_index, Some(0));
 }
 
 #[test]
 fn test_history_down_at_current_stays() {
     let mut app = App::new("test".into());
-    app.input = "current".into();
+    app.input = chlodwig_core::InputState::with_text("current");
 
     history_down(&mut app);
-    assert_eq!(app.input, "current");
+    assert_eq!(app.input.text, "current");
     assert_eq!(app.history_index, None);
 }
 
 #[test]
 fn test_history_empty_noop() {
     let mut app = App::new("test".into());
-    app.input = "something".into();
+    app.input = chlodwig_core::InputState::with_text("something");
 
     history_up(&mut app);
-    assert_eq!(app.input, "something");
+    assert_eq!(app.input.text, "something");
     assert_eq!(app.history_index, None);
 }
 
 #[test]
 fn test_input_height_multiline() {
     let mut app = App::new("test".into());
-    app.input = "line one\nline two\nline three".to_string();
+    app.input = chlodwig_core::InputState::with_text("line one\nline two\nline three");
     // 3 logical lines, each short enough to not wrap at width 80
     let input_lines = app.input_visual_line_count(80);
     let input_height = (input_lines as u16) + 2;
@@ -89,7 +89,7 @@ fn test_history_cursor_at_end() {
     app.prompt_history = vec!["hello world".into()];
 
     history_up(&mut app);
-    assert_eq!(app.cursor, 11);
+    assert_eq!(app.input.cursor, 11);
 }
 
 #[test]

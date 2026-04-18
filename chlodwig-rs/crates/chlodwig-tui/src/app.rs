@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ansi_to_tui::IntoText;
-use chlodwig_core::{Message, SystemBlock};
+use chlodwig_core::{InputState, Message, SystemBlock};
 use unicode_width::UnicodeWidthChar;
 
 use crate::markdown;
@@ -415,8 +415,7 @@ impl ConstantsConfig {
 
 pub(crate) struct App {
     pub(crate) display_blocks: Vec<DisplayBlock>,
-    pub(crate) input: String,
-    pub(crate) cursor: usize,
+    pub(crate) input: InputState,
     pub(crate) scroll: usize,
     pub(crate) auto_scroll: chlodwig_core::AutoScroll,
     pub(crate) is_loading: bool,
@@ -479,8 +478,7 @@ impl App {
     pub(crate) fn new(model: String) -> Self {
         let mut app = Self {
             display_blocks: Vec::new(),
-            input: String::new(),
-            cursor: 0,
+            input: InputState::new(),
             scroll: 0,
             auto_scroll: chlodwig_core::AutoScroll::new(),
             is_loading: false,
@@ -1169,44 +1167,12 @@ impl App {
 
     // ── Word-wise cursor movement (Option+Arrow / Alt+Arrow) ───────
 
-    /// Classify a character into a word-boundary category.
-    /// Three categories: whitespace, alphanumeric (includes '_'), punctuation/symbol.
-    /// Word boundaries occur between different categories.
-    fn char_category(c: char) -> u8 {
-        if c.is_whitespace() {
-            0
-        } else if c.is_alphanumeric() || c == '_' {
-            1
-        } else {
-            2 // punctuation / symbols
-        }
-    }
-
     /// Move cursor one word to the left (Option+Left / Alt+Left).
     /// Behavior matches macOS text editors:
     /// 1. Skip any whitespace immediately before the cursor
     /// 2. Then skip all characters of the same category (word or punctuation)
     pub(crate) fn move_cursor_word_left(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let chars: Vec<char> = self.input.chars().collect();
-        let mut pos = self.cursor;
-
-        // Phase 1: skip whitespace backwards
-        while pos > 0 && chars[pos - 1].is_whitespace() {
-            pos -= 1;
-        }
-
-        // Phase 2: skip same-category characters backwards
-        if pos > 0 {
-            let cat = Self::char_category(chars[pos - 1]);
-            while pos > 0 && Self::char_category(chars[pos - 1]) == cat {
-                pos -= 1;
-            }
-        }
-
-        self.cursor = pos;
+        self.input.move_cursor_word_left();
     }
 
     /// Move cursor one word to the right (Option+Right / Alt+Right).
@@ -1214,116 +1180,33 @@ impl App {
     /// 1. Skip all characters of the same category (word or punctuation) forward
     /// 2. Then skip any whitespace
     pub(crate) fn move_cursor_word_right(&mut self) {
-        let chars: Vec<char> = self.input.chars().collect();
-        let len = chars.len();
-        if self.cursor >= len {
-            return;
-        }
-        let mut pos = self.cursor;
-
-        // If currently on whitespace, skip it first
-        if chars[pos].is_whitespace() {
-            while pos < len && chars[pos].is_whitespace() {
-                pos += 1;
-            }
-            // Then skip the next word/punctuation group
-            if pos < len {
-                let cat = Self::char_category(chars[pos]);
-                while pos < len && Self::char_category(chars[pos]) == cat {
-                    pos += 1;
-                }
-            }
-        } else {
-            // On a word/punctuation char: skip to end of current group
-            let cat = Self::char_category(chars[pos]);
-            while pos < len && Self::char_category(chars[pos]) == cat {
-                pos += 1;
-            }
-        }
-
-        self.cursor = pos;
+        self.input.move_cursor_word_right();
     }
 
     /// Delete the word before the cursor (Alt+Backspace / Option+Backspace).
-    /// Uses the same boundary logic as `move_cursor_word_left()`.
     pub(crate) fn delete_word_back(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let old_cursor = self.cursor;
-        self.move_cursor_word_left();
-        let new_cursor = self.cursor;
-
-        // Delete chars between new_cursor and old_cursor (as byte range)
-        let start_byte = self.input
-            .char_indices()
-            .nth(new_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.input.len());
-        let end_byte = self.input
-            .char_indices()
-            .nth(old_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.input.len());
-
-        self.input.drain(start_byte..end_byte);
-        // cursor is already at new_cursor from move_cursor_word_left()
+        self.input.delete_word_back();
     }
 
     /// Delete the single character right of the cursor (Delete key / fn+Backspace on macOS).
     /// No-op if the cursor is at the end of the input. Cursor position stays unchanged.
     pub(crate) fn delete_char_forward(&mut self) {
-        if self.cursor >= self.input_char_count() {
-            return;
-        }
-        let byte_pos = self.cursor_byte_pos();
-        self.input.remove(byte_pos);
+        self.input.delete_forward();
     }
 
     /// Delete the word after the cursor (Alt+Delete / fn+Option+Backspace on macOS).
-    /// Uses the same boundary logic as `move_cursor_word_right()`.
     pub(crate) fn delete_word_forward(&mut self) {
-        let len = self.input_char_count();
-        if self.cursor >= len {
-            return;
-        }
-        let old_cursor = self.cursor;
-
-        // Temporarily move cursor right to find the word boundary
-        self.move_cursor_word_right();
-        let end_cursor = self.cursor;
-
-        // Delete chars between old_cursor and end_cursor (as byte range)
-        let start_byte = self.input
-            .char_indices()
-            .nth(old_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.input.len());
-        let end_byte = self.input
-            .char_indices()
-            .nth(end_cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.input.len());
-
-        self.input.drain(start_byte..end_byte);
-        // Restore cursor to original position (everything after was deleted/shifted)
-        self.cursor = old_cursor;
+        self.input.delete_word_forward();
     }
 
-    /// Convert char-based cursor position to byte index in `self.input`.
+    /// Convert char-based cursor position to byte index in the input text.
     pub(crate) fn cursor_byte_pos(&self) -> usize {
-        self.input
-            .char_indices()
-            .nth(self.cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(self.input.len())
+        self.input.cursor_byte_pos()
     }
 
     /// Insert a newline character at the current cursor position (Shift+Enter).
     pub(crate) fn insert_newline(&mut self) {
-        let byte_pos = self.cursor_byte_pos();
-        self.input.insert(byte_pos, '\n');
-        self.cursor += 1;
+        self.input.insert_newline();
     }
 
     /// Insert pasted text at the current cursor position.
@@ -1332,16 +1215,12 @@ impl App {
     /// Windows-style `\r\n` is normalized to `\n`.
     /// This is the handler for `Event::Paste` (bracketed paste mode).
     pub(crate) fn insert_paste(&mut self, text: &str) {
-        // Normalize \r\n → \n, also strip lone \r
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        let byte_pos = self.cursor_byte_pos();
-        self.input.insert_str(byte_pos, &normalized);
-        self.cursor += normalized.chars().count();
+        self.input.insert_paste(text);
     }
 
     /// Number of chars in the input string.
     pub(crate) fn input_char_count(&self) -> usize {
-        self.input.chars().count()
+        self.input.char_count()
     }
 
     /// Count the number of visual lines the input text occupies when rendered
@@ -1350,11 +1229,11 @@ impl App {
     /// word-wrapping (matching `Wrap { trim: false }`). Returns at least 1,
     /// capped at the editable `input_max_visual_lines` constant.
     pub(crate) fn input_visual_line_count(&self, width: usize) -> usize {
-        if self.input.is_empty() || width == 0 {
+        if self.input.text.is_empty() || width == 0 {
             return 1;
         }
         let mut total_visual = 0usize;
-        for logical_line in self.input.split('\n') {
+        for logical_line in self.input.text.split('\n') {
             total_visual += Self::word_wrap_line_count(logical_line, width);
         }
         total_visual.max(1).min(self.constants.input_max_visual_lines)
@@ -1369,7 +1248,7 @@ impl App {
         if width == 0 {
             return (0, 0);
         }
-        Self::word_wrap_cursor_pos(&self.input, self.cursor, width)
+        Self::word_wrap_cursor_pos(&self.input.text, self.input.cursor, width)
     }
 
     /// Count the visual lines for a single logical line (no `\n`) using
@@ -1578,15 +1457,15 @@ impl App {
     /// Returns `true` if the cursor actually moved, `false` if it was already
     /// on the first visual line (caller should fall through to history/scroll).
     pub(crate) fn move_cursor_up(&mut self, width: usize) -> bool {
-        if width == 0 || self.input.is_empty() {
+        if width == 0 || self.input.text.is_empty() {
             return false;
         }
-        let (cur_row, cur_col) = Self::word_wrap_cursor_pos(&self.input, self.cursor, width);
+        let (cur_row, cur_col) = Self::word_wrap_cursor_pos(&self.input.text, self.input.cursor, width);
         if cur_row == 0 {
             return false; // already on first visual line
         }
         let target_row = cur_row - 1;
-        self.cursor = Self::char_index_at_visual_pos(&self.input, target_row, cur_col, width);
+        self.input.cursor = Self::char_index_at_visual_pos(&self.input.text, target_row, cur_col, width);
         true
     }
 
@@ -1595,27 +1474,27 @@ impl App {
     /// Returns `true` if the cursor actually moved, `false` if it was already
     /// on the last visual line (caller should fall through to history/tab bar).
     pub(crate) fn move_cursor_down(&mut self, width: usize) -> bool {
-        if width == 0 || self.input.is_empty() {
+        if width == 0 || self.input.text.is_empty() {
             return false;
         }
-        let (cur_row, cur_col) = Self::word_wrap_cursor_pos(&self.input, self.cursor, width);
+        let (cur_row, cur_col) = Self::word_wrap_cursor_pos(&self.input.text, self.input.cursor, width);
         let total_visual_lines = self.input_total_visual_lines(width);
         if cur_row + 1 >= total_visual_lines {
             return false; // already on last visual line
         }
         let target_row = cur_row + 1;
-        self.cursor = Self::char_index_at_visual_pos(&self.input, target_row, cur_col, width);
+        self.input.cursor = Self::char_index_at_visual_pos(&self.input.text, target_row, cur_col, width);
         true
     }
 
     /// Total number of visual lines in the input (uncapped — unlike
     /// `input_visual_line_count` which caps at `input_max_visual_lines`).
     fn input_total_visual_lines(&self, width: usize) -> usize {
-        if self.input.is_empty() || width == 0 {
+        if self.input.text.is_empty() || width == 0 {
             return 1;
         }
         let mut total = 0usize;
-        for logical_line in self.input.split('\n') {
+        for logical_line in self.input.text.split('\n') {
             total += Self::word_wrap_line_count(logical_line, width);
         }
         total.max(1)
@@ -2521,7 +2400,7 @@ impl App {
         let _ = writeln!(out, "rendered_lines.len():        {}", self.rendered_lines.len());
         let _ = writeln!(out, "streaming_buffer.len():      {} bytes", self.streaming_buffer.len());
         let _ = writeln!(out, "streaming_buffer.lines():    {}", self.streaming_buffer.lines().count());
-        let _ = writeln!(out, "input.len():                 {} bytes", self.input.len());
+        let _ = writeln!(out, "input.len():                 {} bytes", self.input.text.len());
         let _ = writeln!(out, "prompt_history.len():        {}", self.prompt_history.len());
         let _ = writeln!(out, "requests_log.len():          {}", self.requests_log.len());
         if let Some(last) = self.requests_log.back() {
@@ -2556,7 +2435,7 @@ impl App {
         let _ = writeln!(out, "wrap_width:           {}", self.wrap_width);
         let _ = writeln!(out, "active_tab:          {}", self.active_tab);
         let _ = writeln!(out, "focus:               {:?}", self.focus);
-        let _ = writeln!(out, "cursor:              {}", self.cursor);
+        let _ = writeln!(out, "cursor:              {}", self.input.cursor);
         let _ = writeln!(out, "history_index:       {:?}", self.history_index);
         let _ = writeln!(out, "spinner_frame:       {}", self.spinner_frame);
         let _ = writeln!(out, "pending_permission:  {}", self.pending_permission.is_some());
