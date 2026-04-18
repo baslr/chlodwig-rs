@@ -398,6 +398,32 @@ pub fn list_sessions_in(dir: &std::path::Path) -> std::io::Result<Vec<SessionInf
     Ok(infos)
 }
 
+/// Sort a list of `SessionInfo` by `saved_at` in descending order
+/// (most recently saved first). Entries whose `saved_at` cannot be parsed
+/// as RFC-3339 are sorted to the end.
+pub fn sort_sessions_by_saved_desc(infos: &mut Vec<SessionInfo>) {
+    infos.sort_by(|a, b| {
+        let ta = chrono::DateTime::parse_from_rfc3339(&a.saved_at).ok();
+        let tb = chrono::DateTime::parse_from_rfc3339(&b.saved_at).ok();
+        match (ta, tb) {
+            (Some(da), Some(db)) => db.cmp(&da),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+}
+
+/// Format an RFC-3339 timestamp as a human-readable local time string,
+/// e.g. `"2026-04-13 15:30:45"`. Falls back to the raw string if parsing fails.
+pub fn format_saved_at_human(saved_at: &str) -> String {
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(saved_at) {
+        let local = dt.with_timezone(&chrono::Local);
+        return local.format("%Y-%m-%d %H:%M:%S").to_string();
+    }
+    saved_at.to_string()
+}
+
 /// Load a session by filename prefix match.
 ///
 /// The prefix is matched against the session filenames (without `.json` extension).
@@ -1412,6 +1438,85 @@ mod tests {
         let nonexistent = tmp.path().join("does_not_exist");
         let list = list_sessions_in(&nonexistent).unwrap();
         assert!(list.is_empty());
+    }
+
+    fn make_info(saved_at: &str, model: &str) -> SessionInfo {
+        SessionInfo {
+            filename: format!("{}.json", saved_at.replace([':', '-', '+', 'T'], "_")),
+            started_at: saved_at.into(),
+            saved_at: saved_at.into(),
+            model: model.into(),
+            message_count: 0,
+            path: PathBuf::from("/tmp/x.json"),
+            name: None,
+        }
+    }
+
+    #[test]
+    fn test_sort_sessions_by_saved_desc_basic() {
+        let mut v = vec![
+            make_info("2026-04-13T10:00:00+02:00", "a"),
+            make_info("2026-04-13T20:00:00+02:00", "c"),
+            make_info("2026-04-13T15:00:00+02:00", "b"),
+        ];
+        sort_sessions_by_saved_desc(&mut v);
+        assert_eq!(v[0].model, "c");
+        assert_eq!(v[1].model, "b");
+        assert_eq!(v[2].model, "a");
+    }
+
+    #[test]
+    fn test_sort_sessions_by_saved_desc_falls_back_to_string_compare_for_unparseable() {
+        let mut v = vec![
+            make_info("zzz-bogus", "x"),
+            make_info("2026-04-13T10:00:00+02:00", "a"),
+        ];
+        // Should not panic; parseable timestamps come out as "newer" than
+        // unparseable ones (parseable get a real DateTime, unparseable are
+        // sorted to the bottom).
+        sort_sessions_by_saved_desc(&mut v);
+        assert_eq!(v[0].model, "a");
+        assert_eq!(v[1].model, "x");
+    }
+
+    #[test]
+    fn test_sort_sessions_by_saved_desc_empty() {
+        let mut v: Vec<SessionInfo> = vec![];
+        sort_sessions_by_saved_desc(&mut v);
+        assert!(v.is_empty());
+    }
+
+    #[test]
+    fn test_sort_sessions_by_saved_desc_stable_for_equal_timestamps() {
+        let mut v = vec![
+            make_info("2026-04-13T10:00:00+02:00", "first"),
+            make_info("2026-04-13T10:00:00+02:00", "second"),
+        ];
+        sort_sessions_by_saved_desc(&mut v);
+        // sort_by is stable in Rust → input order preserved on equal keys
+        assert_eq!(v[0].model, "first");
+        assert_eq!(v[1].model, "second");
+    }
+
+    #[test]
+    fn test_format_saved_at_human_rfc3339() {
+        // Local timezone-aware formatting → assert structure, not exact text.
+        let s = format_saved_at_human("2026-04-13T15:30:45+02:00");
+        // Should contain the date (in some recognisable form) and time.
+        assert!(s.contains("2026"), "expected year in: {s}");
+        assert!(s.contains(":"), "expected time separator in: {s}");
+    }
+
+    #[test]
+    fn test_format_saved_at_human_invalid_falls_back_to_raw() {
+        let s = format_saved_at_human("not a timestamp");
+        assert_eq!(s, "not a timestamp");
+    }
+
+    #[test]
+    fn test_format_saved_at_human_empty() {
+        let s = format_saved_at_human("");
+        assert_eq!(s, "");
     }
 
     #[test]

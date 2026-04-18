@@ -39,7 +39,11 @@ pub fn show_sessions_window(
     let active_inner: ActiveInner = Rc::new(RefCell::new(None));
 
     let sessions = match chlodwig_core::list_sessions() {
-        Ok(s) => s,
+        Ok(mut s) => {
+            // Sort newest-saved first.
+            chlodwig_core::sort_sessions_by_saved_desc(&mut s);
+            s
+        }
         Err(e) => {
             let label = Label::new(Some(&format!("Error loading sessions: {e}")));
             label.add_css_class("error");
@@ -67,7 +71,7 @@ pub fn show_sessions_window(
         title.set_margin_bottom(12);
         main_box.append(&title);
 
-        for info in sessions.iter().rev() {
+        for info in sessions.iter() {
             let is_current = current_session_file.as_deref() == Some(&info.filename);
             let row = build_session_row(
                 info,
@@ -172,6 +176,17 @@ fn build_session_row(
     header.append(&header_label);
     header.append(&expand_btn);
     row.append(&header);
+
+    // "Saved: <human-readable timestamp>" under the header.
+    let saved_label = Label::new(Some(&format!(
+        "Saved: {}",
+        chlodwig_core::format_saved_at_human(&info.saved_at),
+    )));
+    saved_label.set_xalign(0.0);
+    saved_label.set_opacity(0.65);
+    saved_label.add_css_class("dim-label");
+    saved_label.set_margin_start(2);
+    row.append(&saved_label);
 
     let text_buffer = gtk4::TextBuffer::new(None::<&gtk4::TextTagTable>);
 
