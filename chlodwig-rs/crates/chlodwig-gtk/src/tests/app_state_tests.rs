@@ -1183,10 +1183,10 @@ fn test_sort_table_has_sort_indicator() {
 
 #[test]
 fn test_event_loop_has_table_sort_click_handler() {
-    let source = include_str!("../main.rs");
+    let source = include_str!("../table_interactions.rs");
     assert!(
         source.contains("table_sort:") && source.contains("sort_table"),
-        "main.rs must contain table sort click handler"
+        "table_interactions.rs must contain table sort click handler"
     );
 }
 
@@ -1289,7 +1289,7 @@ fn test_session_restore_applies_table_sorts() {
 fn test_sort_table_does_not_rerender_all_blocks() {
     // Sorting a table must NOT call rerender_all_blocks — it must only
     // re-render the affected table in-place for performance.
-    let source = include_str!("../main.rs");
+    let source = include_str!("../table_interactions.rs");
     // Find the sort_table click handler block and verify it doesn't call rerender_all_blocks
     let sort_handler_start = source.find("sort_table(global_idx").expect("sort handler must exist");
     let sort_handler_section = &source[sort_handler_start..sort_handler_start + 500.min(source.len() - sort_handler_start)];
@@ -1301,9 +1301,9 @@ fn test_sort_table_does_not_rerender_all_blocks() {
 
 #[test]
 fn test_event_loop_has_table_row_highlight() {
-    let source = include_str!("../main.rs");
+    let source = include_str!("../table_interactions.rs");
     assert!(
         source.contains("table_row_highlight") && source.contains("connect_motion"),
-        "main.rs must highlight table rows on hover"
+        "table_interactions.rs must highlight table rows on hover"
     );
 }

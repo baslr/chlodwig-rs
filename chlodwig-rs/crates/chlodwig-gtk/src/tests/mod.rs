@@ -14,3 +14,4 @@ mod table_viewport_tests;
 mod user_question_tests;
 mod menubar_tests;
 mod md_render_unification_tests;
+mod table_interactions_tests;
