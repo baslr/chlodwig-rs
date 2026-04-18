@@ -27,7 +27,7 @@ fn test_api_client_is_arc_not_box() {
         // This compile-time check validates the signature accepts Arc.
         // We don't actually call it — we just need it to compile.
         _check(|state, client, bypass, constants| {
-            let _ = crate::run_tui_with_permissions(state, client, bypass, constants);
+            let _ = crate::run_tui_with_permissions(state, client, bypass, constants, None);
         });
     }
 }

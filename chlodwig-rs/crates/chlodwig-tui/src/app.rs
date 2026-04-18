@@ -580,6 +580,40 @@ impl App {
         self.turn_usage.context_window_size()
     }
 
+    /// Snapshot the cumulative session counters for persistence.
+    ///
+    /// Returns a [`chlodwig_core::SessionStats`] with the current `turn_count`,
+    /// `api_request_count`, `total_input_tokens`, `total_output_tokens` and
+    /// the most-recent `TurnUsage` so that on resume the bottom-left status
+    /// counters and `ctx:` indicator restore to exactly where they were.
+    pub(crate) fn session_stats(&self) -> chlodwig_core::SessionStats {
+        chlodwig_core::SessionStats {
+            turn_count: self.turn_count,
+            request_count: self.api_request_count,
+            total_input_tokens: self.total_input_tokens,
+            total_output_tokens: self.total_output_tokens,
+            last_input_tokens: self.turn_usage.input_tokens,
+            last_output_tokens: self.turn_usage.output_tokens,
+            last_cache_tokens: self.turn_usage.cache_tokens,
+        }
+    }
+
+    /// Restore session counters from a persisted snapshot.
+    ///
+    /// Inverse of [`Self::session_stats`]. Called when resuming a session so
+    /// the status-line counters continue from where the previous run left off.
+    pub(crate) fn apply_session_stats(&mut self, stats: &chlodwig_core::SessionStats) {
+        self.turn_count = stats.turn_count;
+        self.api_request_count = stats.request_count;
+        self.total_input_tokens = stats.total_input_tokens;
+        self.total_output_tokens = stats.total_output_tokens;
+        self.turn_usage = chlodwig_core::TurnUsage {
+            input_tokens: stats.last_input_tokens,
+            output_tokens: stats.last_output_tokens,
+            cache_tokens: stats.last_cache_tokens,
+        };
+    }
+
     /// Format a Duration as a human-readable timer string.
     /// - Under 1 hour: "M:SS" (e.g. "0:05", "12:34")
     /// - 1 hour or more: "H:MM:SS" (e.g. "1:00:00", "23:59:59")

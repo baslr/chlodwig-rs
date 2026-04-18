@@ -42,6 +42,44 @@ pub struct SessionSnapshot {
     /// Used in window titles and the sessions browser.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Cumulative session statistics — turn/request counters and total tokens.
+    /// Restored on resume so the bottom-left status counters keep counting
+    /// instead of resetting to zero. Optional for backward compat with old
+    /// session files; `None` after load means "no stats stored, start at 0".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<SessionStats>,
+}
+
+/// Cumulative session statistics — what the bottom-left status line shows.
+///
+/// All fields are persisted on every save so resuming a session never
+/// resets the counters back to zero. The `last_*` fields capture the
+/// final `TurnUsage` from the most recent turn so `ctx:` (context window)
+/// also keeps its value across resume.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionStats {
+    /// Number of completed conversation turns in this session.
+    #[serde(default)]
+    pub turn_count: u32,
+    /// Number of API requests made (turns + tool retries + compactions).
+    #[serde(default)]
+    pub request_count: u32,
+    /// Cumulative input tokens consumed across the entire session (`tx:`).
+    #[serde(default)]
+    pub total_input_tokens: u64,
+    /// Cumulative output tokens produced across the entire session (`rx:`).
+    #[serde(default)]
+    pub total_output_tokens: u64,
+    /// Last turn's input tokens — used to seed `TurnUsage.input_tokens`
+    /// on resume so `ctx:` still shows the actual context window.
+    #[serde(default)]
+    pub last_input_tokens: u64,
+    /// Last turn's output tokens — see `last_input_tokens`.
+    #[serde(default)]
+    pub last_output_tokens: u64,
+    /// Last turn's cache tokens (creation + read) — see `last_input_tokens`.
+    #[serde(default)]
+    pub last_cache_tokens: u64,
 }
 
 /// Persisted sort state for a single table.
@@ -569,6 +607,7 @@ pub fn build_snapshot(
     table_sorts: Vec<TableSortState>,
     name: Option<String>,
     constants: Option<ConstantsSnapshot>,
+    stats: Option<SessionStats>,
 ) -> SessionSnapshot {
     SessionSnapshot {
         saved_at: chrono::Local::now().to_rfc3339(),
@@ -579,6 +618,7 @@ pub fn build_snapshot(
         constants,
         table_sorts,
         name,
+        stats,
     }
 }
 
@@ -614,6 +654,7 @@ mod tests {
             vec![],
             None,
             None,
+            None,
         );
         assert_eq!(snap.started_at, "2026-04-18T10:00:00+02:00");
         assert_eq!(snap.model, "test-model");
@@ -644,6 +685,7 @@ mod tests {
             sorts.clone(),
             Some("my session".into()),
             Some(consts.clone()),
+            None,
         );
         assert_eq!(snap.name.as_deref(), Some("my session"));
         assert_eq!(snap.table_sorts.len(), 1);
@@ -664,7 +706,7 @@ mod tests {
             }],
             "m1",
         );
-        let snap = build_snapshot(&state, "t", vec![], None, None);
+        let snap = build_snapshot(&state, "t", vec![], None, None, None);
         state.messages.push(Message {
             role: Role::User,
             content: vec![ContentBlock::Text { text: "second".into() }],
@@ -683,7 +725,7 @@ mod tests {
             model: "test-model".into(),
             messages,
             system_prompt: vec![SystemBlock::text("You are helpful.")],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         }
     }
 
@@ -913,7 +955,7 @@ mod tests {
             model: "test-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
 
         let path = sessions.join(session_filename_for(&snap.started_at));
@@ -953,7 +995,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "old".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let new_snap = SessionSnapshot {
             saved_at: "2026-04-13T15:00:00+02:00".into(),
@@ -964,7 +1006,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "new".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
 
         let old_path = sessions.join(session_filename_for(&old_snap.started_at));
@@ -1004,7 +1046,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "first".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
 
         let path = sessions.join(session_filename_for(&snap.started_at));
@@ -1063,7 +1105,7 @@ mod tests {
                 SystemBlock::text("block 1"),
                 SystemBlock::cached("block 2 (cached)"),
             ],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
@@ -1293,7 +1335,7 @@ mod tests {
                     content: vec![ContentBlock::Text { text: text.to_string() }],
                 }],
                 system_prompt: vec![],
-                constants: None, table_sorts: vec![], name: None,
+                constants: None, table_sorts: vec![], name: None, stats: None,
             };
             let path = sessions.join(session_filename_for(started));
             save_session_to(&snap, &path).unwrap();
@@ -1323,7 +1365,7 @@ mod tests {
                 Message { role: Role::User, content: vec![ContentBlock::Text { text: "q2".into() }] },
             ],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1351,7 +1393,7 @@ mod tests {
             model: "good-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1387,7 +1429,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "hello".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1412,7 +1454,7 @@ mod tests {
             model: "found-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1436,7 +1478,7 @@ mod tests {
             model: "partial-match".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1465,7 +1507,7 @@ mod tests {
                 model: model.to_string(),
                 messages: vec![],
                 system_prompt: vec![],
-                constants: None, table_sorts: vec![], name: None,
+                constants: None, table_sorts: vec![], name: None, stats: None,
             };
             let path = sessions.join(session_filename_for(started));
             save_session_to(&snap, &path).unwrap();
@@ -1490,7 +1532,7 @@ mod tests {
             model: "test".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None,
+            constants: None, table_sorts: vec![], name: None, stats: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1561,6 +1603,7 @@ mod tests {
                 TableSortState { block_index: 0, table_index: 0, sort_column: 2, sort_descending: true },
             ],
             name: None,
+            stats: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
@@ -1578,7 +1621,7 @@ mod tests {
             messages: vec![],
             system_prompt: vec![],
             constants: None,
-            table_sorts: vec![], name: None,
+            table_sorts: vec![], name: None, stats: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         assert!(!json.contains("table_sorts"), "Empty table_sorts should be skipped: {json}");
@@ -1743,5 +1786,146 @@ mod tests {
         let path1 = tmp.path().join(session_filename_for("2026-01-01T10:00:00+00:00"));
         // Excluding the FIRST should still find the SECOND with same name
         assert!(session_name_exists_in(tmp.path(), "dup", Some(&path1)).unwrap());
+    }
+
+    // ── SessionStats: cumulative counters that survive resume ──────────
+
+    #[test]
+    fn test_session_stats_default_is_all_zero() {
+        let stats = SessionStats::default();
+        assert_eq!(stats.turn_count, 0);
+        assert_eq!(stats.request_count, 0);
+        assert_eq!(stats.total_input_tokens, 0);
+        assert_eq!(stats.total_output_tokens, 0);
+        assert_eq!(stats.last_input_tokens, 0);
+        assert_eq!(stats.last_output_tokens, 0);
+        assert_eq!(stats.last_cache_tokens, 0);
+    }
+
+    #[test]
+    fn test_session_stats_serde_roundtrip() {
+        let stats = SessionStats {
+            turn_count: 7,
+            request_count: 9,
+            total_input_tokens: 12_345,
+            total_output_tokens: 6_789,
+            last_input_tokens: 1_500,
+            last_output_tokens: 200,
+            last_cache_tokens: 800,
+        };
+        let json = serde_json::to_string(&stats).unwrap();
+        let restored: SessionStats = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.turn_count, 7);
+        assert_eq!(restored.request_count, 9);
+        assert_eq!(restored.total_input_tokens, 12_345);
+        assert_eq!(restored.total_output_tokens, 6_789);
+        assert_eq!(restored.last_input_tokens, 1_500);
+        assert_eq!(restored.last_output_tokens, 200);
+        assert_eq!(restored.last_cache_tokens, 800);
+    }
+
+    #[test]
+    fn test_session_snapshot_default_stats_is_none() {
+        // A snapshot without explicit stats must serialize/deserialize cleanly.
+        let snap = make_snapshot(vec![]);
+        assert!(snap.stats.is_none());
+        let json = serde_json::to_string(&snap).unwrap();
+        let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert!(restored.stats.is_none());
+    }
+
+    #[test]
+    fn test_session_snapshot_with_stats_roundtrip() {
+        let mut snap = make_snapshot(vec![]);
+        snap.stats = Some(SessionStats {
+            turn_count: 3,
+            request_count: 5,
+            total_input_tokens: 100,
+            total_output_tokens: 50,
+            last_input_tokens: 30,
+            last_output_tokens: 10,
+            last_cache_tokens: 20,
+        });
+        let json = serde_json::to_string(&snap).unwrap();
+        let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
+        let s = restored.stats.expect("stats must roundtrip");
+        assert_eq!(s.turn_count, 3);
+        assert_eq!(s.request_count, 5);
+        assert_eq!(s.total_input_tokens, 100);
+        assert_eq!(s.total_output_tokens, 50);
+        assert_eq!(s.last_input_tokens, 30);
+        assert_eq!(s.last_output_tokens, 10);
+        assert_eq!(s.last_cache_tokens, 20);
+    }
+
+    #[test]
+    fn test_session_snapshot_legacy_json_without_stats_loads_cleanly() {
+        // Old session files (pre-stats) must still deserialize without errors.
+        // The stats field defaults to None.
+        let legacy_json = r#"{
+            "saved_at": "2026-04-04T12:00:00Z",
+            "started_at": "2026-04-04T11:00:00Z",
+            "model": "old-model",
+            "messages": [],
+            "system_prompt": []
+        }"#;
+        let snap: SessionSnapshot = serde_json::from_str(legacy_json)
+            .expect("legacy snapshot without stats must load");
+        assert!(snap.stats.is_none());
+        assert_eq!(snap.model, "old-model");
+    }
+
+    #[test]
+    fn test_session_snapshot_skips_stats_when_none() {
+        // When stats is None, the JSON output must not contain the field —
+        // keeps old session files small and avoids noise in diffs.
+        let snap = make_snapshot(vec![]);
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(
+            !json.contains("\"stats\""),
+            "stats field must be omitted when None, got: {json}"
+        );
+    }
+
+    #[test]
+    fn test_build_snapshot_passes_stats() {
+        let state = make_state(vec![], "m");
+        let stats = SessionStats {
+            turn_count: 2,
+            request_count: 3,
+            total_input_tokens: 1000,
+            total_output_tokens: 500,
+            last_input_tokens: 300,
+            last_output_tokens: 100,
+            last_cache_tokens: 50,
+        };
+        let snap = build_snapshot(
+            &state,
+            "2026-04-18T10:00:00+02:00",
+            vec![],
+            None,
+            None,
+            Some(stats.clone()),
+        );
+        let s = snap.stats.expect("stats must be set");
+        assert_eq!(s.turn_count, 2);
+        assert_eq!(s.request_count, 3);
+        assert_eq!(s.total_input_tokens, 1000);
+        assert_eq!(s.total_output_tokens, 500);
+        assert_eq!(s.last_cache_tokens, 50);
+    }
+
+    #[test]
+    fn test_build_snapshot_without_stats_is_none() {
+        let state = make_state(vec![], "m");
+        let snap = build_snapshot(
+            &state,
+            "2026-04-18T10:00:00+02:00",
+            vec![],
+            None,
+            None,
+            None,
+        );
+        assert!(snap.stats.is_none());
     }
 }

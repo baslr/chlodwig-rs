@@ -194,6 +194,7 @@ fn build_test_snapshot(
         constants: None,
         table_sorts,
         name,
+        stats: None,
     }
 }
 

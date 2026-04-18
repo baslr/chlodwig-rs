@@ -157,6 +157,7 @@ pub fn wire(ctx: EventDispatchContext) {
                 started_at: session_started_at_for_events.clone(),
                 table_sorts: state_for_events.borrow().table_sort_states(),
                 name: state_for_events.borrow().session_name.clone(),
+                stats: state_for_events.borrow().session_stats(),
             });
         }
 

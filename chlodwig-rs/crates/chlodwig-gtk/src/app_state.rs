@@ -213,6 +213,41 @@ impl AppState {
         self.turn_usage.context_window_size()
     }
 
+    /// Snapshot the cumulative session counters for persistence.
+    ///
+    /// Returns a [`chlodwig_core::SessionStats`] with the current `turn_count`,
+    /// `request_count`, total tokens, and the most-recent `TurnUsage` so that
+    /// on resume the bottom-left status counters and `ctx:` indicator restore
+    /// to exactly where they were.
+    pub fn session_stats(&self) -> chlodwig_core::SessionStats {
+        chlodwig_core::SessionStats {
+            turn_count: self.turn_count,
+            request_count: self.request_count,
+            total_input_tokens: self.input_tokens,
+            total_output_tokens: self.output_tokens,
+            last_input_tokens: self.turn_usage.input_tokens,
+            last_output_tokens: self.turn_usage.output_tokens,
+            last_cache_tokens: self.turn_usage.cache_tokens,
+        }
+    }
+
+    /// Restore session counters from a persisted snapshot.
+    ///
+    /// Inverse of [`Self::session_stats`]. Called when resuming a session
+    /// (via [`Self::apply_session_snapshot`]) so the status-line counters
+    /// continue from where the previous run left off.
+    pub fn apply_session_stats(&mut self, stats: &chlodwig_core::SessionStats) {
+        self.turn_count = stats.turn_count;
+        self.request_count = stats.request_count;
+        self.input_tokens = stats.total_input_tokens;
+        self.output_tokens = stats.total_output_tokens;
+        self.turn_usage = chlodwig_core::TurnUsage {
+            input_tokens: stats.last_input_tokens,
+            output_tokens: stats.last_output_tokens,
+            cache_tokens: stats.last_cache_tokens,
+        };
+    }
+
     /// Push an AssistantText block and extract any tables from it.
     fn push_assistant_text(&mut self, text: String) {
         let block_index = self.blocks.len();
@@ -303,6 +338,9 @@ impl AppState {
         self.restore_messages(&snapshot.messages);
         self.apply_table_sort_states(&snapshot.table_sorts);
         self.session_name = snapshot.name.clone();
+        if let Some(stats) = &snapshot.stats {
+            self.apply_session_stats(stats);
+        }
     }
 
     /// Restore saved messages into display blocks.

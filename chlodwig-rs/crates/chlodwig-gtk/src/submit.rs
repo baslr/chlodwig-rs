@@ -279,6 +279,7 @@ pub fn wire(ctx: SubmitContext) {
                         started_at: session_started_at_for_submit.clone(),
                         table_sorts: state_for_submit.borrow().table_sort_states(),
                         name: new_name.clone(),
+                        stats: state_for_submit.borrow().session_stats(),
                     });
                     let msg = match &new_name {
                         Some(n) => format!("\n✓ Session named: {n}\n"),
@@ -293,6 +294,7 @@ pub fn wire(ctx: SubmitContext) {
                         started_at: session_started_at_for_submit.clone(),
                         table_sorts: state_for_submit.borrow().table_sort_states(),
                         name: state_for_submit.borrow().session_name.clone(),
+                        stats: state_for_submit.borrow().session_stats(),
                     });
                     window::append_styled(
                         &output_buf_for_submit,

@@ -135,7 +135,7 @@ async fn main() -> Result<()> {
     };
 
     // Resume previous session if --resume flag is set
-    let (state, initial_constants) = if cli.resume {
+    let (state, initial_constants, initial_stats) = if cli.resume {
         match chlodwig_core::load_latest_session() {
             Ok(Some(snapshot)) => {
                 let msg_count = snapshot.messages.len();
@@ -145,31 +145,32 @@ async fn main() -> Result<()> {
                     snapshot.saved_at
                 );
                 let constants = snapshot.constants.clone();
+                let stats = snapshot.stats.clone();
                 let state = ConversationState {
                     messages: snapshot.messages,
                     // Use current CLI settings (model, tools, etc.) not the saved ones,
                     // because tools/system prompt may have changed between sessions.
                     ..state
                 };
-                (state, constants)
+                (state, constants, stats)
             }
             Ok(None) => {
                 eprintln!("\x1b[33mNo saved session found — starting fresh.\x1b[0m");
-                (state, None)
+                (state, None, None)
             }
             Err(e) => {
                 eprintln!("\x1b[31mFailed to load session: {e} — starting fresh.\x1b[0m");
-                (state, None)
+                (state, None, None)
             }
         }
     } else {
-        (state, None)
+        (state, None, None)
     };
 
     if let Some(ref prompt) = cli.print_mode {
         run_headless(state, &client, &cli, prompt).await
     } else {
-        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions, initial_constants).await
+        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions, initial_constants, initial_stats).await
     }
 }
 
@@ -262,7 +263,7 @@ async fn run_headless(
 
     // Auto-save session after headless turn
     let started_at = chrono::Local::now().to_rfc3339();
-    let snapshot = chlodwig_core::build_snapshot(&state, started_at, vec![], None, None);
+    let snapshot = chlodwig_core::build_snapshot(&state, started_at, vec![], None, None, None);
     if let Err(e) = chlodwig_core::save_session(&snapshot) {
         eprintln!("\x1b[33mWarning: failed to save session: {e}\x1b[0m");
     }

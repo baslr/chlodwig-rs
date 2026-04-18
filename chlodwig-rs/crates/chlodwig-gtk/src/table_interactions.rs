@@ -98,6 +98,7 @@ fn wire_header_click_sort(
                     started_at: session_started_at_for_sort.clone(),
                     table_sorts: state.table_sort_states(),
                     name: state.session_name.clone(),
+                    stats: state.session_stats(),
                 });
                 if state.auto_scroll.is_active() {
                     let sc = scroll_for_sort.clone();

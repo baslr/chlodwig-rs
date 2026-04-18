@@ -24,7 +24,7 @@ enum BackgroundCommand {
     /// Clear the conversation (reset `ConversationState.messages`).
     ClearMessages,
     /// Save the current session to disk.
-    SaveSession { started_at: String, table_sorts: Vec<chlodwig_core::TableSortState>, name: Option<String> },
+    SaveSession { started_at: String, table_sorts: Vec<chlodwig_core::TableSortState>, name: Option<String>, stats: chlodwig_core::SessionStats },
     /// Restore messages from a loaded session into ConversationState.
     RestoreMessages { messages: Vec<Message> },
     /// Compact the conversation history.
@@ -359,13 +359,14 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                         conv_state.messages.clear();
                         continue;
                     }
-                    BackgroundCommand::SaveSession { started_at, table_sorts, name } => {
+                    BackgroundCommand::SaveSession { started_at, table_sorts, name, stats } => {
                         let snapshot = chlodwig_core::build_snapshot(
                             &conv_state,
                             started_at,
                             table_sorts,
                             name,
                             None,
+                            Some(stats),
                         );
                         if let Err(e) = chlodwig_core::save_session(&snapshot) {
                             tracing::warn!("Failed to auto-save session: {e}");

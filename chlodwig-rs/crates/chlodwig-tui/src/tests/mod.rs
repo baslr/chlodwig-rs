@@ -99,3 +99,4 @@ mod grep_output;
 mod multiline_user_message;
 mod startup_pwd;
 mod input_state_field;
+mod session_stats;

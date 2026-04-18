@@ -17,3 +17,4 @@ mod md_render_unification_tests;
 mod table_interactions_tests;
 mod submit_tests;
 mod event_dispatch_tests;
+mod session_stats_tests;
