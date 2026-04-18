@@ -128,6 +128,13 @@ impl Model {
                 }
                 Outcome::None
             }
+            Msg::SetText(text) => {
+                // Even in option-selection mode the GTK text widget might fire
+                // a `changed` signal (e.g. placeholder reset) — accept it
+                // unconditionally and place cursor at end.
+                self.input = InputState::with_text(text);
+                Outcome::None
+            }
             Msg::DeleteBack => {
                 if self.is_text_mode() && self.input.cursor > 0 {
                     self.input.delete_back();
@@ -230,6 +237,12 @@ pub enum Msg {
     InsertChar(char),
     InsertNewline,
     InsertPaste(String),
+    /// Replace the entire input buffer with the given text and place the
+    /// cursor at the end. Used by GTK frontends that own their own text
+    /// widget (`gtk4::TextBuffer`) — on every buffer change they sync the
+    /// full content into the model in one shot, instead of translating
+    /// individual key events to `InsertChar`/`DeleteBack`/etc.
+    SetText(String),
     DeleteBack,
     DeleteForward,
     DeleteWordBack,
@@ -602,5 +615,65 @@ mod tests {
         m.update(Msg::InsertChar('l'));
         m.update(Msg::InsertChar('b'));
         assert_eq!(m.update(Msg::Submit), Outcome::Submit("Gelb".into()));
+    }
+
+    // ── SetText (used by GTK frontend that owns its own text widget) ──
+
+    #[test]
+    fn test_set_text_replaces_input_and_places_cursor_at_end() {
+        let mut m = text_only("?");
+        m.update(Msg::InsertChar('a'));
+        m.update(Msg::InsertChar('b'));
+        // cursor at 2
+
+        assert_eq!(m.update(Msg::SetText("hello".into())), Outcome::None);
+        assert_eq!(m.input.text, "hello");
+        assert_eq!(m.input.cursor, 5);
+    }
+
+    #[test]
+    fn test_set_text_to_empty_string() {
+        let mut m = text_only("?");
+        m.update(Msg::SetText("xxx".into()));
+        m.update(Msg::SetText(String::new()));
+        assert_eq!(m.input.text, "");
+        assert_eq!(m.input.cursor, 0);
+    }
+
+    #[test]
+    fn test_set_text_utf8_cursor_at_char_count_not_byte_count() {
+        let mut m = text_only("?");
+        // "héllo" = 5 chars, 6 bytes (é is 2 bytes)
+        m.update(Msg::SetText("héllo".into()));
+        assert_eq!(m.input.cursor, 5, "cursor must be in chars, not bytes");
+    }
+
+    #[test]
+    fn test_set_text_works_in_option_mode_too() {
+        // GTK fires `changed` independent of which widget has focus; the
+        // reducer must accept SetText regardless of `selected`.
+        let mut m = with_options("Pick", &["A", "B"]);
+        assert!(!m.is_text_mode());
+        m.update(Msg::SetText("typed while option was highlighted".into()));
+        assert_eq!(m.input.text, "typed while option was highlighted");
+        // selection is untouched
+        assert_eq!(m.selected, Some(0));
+    }
+
+    #[test]
+    fn test_set_text_then_submit_in_text_mode() {
+        // Realistic GTK flow: user clicks into text, types via TextBuffer,
+        // GTK syncs full content via SetText, then user clicks Submit.
+        let mut m = text_only("?");
+        m.update(Msg::SetText("Hallo Welt".into()));
+        assert_eq!(m.update(Msg::Submit), Outcome::Submit("Hallo Welt".into()));
+    }
+
+    #[test]
+    fn test_set_text_then_submit_in_option_mode_returns_option_not_text() {
+        // Selected option wins over typed text — `current_answer()` invariant.
+        let mut m = with_options("Pick", &["A", "B"]);
+        m.update(Msg::SetText("ignored".into()));
+        assert_eq!(m.update(Msg::Submit), Outcome::Submit("A".into()));
     }
 }

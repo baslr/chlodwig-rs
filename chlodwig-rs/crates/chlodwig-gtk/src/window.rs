@@ -916,6 +916,19 @@ fn load_app_css() {
 /// return the answer to the waiting tool. The `on_close` callback is invoked
 /// when the dialog closes (regardless of how — submit, cancel, or window close)
 /// so the caller can show the next queued dialog.
+///
+/// **Architecture**: All decision logic ("what's the answer?", "is this a
+/// submit or a cancel?", "is the input empty?") lives in
+/// [`chlodwig_core::reducers::user_question::Model`]. This function is a thin
+/// adapter that:
+///   1. Owns the model in `Rc<RefCell<_>>` (single-threaded GTK closures)
+///   2. Translates GTK events (button clicks, key presses, buffer changes)
+///      into reducer `Msg`s
+///   3. Reacts to the returned `Outcome`: `None` → keep dialog open,
+///      `Submit(answer)` → send via oneshot and close
+///
+/// The same reducer is used by the TUI frontend, so a fix in core applies
+/// to both.
 pub fn show_user_question_dialog(
     parent: &ApplicationWindow,
     question: &str,
@@ -923,20 +936,28 @@ pub fn show_user_question_dialog(
     respond: tokio::sync::oneshot::Sender<String>,
     on_close: Box<dyn Fn() + 'static>,
 ) {
-    use std::cell::RefCell;
+    use chlodwig_core::reducers::user_question as uq;
+    use std::cell::{Cell, RefCell};
     use std::rc::Rc;
 
+    // ── Shared state ─────────────────────────────────────────────────
+    let model = Rc::new(RefCell::new(uq::Model::new(
+        question.to_string(),
+        options.to_vec(),
+    )));
     let respond = Rc::new(RefCell::new(Some(respond)));
     let on_close = Rc::new(on_close);
+    // Re-entrancy guard: when the model changes and we write into the
+    // TextBuffer, the buffer fires `changed` again → we'd loop forever.
+    let suppress_buffer_sync = Rc::new(Cell::new(false));
 
-    // Build content area
+    // ── Build widgets ────────────────────────────────────────────────
     let content = GtkBox::new(Orientation::Vertical, 8);
     content.set_margin_start(16);
     content.set_margin_end(16);
     content.set_margin_top(16);
     content.set_margin_bottom(16);
 
-    // Question label
     let question_label = Label::new(Some(question));
     question_label.set_wrap(true);
     question_label.set_xalign(0.0);
@@ -957,8 +978,6 @@ pub fn show_user_question_dialog(
         .left_margin(8)
         .right_margin(8)
         .build();
-
-    // Attach macOS Cmd/Option shortcuts (shared with main prompt input)
     setup_macos_input_shortcuts(&text_view);
 
     let text_scroll = ScrolledWindow::builder()
@@ -970,7 +989,6 @@ pub fn show_user_question_dialog(
         .child(&text_view)
         .build();
 
-    // Placeholder hint
     let placeholder_text = if options.is_empty() {
         "Type your answer…"
     } else {
@@ -983,75 +1001,92 @@ pub fn show_user_question_dialog(
     placeholder_label.set_margin_top(8);
     placeholder_label.set_can_target(false);
 
-    // Show/hide placeholder based on buffer content
-    {
-        let pl = placeholder_label.clone();
-        text_buffer.connect_changed(move |buf| {
-            let has_text = buf.char_count() > 0;
-            pl.set_visible(!has_text);
-        });
-    }
-
-    // Overlay the placeholder on the text view
     let text_overlay = gtk4::Overlay::new();
     text_overlay.set_child(Some(&text_scroll));
     text_overlay.add_overlay(&placeholder_label);
 
-    // Build dialog window
-    let dialog = gtk4::Window::builder()
-        .title("Question from Assistant")
-        .transient_for(parent)
-        .modal(true)
-        .default_width(450)
-        .default_height(300)
-        .build();
+    let dialog = Rc::new(
+        gtk4::Window::builder()
+            .title("Question from Assistant")
+            .transient_for(parent)
+            .modal(true)
+            .default_width(450)
+            .default_height(300)
+            .build(),
+    );
 
-    let dialog_rc = Rc::new(dialog);
-
-    // Helper: send answer, close dialog, and notify caller
-    let make_responder = |respond: Rc<RefCell<Option<tokio::sync::oneshot::Sender<String>>>>,
-                          dialog: Rc<gtk4::Window>,
-                          on_close: Rc<Box<dyn Fn() + 'static>>| {
-        move |answer: String| {
-            if let Some(tx) = respond.borrow_mut().take() {
-                let _ = tx.send(answer);
+    // ── The single dispatch helper ───────────────────────────────────
+    // Apply a reducer message; on `Submit(answer)` send the answer,
+    // close the dialog and notify the queue. Returns true iff dialog closed.
+    let dispatch = {
+        let model = model.clone();
+        let respond = respond.clone();
+        let dialog = dialog.clone();
+        let on_close = on_close.clone();
+        Rc::new(move |msg: uq::Msg| -> bool {
+            let outcome = model.borrow_mut().update(msg);
+            match outcome {
+                uq::Outcome::None => false,
+                uq::Outcome::Submit(answer) => {
+                    if let Some(tx) = respond.borrow_mut().take() {
+                        let _ = tx.send(answer);
+                    }
+                    dialog.close();
+                    on_close();
+                    true
+                }
             }
-            dialog.close();
-            on_close();
-        }
+        })
     };
 
-    // Option buttons
+    // ── TextBuffer → model.input.text (via Msg::SetText) ─────────────
+    // Buffer is the source of truth for keystrokes (GTK handles editing
+    // internally); after every change we sync the full content into the model.
+    {
+        let dispatch = dispatch.clone();
+        let suppress = suppress_buffer_sync.clone();
+        let placeholder = placeholder_label.clone();
+        text_buffer.connect_changed(move |buf| {
+            // Update placeholder visibility regardless of suppress state.
+            placeholder.set_visible(buf.char_count() == 0);
+            if suppress.get() {
+                return;
+            }
+            let (start, end) = buf.bounds();
+            let text = buf.text(&start, &end, false).to_string();
+            // Dispatch returns true iff dialog closed; buffer is irrelevant after.
+            let _ = dispatch(uq::Msg::SetText(text));
+        });
+    }
+
+    // ── Option buttons → Msg::QuickSelect(i+1) ───────────────────────
     if !options.is_empty() {
         let opts_box = GtkBox::new(Orientation::Vertical, 4);
         for (i, opt) in options.iter().enumerate() {
             let btn = Button::with_label(&format!("{}. {}", i + 1, opt));
             btn.set_halign(gtk4::Align::Fill);
-            // Left-align the label text inside the button (GTK default is centered).
             if let Some(child) = btn.child() {
                 if let Some(label) = child.downcast_ref::<Label>() {
                     label.set_xalign(0.0);
                 }
             }
             btn.add_css_class("flat");
-            let answer = opt.clone();
-            let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+            let dispatch = dispatch.clone();
+            let n = (i + 1) as u8;
             btn.connect_clicked(move |_| {
-                do_respond(answer.clone());
+                let _ = dispatch(uq::Msg::QuickSelect(n));
             });
             opts_box.append(&btn);
         }
         content.append(&opts_box);
         content.append(&Separator::new(Orientation::Horizontal));
     }
-
     content.append(&text_overlay);
 
-    // Button bar
+    // ── Button bar ───────────────────────────────────────────────────
     let button_bar = GtkBox::new(Orientation::Horizontal, 8);
     button_bar.set_margin_top(8);
     button_bar.set_halign(gtk4::Align::End);
-
     let cancel_btn = Button::with_label("Cancel");
     let submit_btn = Button::with_label("Submit");
     submit_btn.add_css_class("suggested-action");
@@ -1059,49 +1094,42 @@ pub fn show_user_question_dialog(
     button_bar.append(&submit_btn);
     content.append(&button_bar);
 
-    // Cancel
+    // For Submit-without-selection: when no option is selected the model is
+    // already in text-mode (selected = None when options.is_empty(), and we
+    // never set selected via clicks in this Minimal-Port). When options exist
+    // and the user clicks Submit, we deliberately move the model to text-mode
+    // first so `Msg::Submit` returns the typed text, not the (still-selected)
+    // first option. This matches the user's intent: clicking Submit means
+    // "use what I typed".
     {
-        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
-        cancel_btn.connect_clicked(move |_| {
-            do_respond(String::new());
-        });
-    }
-
-    // Submit (from button)
-    {
-        let buf_for_submit = text_buffer.clone();
-        let options_clone: Vec<String> = options.to_vec();
-        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+        let dispatch = dispatch.clone();
+        let model = model.clone();
         submit_btn.connect_clicked(move |_| {
-            let (start, end) = buf_for_submit.bounds();
-            let text = buf_for_submit.text(&start, &end, false).to_string();
-            let answer = if text.trim().is_empty() && !options_clone.is_empty() {
-                options_clone[0].clone()
-            } else {
-                text
-            };
-            do_respond(answer);
+            // Drop any option-selection; in Minimal-Port we treat Submit
+            // as "use the text field's content".
+            model.borrow_mut().selected = None;
+            let _ = dispatch(uq::Msg::Submit);
         });
     }
 
-    // Cmd+Enter → submit (Enter alone inserts newline — same as main prompt input)
     {
-        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
-        let options_for_enter: Vec<String> = options.to_vec();
-        let buf_for_enter = text_buffer.clone();
+        let dispatch = dispatch.clone();
+        cancel_btn.connect_clicked(move |_| {
+            let _ = dispatch(uq::Msg::Cancel);
+        });
+    }
+
+    // Cmd+Enter → submit (Enter alone inserts newline)
+    {
+        let dispatch = dispatch.clone();
+        let model = model.clone();
         let key_ctrl = gtk4::EventControllerKey::new();
         key_ctrl.connect_key_pressed(move |_, key, _, modifiers| {
             let is_cmd = modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
                 || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
             if key == gtk4::gdk::Key::Return && is_cmd {
-                let (start, end) = buf_for_enter.bounds();
-                let text = buf_for_enter.text(&start, &end, false).to_string();
-                let answer = if text.trim().is_empty() && !options_for_enter.is_empty() {
-                    options_for_enter[0].clone()
-                } else {
-                    text
-                };
-                do_respond(answer);
+                model.borrow_mut().selected = None;
+                let _ = dispatch(uq::Msg::Submit);
                 return gtk4::glib::Propagation::Stop;
             }
             gtk4::glib::Propagation::Proceed
@@ -1109,43 +1137,47 @@ pub fn show_user_question_dialog(
         text_view.add_controller(key_ctrl);
     }
 
-    // Escape key → cancel
+    // Esc → cancel
     {
-        let do_respond = make_responder(respond.clone(), dialog_rc.clone(), on_close.clone());
+        let dispatch = dispatch.clone();
         let key_ctrl = gtk4::EventControllerKey::new();
         key_ctrl.connect_key_pressed(move |_, key, _, _| {
             if key == gtk4::gdk::Key::Escape {
-                do_respond(String::new());
+                let _ = dispatch(uq::Msg::Cancel);
                 return gtk4::glib::Propagation::Stop;
             }
             gtk4::glib::Propagation::Proceed
         });
-        dialog_rc.add_controller(key_ctrl);
+        dialog.add_controller(key_ctrl);
     }
 
-    // Also send empty string if window is closed via X button
+    // Window close (X button) → cancel, but only if not already responded.
+    // dispatch() already handles double-respond safely (oneshot is consumed
+    // on first send), so we just call it; no-op if the answer is already gone.
     {
-        let respond_close = respond.clone();
-        let on_close_x = on_close.clone();
-        dialog_rc.connect_close_request(move |_| {
-            // Only call on_close if respond hasn't been consumed yet.
-            // If it was already taken, the dialog was closed via make_responder
-            // which already called on_close.
-            if let Some(tx) = respond_close.borrow_mut().take() {
-                let _ = tx.send(String::new());
-                on_close_x();
+        let dispatch = dispatch.clone();
+        let respond_check = respond.clone();
+        dialog.connect_close_request(move |_| {
+            // Only dispatch Cancel if no answer was sent yet — otherwise
+            // we'd call on_close() twice.
+            if respond_check.borrow().is_some() {
+                let _ = dispatch(uq::Msg::Cancel);
             }
             gtk4::glib::Propagation::Proceed
         });
     }
 
-    dialog_rc.set_child(Some(&content));
-    dialog_rc.present();
+    dialog.set_child(Some(&content));
+    dialog.present();
 
-    // Focus: text view if text-only, otherwise first option button is already focusable
     if options.is_empty() {
         text_view.grab_focus();
     }
+
+    // Currently unused (no path writes back to the buffer), but kept for B.2:
+    // when the reducer drives the buffer, the writer must set
+    // `suppress_buffer_sync` before mutating, then unset.
+    let _ = suppress_buffer_sync;
 }
 
 #[cfg(test)]

@@ -282,3 +282,62 @@ fn test_dialog_cmd_enter_submits() {
         "Dialog must check for Cmd (META_MASK) modifier so Cmd+Enter submits"
     );
 }
+
+// --- MVU integration: dialog uses chlodwig-core reducer ---
+
+/// The dialog must import the user_question reducer from chlodwig-core,
+/// not duplicate the answer-resolution logic inline.
+#[test]
+fn test_dialog_uses_core_reducer() {
+    let source = include_str!("../window.rs");
+    assert!(
+        source.contains("chlodwig_core::reducers::user_question"),
+        "show_user_question_dialog must use the shared reducer in chlodwig-core"
+    );
+    assert!(
+        source.contains("uq::Model::new"),
+        "dialog must construct a uq::Model"
+    );
+    assert!(
+        source.contains("uq::Outcome::Submit"),
+        "dialog must react to uq::Outcome::Submit"
+    );
+}
+
+/// The dialog must dispatch reducer Msg variants for each user action,
+/// rather than computing answers inline.
+#[test]
+fn test_dialog_dispatches_reducer_messages() {
+    let source = include_str!("../window.rs");
+    assert!(
+        source.contains("uq::Msg::Cancel"),
+        "Cancel button / Esc / X must dispatch Msg::Cancel"
+    );
+    assert!(
+        source.contains("uq::Msg::Submit"),
+        "Submit button / Cmd+Enter must dispatch Msg::Submit"
+    );
+    assert!(
+        source.contains("uq::Msg::QuickSelect"),
+        "Option buttons must dispatch Msg::QuickSelect"
+    );
+    assert!(
+        source.contains("uq::Msg::SetText"),
+        "TextBuffer changes must dispatch Msg::SetText to sync the model"
+    );
+}
+
+/// The "if text is empty and options exist, default to first option"
+/// fallback was removed deliberately. Empty submit → empty answer.
+#[test]
+fn test_dialog_no_default_to_first_option_fallback() {
+    let source = include_str!("../window.rs");
+    assert!(
+        !source.contains("options_clone[0]"),
+        "old default-to-first-option fallback must be gone"
+    );
+    assert!(
+        !source.contains("options_for_enter[0]"),
+        "old default-to-first-option fallback (Cmd+Enter path) must be gone"
+    );
+}
