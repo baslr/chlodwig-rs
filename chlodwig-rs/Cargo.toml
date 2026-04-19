@@ -32,6 +32,16 @@ lto = true
 codegen-units = 1
 opt-level = "z"
 
+# Disable incremental compilation in the dev profile.
+#
+# We never use debug builds (see CLAUDE.md "Commands"), but if cargo
+# *does* end up building dev artefacts (e.g. an IDE/RA invocation),
+# the 8 GB incremental cache is the single biggest contributor to
+# target/ bloat. Turning incremental off costs nothing in practice
+# because no edit-test cycle goes through this profile anyway.
+[profile.dev]
+incremental = false
+
 # Maximum speed for git-vanity (SHA-1 brute-force needs inlining + vectorization)
 [profile.release.package.git-vanity]
 opt-level = 3

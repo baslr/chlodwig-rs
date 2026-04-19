@@ -387,7 +387,7 @@ pub fn build_window(
 /// This is the **single source of truth** for appending text to an
 /// `EmojiTextView` (Gotcha #43). Emoji segments are routed through
 /// `insert_emoji_as_overlay` so they land in the view's per-instance overlay
-/// registry (Gotcha #42). Plain segments get the tags applied via
+/// registry (Gotcha #44). Plain segments get the tags applied via
 /// `apply_tag_by_name` after insertion.
 ///
 /// Pass `&[]` to insert untagged text. The wrappers `append_to_output`,

@@ -1,0 +1,14 @@
+# Project-local Cargo aliases.
+#
+# Reason: debug builds bloat target/ to 25-30 GB (multiple hash-versioned
+# rebuilds of GTK4 bindings at 73-150 MB each, plus an 8 GB incremental
+# cache). We never need debug artefacts during normal development —
+# release-mode is fast enough for the edit-test cycle and ~5× smaller
+# on disk.
+#
+# Always use `cargo b` / `cargo t` / `cargo r` instead of the bare
+# subcommands. Documented in CLAUDE.md ("Commands" section).
+[alias]
+b = "build --release"
+t = "test --release --workspace"
+r = "run --release"
