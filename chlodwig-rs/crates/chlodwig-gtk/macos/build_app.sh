@@ -71,6 +71,22 @@ if [ -f "$SCRIPT_DIR/AppIcon.icns" ]; then
     cp "$SCRIPT_DIR/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 fi
 
+# Copy bundled fonts into Contents/Resources/Fonts/.
+# Info.plist's ATSApplicationFontsPath = "Fonts" makes CoreText auto-load
+# every font in this directory at app launch, BEFORE any GTK/Pango code
+# runs. This eliminates the first-launch race where the in-binary
+# install_bundled_cjk_font() copy to ~/Library/Fonts/ happened too late
+# for the current process to see (CoreText's font map is built before
+# Rust code executes).
+FONTS_SRC="$PROJECT_ROOT/crates/chlodwig-gtk/resources"
+FONTS_DST="$RESOURCES_DIR/Fonts"
+mkdir -p "$FONTS_DST"
+for f in "$FONTS_SRC"/*.ttf "$FONTS_SRC"/*.otf; do
+    [ -f "$f" ] || continue
+    cp "$f" "$FONTS_DST/"
+    echo "==> Bundled font: $(basename "$f")"
+done
+
 # Preserve FinderSync extension from installed app (if present).
 # build_app.sh doesn't know how to build the extension (install_finder_extension.sh does),
 # so we save it before overwriting and restore it after.

@@ -3,6 +3,7 @@
 mod ansi_tests;
 mod app_state_tests;
 mod copy_tests;
+mod cjk_font_tests;
 mod emoji_tests;
 mod line_number_tests;
 mod notification_tests;

@@ -186,6 +186,158 @@ pub fn extract_bundled_emoji_font() -> Option<std::path::PathBuf> {
     Some(extract_bundled_emoji_font_to(&dir))
 }
 
+// ── Bundled Sarasa Mono J font ────────────────────────────────────
+//
+// `unicode-width` reports CJK characters as 2 columns wide and box-drawing
+// as 1 column. The markdown table renderer reserves border geometry
+// assuming each CJK glyph occupies exactly 2 monospace cells AND box-drawing
+// glyphs (│ ─ ┌ ┐ └ ┘ ┬ ┴ ├ ┤ ┼) occupy exactly 1 cell. Both must hold
+// at the rendered-pixel level for tables to align.
+//
+// Most system Latin monospace fonts (SF Mono, JetBrains Mono, etc.) have
+// no CJK glyphs → Pango falls back to a proportional CJK font → CJK glyph
+// advance ≠ 2× Latin advance → `│` separators wander.
+//
+// Noto Sans Mono CJK JP solves the CJK side BUT has fullwidth box-drawing
+// glyphs (12 px instead of 6 px @ 12 pt), so border rows render twice as
+// wide as content rows → also broken.
+//
+// We bundle `SarasaMonoJ-Regular.ttf` (~26 MB; Iosevka Latin + Source Han
+// Sans Japanese, pre-merged with consistent metrics):
+//   * Latin / ASCII / Box-Drawing: 6 px advance @ 12 pt (halfwidth, 1 col)
+//   * CJK Han / Hiragana / Katakana / Hangul: 12 px advance (fullwidth, 2 cols)
+//   * Compact line-height: 15 px @ 12 pt (no vertical gaps in tables)
+//
+// Registration strategy:
+//   * **macOS**: install into `~/Library/Fonts/` (CoreText scans this
+//     directory at process start). Process-scope `CTFontManagerRegister*`
+//     turned out to be invisible to PangoCairo because the font cache is
+//     built before our registration takes effect.
+//   * **Linux**: install into `~/.local/share/fonts/` (fontconfig).
+//   * **Windows**: not auto-installed yet.
+
+/// Raw bytes of the bundled Sarasa Mono J font (TrueType).
+///
+/// Sarasa Mono J = Iosevka (Latin) + Source Han Sans (CJK), pre-merged
+/// into ONE font with metric-compatible glyphs:
+///   * Latin / ASCII / Box-Drawing: 6 px advance @ 12 pt (halfwidth)
+///   * CJK Han / Hiragana / Katakana / Hangul: 12 px advance (fullwidth, exactly 2× halfwidth)
+///   * Compact line-height: 15 px @ 12 pt (vs 17.4 px for Noto Mono CJK JP)
+///
+/// This is the ONLY font used for monospace rendering. Because all glyphs
+/// (Latin AND CJK AND box-drawing) come from the same font with consistent
+/// 1:2 metrics, table borders (`│ ─ ┌ ┐ └ ┘ ┬ ┴ ├ ┤ ┼`) align perfectly
+/// regardless of cell content.
+///
+/// Replaced the previous Noto Sans Mono CJK JP, which had a critical bug
+/// for our use case: its box-drawing glyphs are FULLWIDTH (12 px), causing
+/// border lines to be twice as wide as content lines.
+pub const SARASA_MONO_J_BYTES: &[u8] =
+    include_bytes!("../resources/SarasaMonoJ-Regular.ttf");
+
+/// Pango family name used for ALL monospace TextTags / FontDescriptions
+/// in the GTK frontend.
+///
+/// Single font: Sarasa Mono J covers Latin, CJK, and Box-Drawing with
+/// consistent metric-compatible halfwidth/fullwidth glyphs. No fallback
+/// chain needed — keeping it single-family avoids any risk of Pango
+/// itemizing runs across fonts with mismatched metrics (which would
+/// re-introduce the column-alignment problems we had with mixed fonts).
+pub const MONO_FONT_FAMILY: &str = "Sarasa Mono J";
+
+/// Extract the bundled Sarasa Mono J font to `dir/SarasaMonoJ-Regular.ttf`
+/// and return the path. Idempotent — skips writing if the file already
+/// exists with the correct size.
+pub fn extract_bundled_cjk_font_to(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("SarasaMonoJ-Regular.ttf");
+    let needs_write = match std::fs::metadata(&path) {
+        Ok(m) => m.len() != SARASA_MONO_J_BYTES.len() as u64,
+        Err(_) => true,
+    };
+    if needs_write {
+        let _ = std::fs::create_dir_all(dir);
+        let _ = std::fs::write(&path, SARASA_MONO_J_BYTES);
+    }
+    path
+}
+
+/// Extract the bundled Sarasa Mono J font to `~/.chlodwig-rs/fonts/`
+/// and return the path.
+pub fn extract_bundled_cjk_font() -> Option<std::path::PathBuf> {
+    let dir = dirs::home_dir()?.join(".chlodwig-rs").join("fonts");
+    Some(extract_bundled_cjk_font_to(&dir))
+}
+
+/// Return the user's standard font installation directory.
+///
+/// This is the directory where end-user fonts go so that CoreText
+/// (macOS), fontconfig (Linux), and the Windows font subsystem pick
+/// them up automatically at process start.
+///
+///   * macOS:  `~/Library/Fonts`
+///   * Linux:  `~/.local/share/fonts`
+///   * Other:  `None` (we don't auto-install on Windows yet)
+pub fn user_font_dir() -> Option<std::path::PathBuf> {
+    let home = dirs::home_dir()?;
+    #[cfg(target_os = "macos")]
+    {
+        Some(home.join("Library").join("Fonts"))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        Some(home.join(".local").join("share").join("fonts"))
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = home;
+        None
+    }
+}
+
+/// Install the bundled CJK font into `dir` (typically the user's font
+/// directory from [`user_font_dir`]). Returns the installed file path.
+///
+/// Idempotent: if the file already exists with the correct size, the
+/// write is skipped (preserves mtime, no I/O).
+///
+/// **Why install instead of process-scope register**: CoreText's
+/// `CTFontManagerRegisterFontsForURL(scope=Process)` adds the font to
+/// the running process's CoreText font collection, but Pango's CoreText
+/// backend builds its `PangoCairoCoreTextFontMap` *before* our
+/// registration takes effect (or caches it without a refresh hook),
+/// so process-scope registration was invisible to GTK in practice.
+/// Installing the font into `~/Library/Fonts` makes it visible to
+/// CoreText at process start — same path the system uses for normal
+/// user-installed fonts.
+pub fn install_bundled_cjk_font_to(
+    dir: &std::path::Path,
+) -> std::io::Result<std::path::PathBuf> {
+    let path = dir.join("SarasaMonoJ-Regular.ttf");
+    let needs_write = match std::fs::metadata(&path) {
+        Ok(m) => m.len() != SARASA_MONO_J_BYTES.len() as u64,
+        Err(_) => true,
+    };
+    if needs_write {
+        std::fs::create_dir_all(dir)?;
+        // Atomic write: write to .tmp, then rename — prevents a partially
+        // written font from existing if we crash mid-write.
+        let tmp = dir.join("SarasaMonoJ-Regular.ttf.tmp");
+        std::fs::write(&tmp, SARASA_MONO_J_BYTES)?;
+        std::fs::rename(&tmp, &path)?;
+    }
+    Ok(path)
+}
+
+/// Install the bundled CJK font into the user's standard font directory.
+///
+/// Returns `None` on platforms without a known user font directory
+/// (currently anything besides macOS/Linux), or `Some(Err(…))` if the
+/// install failed (disk full, permission denied, …).
+pub fn install_bundled_cjk_font() -> Option<std::io::Result<std::path::PathBuf>> {
+    let dir = user_font_dir()?;
+    Some(install_bundled_cjk_font_to(&dir))
+}
+
 // ── Application CSS ────────────────────────────────────────────────
 //
 // GTK-independent constant so it can be tested without a display server.
@@ -208,8 +360,7 @@ textview text {
 }
 
 .monospace, textview text.monospace {
-    font-family: "SF Mono", "Cascadia Code", "JetBrains Mono", "Fira Code",
-                 "Noto Sans Mono", monospace,
+    font-family: "Sarasa Mono J", monospace,
                  "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji";
 }
 "#;

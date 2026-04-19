@@ -28,5 +28,12 @@
          Chlodwig in "Open With" context menus for any file type. -->
     <key>CFBundleDocumentTypes</key>
     <array/>
+    <!-- Auto-load bundled fonts from Contents/Resources/Fonts/ at app
+         launch via CoreText. This makes Sarasa Mono J available BEFORE
+         any GTK/Pango code runs, eliminating the first-launch race
+         where install_bundled_cjk_font() writes to ~/Library/Fonts/
+         too late for the current process to see it. -->
+    <key>ATSApplicationFontsPath</key>
+    <string>Fonts</string>
 </dict>
 </plist>
