@@ -21,3 +21,8 @@ mod session_stats_tests;
 mod stop_turn_tests;
 mod edit_render_unification_tests;
 mod variant_b_architecture_tests;
+mod window_tests;
+mod emoji_overlay_tests;
+mod setup_tests;
+mod md_renderer_tests;
+mod emoji_unit_tests;
