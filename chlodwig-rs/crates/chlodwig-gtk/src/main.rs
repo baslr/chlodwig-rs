@@ -55,7 +55,8 @@ fn main() -> glib::ExitCode {
     // (PangoHbFont path) or a GtkTextBuffer paintable-based approach.
     chlodwig_gtk::ensure_coretext_backend();
 
-    // Initialize tracing
+    // Initialize tracing FIRST so any subsequent setup error (CJK font
+    // install, notification permission, etc.) lands in the debug log.
     let debug_log_path = chlodwig_core::timestamped_log_path("debug_gtk");
     if let Ok(log_file) = std::fs::File::create(&debug_log_path) {
         tracing_subscriber::fmt()
@@ -75,6 +76,25 @@ fn main() -> glib::ExitCode {
     }
 
     tracing::info!("chlodwig-gtk starting");
+
+    // Install the bundled Sarasa Mono J font into the user's standard
+    // font directory (~/Library/Fonts on macOS, ~/.local/share/fonts on
+    // Linux). Without this, CJK characters and box-drawing chars in
+    // markdown tables render with mismatched advance widths, breaking
+    // column alignment (`│` shifts because Latin/box-drawing must be
+    // exactly half of CJK at the pixel level).
+    //
+    // The font is also bundled inside the .app at Contents/Resources/Fonts/
+    // and auto-loaded by CoreText via Info.plist's ATSApplicationFontsPath
+    // — this call is the Linux/dev-build path and a belt-and-suspenders
+    // installer on macOS. Idempotent.
+    match chlodwig_gtk::install_bundled_cjk_font() {
+        Some(Ok(p)) => tracing::info!("CJK font installed: {}", p.display()),
+        Some(Err(e)) => tracing::warn!(
+            "CJK font install failed: {} (CJK in tables may misalign)", e
+        ),
+        None => tracing::info!("CJK font install skipped (no user font dir on this platform)"),
+    }
 
     // Check for --resume flag before GTK init
     let resume_flag = std::env::args().any(|a| a == "--resume" || a == "-r");
