@@ -6,20 +6,11 @@
 //!   passes the folder path as argument).
 //! - Resolves the working directory from the FinderSync custom pasteboard.
 //!
-//! ## Stage 0.2 of MULTIWINDOW_TABS.md
-//!
-//! Two flavours of API exist:
-//!
-//! 1. **`resolve_*`** — *pure* resolvers that compute and return a `PathBuf`
-//!    **without** touching the process CWD. These are the foundation for
-//!    per-tab CWD: each tab can be constructed with its own working
-//!    directory without changing global state.
-//!
-//! 2. **`apply_*`** — legacy wrappers that call the matching `resolve_*`
-//!    and additionally call `std::env::set_current_dir()`. Kept for
-//!    backwards compatibility with the current single-window callers in
-//!    `main.rs`. Will be removed once all consumers migrate to per-tab
-//!    `AppState.cwd` (Stage 0.3).
+//! All resolvers are **pure**: they compute and return a `PathBuf` without
+//! touching the process CWD. Callers (currently `main.rs::resolve_initial_cwd`)
+//! pass the result into `AppState::with_cwd(...)`. This is the foundation
+//! for per-tab CWD — no production code path mutates `std::env::current_dir()`
+//! (enforced by the `no_set_current_dir` integration test in chlodwig-core).
 
 // ── Pure resolvers (no side effects) ──────────────────────────────
 
@@ -100,26 +91,11 @@ pub fn resolve_initial_cwd() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("/"))
 }
 
-// ── Legacy apply_* wrappers (call set_current_dir) ────────────────
-
-/// Set the process working directory to `CHLODWIG_PROJECT_DIR` if set.
-///
-/// Legacy wrapper around `resolve_project_dir()` that additionally calls
-/// `std::env::set_current_dir()`. Will be removed in Stage 0.3 once all
-/// callers route through per-tab `AppState.cwd`.
-pub fn apply_project_dir() -> Option<std::path::PathBuf> {
-    let path = resolve_project_dir()?;
-    match std::env::set_current_dir(&path) {
-        Ok(()) => {
-            tracing::info!("Set working directory to {}", path.display());
-            Some(path)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to chdir to {}: {e}", path.display());
-            None
-        }
-    }
-}
+// ── Legacy apply_* wrappers — REMOVED in Stage 0.5.
+// All consumers now use the pure `resolve_*` functions and pass the
+// result into `AppState::with_cwd(...)`. The integration test
+// `no_set_current_dir` (chlodwig-core) enforces that no production
+// file in the workspace ever calls `std::env::set_current_dir()`.
 
 /// Pasteboard name used by the FinderSync extension to pass the target
 /// directory to the app. The extension writes the path to a custom
@@ -147,30 +123,6 @@ pub(crate) fn ensure_appkit() {
             libc::RTLD_LAZY,
         );
     });
-}
-
-/// Set the process working directory from the FinderSync custom pasteboard.
-///
-/// Legacy wrapper around `resolve_project_dir_from_finder()` that
-/// additionally calls `std::env::set_current_dir()`.
-pub fn apply_project_dir_from_finder() -> Option<std::path::PathBuf> {
-    let path = resolve_project_dir_from_finder()?;
-    match std::env::set_current_dir(&path) {
-        Ok(()) => {
-            tracing::info!(
-                "Set working directory from Finder pasteboard: {}",
-                path.display()
-            );
-            Some(path)
-        }
-        Err(e) => {
-            tracing::warn!(
-                "Failed to chdir to {} (from Finder pasteboard): {e}",
-                path.display()
-            );
-            None
-        }
-    }
 }
 
 /// Read and clear the custom FinderSync pasteboard via NSPasteboard API.
@@ -217,20 +169,3 @@ pub(crate) fn read_and_clear_finder_pasteboard() -> Option<String> {
     None
 }
 
-/// Set the process working directory from CLI arguments.
-///
-/// Legacy wrapper around `resolve_project_dir_from_args()` that additionally
-/// calls `std::env::set_current_dir()`.
-pub fn apply_project_dir_from_args() -> Option<std::path::PathBuf> {
-    let path = resolve_project_dir_from_args()?;
-    match std::env::set_current_dir(&path) {
-        Ok(()) => {
-            tracing::info!("Set working directory from arg: {}", path.display());
-            Some(path)
-        }
-        Err(e) => {
-            tracing::warn!("Failed to chdir to {}: {e}", path.display());
-            None
-        }
-    }
-}
