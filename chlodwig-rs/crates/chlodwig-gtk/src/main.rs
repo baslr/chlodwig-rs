@@ -440,6 +440,22 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         });
     });
 
+    // --- Re-focus prompt input when the window becomes active ---
+    //
+    // When the user Cmd+Tabs back to Chlodwig (or clicks the dock icon), GTK
+    // sets the window's `is-active` property to `true`. We listen for that
+    // transition and call `grab_focus()` on the input view so the cursor
+    // lands in the prompt without an extra click. Also fired once on initial
+    // present, which is what we want.
+    {
+        let input_view_for_focus = widgets.input_view.clone();
+        window.connect_is_active_notify(move |w| {
+            if w.is_active() {
+                input_view_for_focus.grab_focus();
+            }
+        });
+    }
+
     window.present();
 }
 

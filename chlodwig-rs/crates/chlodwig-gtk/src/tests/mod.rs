@@ -26,3 +26,4 @@ mod emoji_overlay_tests;
 mod setup_tests;
 mod md_renderer_tests;
 mod emoji_unit_tests;
+mod window_focus_tests;
