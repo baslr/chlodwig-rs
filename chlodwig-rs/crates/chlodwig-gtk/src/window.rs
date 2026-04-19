@@ -381,34 +381,25 @@ pub fn build_window(
     (window, widgets)
 }
 
-/// Append a text line to the output buffer (at the end).
+/// Append `text` to the end of `view`'s buffer, optionally applying one or
+/// more named tags to every inserted character.
 ///
-/// Emoji characters are rendered as CoreText bitmaps and drawn as overlays
-/// over 2-space placeholders. Non-emoji text is inserted normally via Pango.
-pub fn append_to_output(buffer: &gtk4::TextBuffer, text: &str) {
-    let segments = emoji::split_emoji_segments(text);
-    for seg in &segments {
-        match seg {
-            emoji::TextSegment::Plain(s) => {
-                let mut end_iter = buffer.end_iter();
-                buffer.insert(&mut end_iter, s);
-            }
-            emoji::TextSegment::Emoji(e) => {
-                insert_emoji_as_overlay(buffer, e, &[], false);
-            }
+/// This is the **single source of truth** for appending text to an
+/// `EmojiTextView` (Gotcha #43). Emoji segments are routed through
+/// `insert_emoji_as_overlay` so they land in the view's per-instance overlay
+/// registry (Gotcha #42). Plain segments get the tags applied via
+/// `apply_tag_by_name` after insertion.
+///
+/// Pass `&[]` to insert untagged text. The wrappers `append_to_output`,
+/// `append_styled`, and `append_multi_styled` exist purely for call-site
+/// readability (Rust has no function overloading).
+pub fn append(view: &EmojiTextView, text: &str, tag_names: &[&str]) {
+    let buffer = view.buffer();
+    if !tag_names.is_empty() {
+        let tag_table = buffer.tag_table();
+        if tag_names.iter().any(|t| tag_table.lookup(t).is_none()) {
+            create_default_tags(&buffer);
         }
-    }
-}
-
-/// Append a text line with a named tag for styling.
-///
-/// Emoji characters are rendered as CoreText bitmaps as overlays.
-/// Tags are applied to both text segments and emoji placeholder spaces.
-pub fn append_styled(buffer: &gtk4::TextBuffer, text: &str, tag_name: &str) {
-    let tag_table = buffer.tag_table();
-    if tag_table.lookup(tag_name).is_none() {
-        // Create default tags on first use
-        create_default_tags(buffer);
     }
 
     let segments = emoji::split_emoji_segments(text);
@@ -418,50 +409,37 @@ pub fn append_styled(buffer: &gtk4::TextBuffer, text: &str, tag_name: &str) {
                 let mut end_iter = buffer.end_iter();
                 let start_offset = end_iter.offset();
                 buffer.insert(&mut end_iter, s);
-                let start_iter = buffer.iter_at_offset(start_offset);
-                let end_iter = buffer.end_iter();
-                buffer.apply_tag_by_name(tag_name, &start_iter, &end_iter);
-            }
-            emoji::TextSegment::Emoji(e) => {
-                insert_emoji_as_overlay(buffer, e, &[tag_name], false);
-            }
-        }
-    }
-}
-
-/// Append text with multiple tags applied simultaneously.
-///
-/// Emoji characters are rendered as CoreText bitmaps as overlays.
-/// Tags are applied to both text segments and emoji placeholder spaces.
-pub fn append_multi_styled(buffer: &gtk4::TextBuffer, text: &str, tag_names: &[&str]) {
-    if tag_names.is_empty() {
-        append_to_output(buffer, text);
-        return;
-    }
-    let tag_table = buffer.tag_table();
-    // Ensure tags exist
-    if tag_names.iter().any(|t| tag_table.lookup(t).is_none()) {
-        create_default_tags(buffer);
-    }
-
-    let segments = emoji::split_emoji_segments(text);
-    for seg in &segments {
-        match seg {
-            emoji::TextSegment::Plain(s) => {
-                let mut end_iter = buffer.end_iter();
-                let start_offset = end_iter.offset();
-                buffer.insert(&mut end_iter, s);
-                let start_iter = buffer.iter_at_offset(start_offset);
-                let end_iter = buffer.end_iter();
-                for tag_name in tag_names {
-                    buffer.apply_tag_by_name(tag_name, &start_iter, &end_iter);
+                if !tag_names.is_empty() {
+                    let start_iter = buffer.iter_at_offset(start_offset);
+                    let end_iter = buffer.end_iter();
+                    for tag_name in tag_names {
+                        buffer.apply_tag_by_name(tag_name, &start_iter, &end_iter);
+                    }
                 }
             }
             emoji::TextSegment::Emoji(e) => {
-                insert_emoji_as_overlay(buffer, e, tag_names, false);
+                insert_emoji_as_overlay(view, e, tag_names, false);
             }
         }
     }
+}
+
+/// Append untagged text. Thin wrapper over [`append`] for call-site clarity.
+#[inline]
+pub fn append_to_output(view: &EmojiTextView, text: &str) {
+    append(view, text, &[])
+}
+
+/// Append text with a single named tag. Thin wrapper over [`append`].
+#[inline]
+pub fn append_styled(view: &EmojiTextView, text: &str, tag_name: &str) {
+    append(view, text, &[tag_name])
+}
+
+/// Append text with multiple named tags. Thin wrapper over [`append`].
+#[inline]
+pub fn append_multi_styled(view: &EmojiTextView, text: &str, tag_names: &[&str]) {
+    append(view, text, tag_names)
 }
 
 /// Read the font size from a TextView's Pango context and store it
@@ -503,7 +481,7 @@ fn init_emoji_font_size(text_view: &EmojiTextView) {
 /// `monospace`: whether the emoji is in a monospace context (code block,
 /// table cell). Determines the number of placeholder spaces.
 pub(crate) fn insert_emoji_as_overlay(
-    buffer: &gtk4::TextBuffer,
+    view: &EmojiTextView,
     emoji_str: &str,
     tag_names: &[&str],
     monospace: bool,
@@ -540,8 +518,7 @@ pub(crate) fn insert_emoji_as_overlay(
 
     match result {
         Some(texture) => {
-            crate::emoji_overlay::insert_emoji(
-                buffer,
+            view.insert_emoji(
                 texture.upcast(),
                 scale,
                 placeholder_len,
@@ -549,7 +526,8 @@ pub(crate) fn insert_emoji_as_overlay(
             );
         }
         None => {
-            // Fallback: insert raw emoji text.
+            // Fallback: insert raw emoji text into the view's buffer.
+            let buffer = view.buffer();
             let mut end_iter = buffer.end_iter();
             buffer.insert(&mut end_iter, emoji_str);
         }
@@ -693,7 +671,7 @@ fn create_default_tags(buffer: &gtk4::TextBuffer) {
     let result_tag = gtk4::TextTag::builder()
         .name("result")
         .foreground("#7f848e") // grey
-        .family("monospace")
+        .family(crate::MONO_FONT_FAMILY)
         .build();
     tag_table.add(&result_tag);
 
@@ -755,7 +733,7 @@ fn create_default_tags(buffer: &gtk4::TextBuffer) {
     let line_number_tag = gtk4::TextTag::builder()
         .name("line_number")
         .foreground("#7f848e") // grey
-        .family("monospace")
+        .family(crate::MONO_FONT_FAMILY)
         .build();
     tag_table.add(&line_number_tag);
 
@@ -763,7 +741,7 @@ fn create_default_tags(buffer: &gtk4::TextBuffer) {
     let diff_remove_tag = gtk4::TextTag::builder()
         .name("diff_remove")
         .foreground("#e06c75") // red
-        .family("monospace")
+        .family(crate::MONO_FONT_FAMILY)
         .build();
     tag_table.add(&diff_remove_tag);
 
@@ -771,7 +749,7 @@ fn create_default_tags(buffer: &gtk4::TextBuffer) {
     let diff_add_tag = gtk4::TextTag::builder()
         .name("diff_add")
         .foreground("#98c379") // green
-        .family("monospace")
+        .family(crate::MONO_FONT_FAMILY)
         .build();
     tag_table.add(&diff_add_tag);
 
@@ -785,7 +763,7 @@ fn create_default_tags(buffer: &gtk4::TextBuffer) {
     // Code: monospace font for source code, tool output, etc.
     let code_tag = gtk4::TextTag::builder()
         .name("code")
-        .family("monospace")
+        .family(crate::MONO_FONT_FAMILY)
         .build();
     tag_table.add(&code_tag);
 }
@@ -938,6 +916,12 @@ fn load_app_css() {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+
+    // CJK font installation: see main.rs — the bundled font is copied
+    // to the user's standard font directory (~/Library/Fonts on macOS,
+    // ~/.local/share/fonts on Linux) BEFORE GTK init, so CoreText and
+    // fontconfig pick it up automatically with no further hooks needed
+    // here.
 }
 
 // NOTE: load_bundled_emoji_font() was removed. In Pango 1.x, fonts loaded
