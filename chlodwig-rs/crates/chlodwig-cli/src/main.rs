@@ -117,7 +117,7 @@ async fn main() -> Result<()> {
     // (Stage 0.4 of MULTIWINDOW_TABS.md).
     let cwd = std::env::current_dir()?;
 
-    let system_prompt = chlodwig_core::build_system_prompt_with_cwd(
+    let system_prompt = chlodwig_core::build_system_prompt(
         cli.system_prompt.as_deref(),
         chlodwig_core::UiContext::Cli,
         &cwd,

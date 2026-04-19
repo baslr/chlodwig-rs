@@ -331,7 +331,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
             }
             let api_client: Arc<dyn chlodwig_core::ApiClient> = Arc::new(client);
 
-            let system_prompt = chlodwig_core::build_system_prompt_with_cwd(
+            let system_prompt = chlodwig_core::build_system_prompt(
                 None,
                 chlodwig_core::UiContext::Gui,
                 &initial_cwd,
