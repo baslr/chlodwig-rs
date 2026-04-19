@@ -97,11 +97,7 @@ pub fn setup_menu(ctx: MenuContext) {
                 let mut state = state.borrow_mut();
                 state.clear();
             }
-            output_view.clear_overlays_from(0);
-            let output_buf = output_view.buffer();
-            let mut s = output_buf.start_iter();
-            let mut e = output_buf.end_iter();
-            output_buf.delete(&mut s, &mut e);
+            output_view.clear();
             let cwd_msg = state.borrow().startup_cwd_message();
             window::append_styled(&output_view, &format!("{cwd_msg}\n"), "system");
             let _ = prompt_tx.send(BackgroundCommand::ClearMessages);

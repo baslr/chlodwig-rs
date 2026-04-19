@@ -90,12 +90,7 @@ pub fn wire(ctx: SubmitContext) {
                         state.clear();
                     }
                     // Clear the output view
-                    final_view_for_submit.clear_overlays_from(0);
-                    let final_buf = final_view_for_submit.buffer();
-                    let mut s = final_buf.start_iter();
-                    let mut e = final_buf.end_iter();
-                    final_buf.delete(&mut s, &mut e);
-                    drop(final_buf);
+                    final_view_for_submit.clear();
                     // Show CWD again
                     let cwd_msg = state_for_submit.borrow().startup_cwd_message();
                     window::append_styled(&final_view_for_submit, &format!("{cwd_msg}\n"), "system");

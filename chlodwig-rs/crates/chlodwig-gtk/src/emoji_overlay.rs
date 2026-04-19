@@ -201,22 +201,12 @@ impl EmojiTextView {
         });
     }
 
-    /// Clear all emoji overlay entries from this view and delete their marks.
-    ///
-    /// Call when the view's buffer content is being replaced (e.g. `/clear`).
-    pub fn clear_overlays(&self) {
-        let buffer = self.buffer();
-        for entry in self.imp().entries.borrow_mut().drain(..) {
-            if entry.mark.buffer().is_some() {
-                buffer.delete_mark(&entry.mark);
-            }
-        }
-    }
-
     /// Remove emoji overlays whose mark falls at or after `from_offset`.
     ///
-    /// Used before streaming re-render: the streaming range is deleted and
-    /// re-inserted, so all overlays in that range must be removed first.
+    /// Pass `0` to wipe **all** overlays from this view (used when the
+    /// buffer content is being replaced, e.g. `/clear`, session restore,
+    /// streaming re-render). Pass a non-zero offset to wipe only overlays
+    /// inside a sub-range that's about to be re-rendered (e.g. table sort).
     pub fn clear_overlays_from(&self, from_offset: i32) {
         let buffer = self.buffer();
         let mut entries = self.imp().entries.borrow_mut();
@@ -240,6 +230,20 @@ impl EmojiTextView {
     /// Number of registered emoji overlays in this view (for diagnostics).
     pub fn overlay_count(&self) -> usize {
         self.imp().entries.borrow().len()
+    }
+
+    /// Wipe everything: all emoji overlays AND all buffer text.
+    ///
+    /// Used when the view content is being completely replaced — `/clear`,
+    /// session restore, "New Conversation". Equivalent to
+    /// `clear_overlays_from(0)` followed by deleting the entire buffer
+    /// range, but expresses the intent in one call.
+    pub fn clear(&self) {
+        self.clear_overlays_from(0);
+        let buffer = self.buffer();
+        let mut s = buffer.start_iter();
+        let mut e = buffer.end_iter();
+        buffer.delete(&mut s, &mut e);
     }
 }
 

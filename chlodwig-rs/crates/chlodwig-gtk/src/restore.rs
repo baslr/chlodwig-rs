@@ -45,7 +45,7 @@ pub fn apply_restored_session_to_ui(snapshot: SessionSnapshot, ctx: &RestoreCont
     let restored_name = snapshot.name.clone();
 
     // 1. Clear view (incl. emoji overlays).
-    clear_output_view(ctx.output_view);
+    ctx.output_view.clear();
 
     // 2. Apply snapshot to AppState.
     ctx.state.borrow_mut().apply_session_snapshot(&snapshot);
@@ -83,13 +83,4 @@ pub fn apply_restored_session_to_ui(snapshot: SessionSnapshot, ctx: &RestoreCont
     // 8. Status + scroll.
     window::update_status(ctx.status_left, ctx.status_right, &ctx.state.borrow());
     window::scroll_to_bottom(ctx.output_scroll);
-}
-
-/// Wipe the view and any emoji-overlay entries registered on it.
-pub fn clear_output_view(view: &EmojiTextView) {
-    view.clear_overlays_from(0);
-    let buf = view.buffer();
-    let mut s = buf.start_iter();
-    let mut e = buf.end_iter();
-    buf.delete(&mut s, &mut e);
 }

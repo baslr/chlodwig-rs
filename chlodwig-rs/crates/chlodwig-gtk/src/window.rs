@@ -504,9 +504,6 @@ pub(crate) fn insert_emoji_as_overlay(
     }
 }
 
-/// Buffer-variant removed: every overlay insertion now goes through a view
-/// (per-instance registry, see Gotcha #44).
-
 /// Render the emoji bitmap and return `(texture, scale, placeholder_len)`.
 ///
 /// Single source of truth for emoji rendering parameters. Returns `None` if
