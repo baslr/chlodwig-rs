@@ -51,14 +51,18 @@ pub fn rerender_all_blocks(
                 if !state.show_tool_usage {
                     continue;
                 }
-                window::append_styled(
-                    buffer,
-                    &format!("── Tool: {name} ──\n"),
-                    "tool",
-                );
-                if let Ok(pretty) = serde_json::to_string_pretty(input) {
-                    for line in pretty.lines().take(5) {
-                        window::append_styled(buffer, &format!("  {line}\n"), "result");
+                if name == "Edit" {
+                    render_edit_tool_use(buffer, input);
+                } else {
+                    window::append_styled(
+                        buffer,
+                        &format!("── Tool: {name} ──\n"),
+                        "tool",
+                    );
+                    if let Ok(pretty) = serde_json::to_string_pretty(input) {
+                        for line in pretty.lines().take(5) {
+                            window::append_styled(buffer, &format!("  {line}\n"), "result");
+                        }
                     }
                 }
             }
@@ -140,23 +144,7 @@ pub fn render_restored_blocks(
                     continue;
                 }
                 if name == "Edit" {
-                    // Show diff-style display
-                    let file_path = input["file_path"].as_str().unwrap_or("(unknown)");
-                    window::append_styled(
-                        buffer,
-                        &format!("── Edit: {file_path} ──\n"),
-                        "tool",
-                    );
-                    if let Some(old) = input["old_string"].as_str() {
-                        for line in old.lines() {
-                            window::append_styled(buffer, &format!("- {line}\n"), "diff_remove");
-                        }
-                    }
-                    if let Some(new) = input["new_string"].as_str() {
-                        for line in new.lines() {
-                            window::append_styled(buffer, &format!("+ {line}\n"), "diff_add");
-                        }
-                    }
+                    render_edit_tool_use(buffer, input);
                 } else {
                     window::append_styled(
                         buffer,
@@ -246,27 +234,7 @@ pub fn render_event_to_buffer(
             }
 
             if name == "Edit" {
-                let file_path = input["file_path"].as_str().unwrap_or("(unknown)");
-                let lang = chlodwig_core::highlight::lang_from_path(file_path);
-                window::append_styled(
-                    buffer,
-                    &format!("── Edit: {file_path} ──\n"),
-                    "tool",
-                );
-                if let Some(old) = input["old_string"].as_str() {
-                    for line in old.lines() {
-                        window::append_styled(buffer, "- ", "diff_remove");
-                        render_highlighted_line(buffer, lang, line, "diff_remove");
-                        window::append_to_output(buffer, "\n");
-                    }
-                }
-                if let Some(new) = input["new_string"].as_str() {
-                    for line in new.lines() {
-                        window::append_styled(buffer, "+ ", "diff_add");
-                        render_highlighted_line(buffer, lang, line, "diff_add");
-                        window::append_to_output(buffer, "\n");
-                    }
-                }
+                render_edit_tool_use(buffer, input);
             } else {
                 window::append_styled(
                     buffer,
@@ -529,6 +497,41 @@ pub fn extract_tool_result_text(output: &chlodwig_core::ToolResultContent) -> St
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
+        }
+    }
+}
+
+/// Render an Edit-tool tool_use block as a syntax-highlighted diff.
+///
+/// This is the SINGLE source of truth for "how an Edit tool_use looks in
+/// the GTK output". All three render paths call it:
+///   - `render_event_to_buffer()` (live SSE streaming)
+///   - `render_restored_blocks()` (after `--resume` / `/resume`)
+///   - `rerender_all_blocks()` (after table interaction or other full re-render)
+///
+/// `input` is the raw `serde_json::Value` from `ContentBlock::ToolUse.input`,
+/// expected to contain `file_path`, `old_string`, and `new_string` keys
+/// (missing keys are tolerated and rendered as empty).
+pub fn render_edit_tool_use(buffer: &gtk4::TextBuffer, input: &serde_json::Value) {
+    let file_path = input["file_path"].as_str().unwrap_or("(unknown)");
+    let lang = chlodwig_core::highlight::lang_from_path(file_path);
+    window::append_styled(
+        buffer,
+        &format!("── Edit: {file_path} ──\n"),
+        "tool",
+    );
+    if let Some(old) = input["old_string"].as_str() {
+        for line in old.lines() {
+            window::append_styled(buffer, "- ", "diff_remove");
+            render_highlighted_line(buffer, lang, line, "diff_remove");
+            window::append_to_output(buffer, "\n");
+        }
+    }
+    if let Some(new) = input["new_string"].as_str() {
+        for line in new.lines() {
+            window::append_styled(buffer, "+ ", "diff_add");
+            render_highlighted_line(buffer, lang, line, "diff_add");
+            window::append_to_output(buffer, "\n");
         }
     }
 }

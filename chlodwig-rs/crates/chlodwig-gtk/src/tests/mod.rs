@@ -19,3 +19,4 @@ mod submit_tests;
 mod event_dispatch_tests;
 mod session_stats_tests;
 mod stop_turn_tests;
+mod edit_render_unification_tests;
