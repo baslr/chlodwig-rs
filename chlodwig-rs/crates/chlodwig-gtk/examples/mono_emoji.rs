@@ -90,8 +90,8 @@ fn main() -> glib::ExitCode {
                 let natural_w = bmp.logical_width();
                 let natural_h = bmp.logical_height();
                 eprintln!("  {emoji_str}: natural_w={natural_w}, natural_h={natural_h}");
-                emoji_overlay::insert_emoji(
-                    &buffer,
+                emoji_overlay::EmojiTextView::insert_emoji(
+                    &textview,
                     tex.upcast(),
                     scale,
                     2,  // monospace: 2 placeholder spaces
@@ -177,7 +177,7 @@ fn main() -> glib::ExitCode {
         }
         insert_mono("\n");
 
-        eprintln!("Overlay count: {}", emoji_overlay::overlay_count());
+        eprintln!("Overlay count: {}", textview.overlay_count());
 
         let scroll = gtk4::ScrolledWindow::builder()
             .vexpand(true)

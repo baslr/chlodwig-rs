@@ -59,8 +59,7 @@ pub fn wire(ctx: EventDispatchContext) {
     } = ctx;
 
     let state_for_events = app_state.clone();
-    let final_buf = widgets.final_buffer.clone();
-    let streaming_buf = widgets.streaming_buffer_widget.clone();
+    let final_view = widgets.final_view.clone();
     let streaming_view = widgets.streaming_view.clone();
     let scroll = widgets.output_scroll.clone();
     let status_left_label = widgets.status_left_label.clone();
@@ -75,7 +74,7 @@ pub fn wire(ctx: EventDispatchContext) {
     let prompt_tx_for_events = prompt_tx.clone();
     let session_started_at_for_events = session_started_at.clone();
     let viewport_cols_for_events = viewport_cols.clone();
-    let final_view_for_events = widgets.final_view.clone();
+    // (final_view removed — use `final_view` directly.)
 
     let event_rx_cell = event_rx.clone();
     let uq_rx_cell = uq_rx.clone();
@@ -108,7 +107,7 @@ pub fn wire(ctx: EventDispatchContext) {
         let mut should_save_session = false;
         let mut streaming_just_finalized = false;
         let viewport_w = chlodwig_gtk::viewport::viewport_columns(
-            final_view_for_events.upcast_ref::<gtk4::TextView>(),
+            final_view.upcast_ref::<gtk4::TextView>(),
         );
         viewport_cols_for_events.set(viewport_w);
 
@@ -145,7 +144,7 @@ pub fn wire(ctx: EventDispatchContext) {
             if state.blocks.len() > blocks_before {
                 for block_idx in blocks_before..state.blocks.len() {
                     let ctx = render::RenderCtx::for_block(&state, viewport_w, block_idx);
-                    render::append_block(&final_buf, &state.blocks[block_idx], &ctx);
+                    render::append_block(&final_view, &state.blocks[block_idx], &ctx);
                 }
             }
             drop(state);
@@ -204,7 +203,7 @@ pub fn wire(ctx: EventDispatchContext) {
             let mut state = state_for_events.borrow_mut();
             if state.streaming_dirty {
                 let visible = render::render_streaming_into(
-                    &streaming_buf,
+                    &streaming_view,
                     &state.streaming_buffer,
                     viewport_w,
                 );
@@ -215,7 +214,7 @@ pub fn wire(ctx: EventDispatchContext) {
             // If streaming was just finalized this tick, the buffer is now
             // empty → hide the streaming view.
             if streaming_just_finalized && state.streaming_buffer.is_empty() {
-                let _ = render::render_streaming_into(&streaming_buf, "", viewport_w);
+                let _ = render::render_streaming_into(&streaming_view, "", viewport_w);
                 streaming_view.set_visible(false);
             }
         }
@@ -255,7 +254,7 @@ pub fn wire(ctx: EventDispatchContext) {
         // ── Resize detection: re-render final_view on width change ────
         {
             let current_cols = chlodwig_gtk::viewport::viewport_columns(
-                final_view_for_events.upcast_ref::<gtk4::TextView>(),
+                final_view.upcast_ref::<gtk4::TextView>(),
             );
             if current_cols != last_rendered_cols {
                 if current_cols == resize_pending_cols {
@@ -270,7 +269,7 @@ pub fn wire(ctx: EventDispatchContext) {
                     resize_stable_ticks = 0;
                     let state = state_for_events.borrow();
                     if !state.is_streaming {
-                        render::render_all_blocks_into(&final_buf, &state, current_cols, true);
+                        render::render_all_blocks_into(&final_view, &state, current_cols, true);
                         if state.auto_scroll.is_active() {
                             let scroll_clone = scroll.clone();
                             glib::idle_add_local_once(move || {

@@ -56,7 +56,6 @@ pub fn wire(ctx: SubmitContext) {
     let input_buf = widgets.input_buffer.clone();
     let prompt_tx_clone = prompt_tx.clone();
     let state_for_submit = app_state.clone();
-    let final_buf_for_submit = widgets.final_buffer.clone();
     let scroll_for_submit = widgets.output_scroll.clone();
     let status_left_for_submit = widgets.status_left_label.clone();
     let status_right_for_submit = widgets.status_right_label.clone();
@@ -90,14 +89,16 @@ pub fn wire(ctx: SubmitContext) {
                         let mut state = state_for_submit.borrow_mut();
                         state.clear();
                     }
-                    // Clear the output buffer
-                    let mut s = final_buf_for_submit.start_iter();
-                    let mut e = final_buf_for_submit.end_iter();
-                    chlodwig_gtk::emoji_overlay::clear_overlays_from(&final_buf_for_submit, 0);
-                    final_buf_for_submit.delete(&mut s, &mut e);
+                    // Clear the output view
+                    final_view_for_submit.clear_overlays_from(0);
+                    let final_buf = final_view_for_submit.buffer();
+                    let mut s = final_buf.start_iter();
+                    let mut e = final_buf.end_iter();
+                    final_buf.delete(&mut s, &mut e);
+                    drop(final_buf);
                     // Show CWD again
                     let cwd_msg = state_for_submit.borrow().startup_cwd_message();
-                    window::append_styled(&final_buf_for_submit, &format!("{cwd_msg}\n"), "system");
+                    window::append_styled(&final_view_for_submit, &format!("{cwd_msg}\n"), "system");
                     // Tell background task to clear ConversationState.messages
                     let _ = prompt_tx_clone.send(BackgroundCommand::ClearMessages);
                     window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
@@ -114,19 +115,19 @@ pub fn wire(ctx: SubmitContext) {
                         state.blocks.push(chlodwig_gtk::app_state::DisplayBlock::AssistantText(help_md));
                     }
                     let state = state_for_submit.borrow();
-                    render::render_all_blocks_into(&final_buf_for_submit, &state, viewport_cols_for_submit.get(), true);
+                    render::render_all_blocks_into(&final_view_for_submit, &state, viewport_cols_for_submit.get(), true);
                     window::scroll_to_bottom(&scroll_for_submit);
                     return;
                 }
                 Command::Shell(cmd_str) => {
                     // Show the command
-                    window::append_styled(&final_buf_for_submit, &format!("\n$ {cmd_str}\n"), "user");
+                    window::append_styled(&final_view_for_submit, &format!("\n$ {cmd_str}\n"), "user");
 
                     // Execute synchronously (blocking — fine for simple commands)
                     let (output, _is_error) = chlodwig_gtk::app_state::execute_shell_pty(&cmd_str);
 
                     // Render output with ANSI colors
-                    render::render_ansi_output(&final_buf_for_submit, &output);
+                    render::render_ansi_output(&final_view_for_submit, &output);
 
                     window::scroll_to_bottom(&scroll_for_submit);
                     return;
@@ -141,7 +142,7 @@ pub fn wire(ctx: SubmitContext) {
                     // Tell background thread to compact
                     let _ = prompt_tx_clone.send(BackgroundCommand::Compact { instructions });
                     window::append_styled(
-                        &final_buf_for_submit,
+                        &final_view_for_submit,
                         "\n⏳ Compacting conversation…\n",
                         "system",
                     );
@@ -152,14 +153,14 @@ pub fn wire(ctx: SubmitContext) {
                     match chlodwig_core::list_sessions() {
                         Ok(sessions) if sessions.is_empty() => {
                             window::append_styled(
-                                &final_buf_for_submit,
+                                &final_view_for_submit,
                                 "\nNo saved sessions found.\n",
                                 "system",
                             );
                         }
                         Ok(sessions) => {
                             window::append_styled(
-                                &final_buf_for_submit,
+                                &final_view_for_submit,
                                 &format!("\n📋 {} saved session(s):\n", sessions.len()),
                                 "system",
                             );
@@ -175,12 +176,12 @@ pub fn wire(ctx: SubmitContext) {
                                     info.message_count,
                                     info.saved_at,
                                 );
-                                window::append_styled(&final_buf_for_submit, &line, "result");
+                                window::append_styled(&final_view_for_submit, &line, "result");
                             }
                         }
                         Err(e) => {
                             window::append_styled(
-                                &final_buf_for_submit,
+                                &final_view_for_submit,
                                 &format!("\n✗ Error listing sessions: {e}\n"),
                                 "error",
                             );
@@ -206,7 +207,6 @@ pub fn wire(ctx: SubmitContext) {
                         Ok(Some(snapshot)) => {
                             let ctx = restore::RestoreContext {
                                 state: &state_for_submit,
-                                output_buf: &final_buf_for_submit,
                                 output_view: &final_view_for_submit,
                                 output_scroll: &scroll_for_submit,
                                 window: &window_for_submit,
@@ -226,7 +226,7 @@ pub fn wire(ctx: SubmitContext) {
                                 ),
                             };
                             window::append_styled(
-                                &final_buf_for_submit,
+                                &final_view_for_submit,
                                 &format!("\n{msg}\n"),
                                 "system",
                             );
@@ -234,7 +234,7 @@ pub fn wire(ctx: SubmitContext) {
                         }
                         Err(e) => {
                             window::append_styled(
-                                &final_buf_for_submit,
+                                &final_view_for_submit,
                                 &format!("\n✗ Failed to load session: {e}\n"),
                                 "error",
                             );
@@ -250,7 +250,7 @@ pub fn wire(ctx: SubmitContext) {
                         match chlodwig_core::session_name_exists(n, Some(&my_path)) {
                             Ok(true) => {
                                 window::append_styled(
-                                    &final_buf_for_submit,
+                                    &final_view_for_submit,
                                     &format!("\n✗ A session with the name \"{n}\" already exists. Choose a different name.\n"),
                                     "error",
                                 );
@@ -259,7 +259,7 @@ pub fn wire(ctx: SubmitContext) {
                             }
                             Err(e) => {
                                 window::append_styled(
-                                    &final_buf_for_submit,
+                                    &final_view_for_submit,
                                     &format!("\n✗ Could not check session names: {e}\n"),
                                     "error",
                                 );
@@ -290,7 +290,7 @@ pub fn wire(ctx: SubmitContext) {
                         Some(n) => format!("\n✓ Session named: {n}\n"),
                         None => "\n✓ Session name cleared.\n".to_string(),
                     };
-                    window::append_styled(&final_buf_for_submit, &msg, "system");
+                    window::append_styled(&final_view_for_submit, &msg, "system");
                     window::scroll_to_bottom(&scroll_for_submit);
                     return;
                 }
@@ -302,7 +302,7 @@ pub fn wire(ctx: SubmitContext) {
                         stats: state_for_submit.borrow().session_stats(),
                     });
                     window::append_styled(
-                        &final_buf_for_submit,
+                        &final_view_for_submit,
                         "\n✓ Session saved.\n",
                         "system",
                     );
@@ -315,7 +315,7 @@ pub fn wire(ctx: SubmitContext) {
                     stop_flag_for_submit
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     window::append_styled(
-                        &final_buf_for_submit,
+                        &final_view_for_submit,
                         "\n⏸ Stop requested — will interrupt after the current message.\n",
                         "system",
                     );
@@ -335,7 +335,7 @@ pub fn wire(ctx: SubmitContext) {
         }
 
         // Render user message in output
-        window::append_styled(&final_buf_for_submit, &format!("\n▶ {text}\n"), "user");
+        window::append_styled(&final_view_for_submit, &format!("\n▶ {text}\n"), "user");
         window::scroll_to_bottom(&scroll_for_submit);
         window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
 
@@ -378,7 +378,7 @@ pub fn wire(ctx: SubmitContext) {
         const DOUBLE_ESC_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
         let last_esc: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
         let stop_flag_for_esc = stop_flag.clone();
-        let final_buf_for_esc = widgets.final_buffer.clone();
+        let final_view_for_esc = widgets.final_view.clone();
         let scroll_for_esc = widgets.output_scroll.clone();
         let esc_ctrl = gtk4::EventControllerKey::new();
         esc_ctrl.connect_key_pressed(move |_, key, _keycode, _modifiers| {
@@ -393,7 +393,7 @@ pub fn wire(ctx: SubmitContext) {
             if is_double {
                 stop_flag_for_esc.store(true, std::sync::atomic::Ordering::SeqCst);
                 window::append_styled(
-                    &final_buf_for_esc,
+                    &final_view_for_esc,
                     "\n⏸ Stop requested (Esc Esc) — will interrupt after the current message.\n",
                     "system",
                 );

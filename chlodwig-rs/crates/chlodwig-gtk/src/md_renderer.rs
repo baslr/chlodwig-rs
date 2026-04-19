@@ -176,6 +176,7 @@ mod gtk_impl {
     use super::*;
     use gtk4::prelude::*;
     use crate::emoji;
+    use crate::emoji_overlay::EmojiTextView;
 
     /// Ensure a TextTag for the given MdStyle exists in the tag table.
     /// Returns the tag name.
@@ -205,7 +206,7 @@ mod gtk_impl {
             builder = builder.underline(gtk4::pango::Underline::Single);
         }
         if style.monospace {
-            builder = builder.family("monospace");
+            builder = builder.family(crate::MONO_FONT_FAMILY);
         }
         if let Some(level) = style.heading_level {
             let scale = heading_scale(level);
@@ -235,11 +236,13 @@ mod gtk_impl {
     /// any `block_idx` if the caller doesn't need clickable headers
     /// (e.g. live streaming render where tables aren't tracked yet).
     pub fn append_styled_lines(
-        buffer: &gtk4::TextBuffer,
+        view: &EmojiTextView,
         lines: &[StyledLine],
         all_tables: &[(usize, usize, chlodwig_core::TableData)],
         block_idx: usize,
     ) {
+        let buffer = view.buffer();
+        let buffer = &buffer;
         // Map "i-th table within this slice" → "global table index in
         // AppState.tables". When `all_tables` is empty, the lookup
         // always returns None and no table_sort tags are emitted.
@@ -266,7 +269,7 @@ mod gtk_impl {
                 let border_span = &line.spans[0];
                 let border_tag = ensure_tag(buffer, &border_span.style);
                 insert_text_with_emoji_and_tag(
-                    buffer,
+                    view,
                     &border_span.text,
                     &border_tag,
                     border_span.style.monospace,
@@ -277,13 +280,13 @@ mod gtk_impl {
 
                 match highlight_code_line(lang, &code_text) {
                     Some(spans) if !spans.is_empty() => {
-                        insert_highlighted_spans(buffer, &spans);
+                        insert_highlighted_spans(view, &spans);
                     }
                     _ => {
                         for span in &line.spans[1..] {
                             let tag_name = ensure_tag(buffer, &span.style);
                             insert_text_with_emoji_and_tag(
-                                buffer,
+                                view,
                                 &span.text,
                                 &tag_name,
                                 span.style.monospace,
@@ -328,7 +331,7 @@ mod gtk_impl {
                         col_idx += 1;
                     } else {
                         insert_text_with_emoji_and_tag(
-                            buffer,
+                            view,
                             &span.text,
                             &tag_name,
                             span.style.monospace,
@@ -342,7 +345,7 @@ mod gtk_impl {
             for span in &line.spans {
                 let tag_name = ensure_tag(buffer, &span.style);
                 insert_text_with_emoji_and_tag(
-                    buffer,
+                    view,
                     &span.text,
                     &tag_name,
                     span.style.monospace,
@@ -355,9 +358,10 @@ mod gtk_impl {
     /// Each span gets a dynamically created monospace tag with the appropriate
     /// foreground color, bold, and italic attributes.
     fn insert_highlighted_spans(
-        buffer: &gtk4::TextBuffer,
+        view: &EmojiTextView,
         spans: &[HighlightSpan],
     ) {
+        let buffer = view.buffer();
         let tag_table = buffer.tag_table();
         for span in spans {
             if span.text.is_empty() {
@@ -367,7 +371,7 @@ mod gtk_impl {
             if tag_table.lookup(&tag_name).is_none() {
                 let mut builder = gtk4::TextTag::builder()
                     .name(&tag_name)
-                    .family("monospace");
+                    .family(crate::MONO_FONT_FAMILY);
                 if let Some((r, g, b)) = span.fg {
                     builder =
                         builder.foreground(&format!("#{r:02x}{g:02x}{b:02x}"));
@@ -381,33 +385,34 @@ mod gtk_impl {
                 tag_table.add(&builder.build());
             }
             // Insert text with emoji support (code can contain emoji in strings)
-            insert_text_with_emoji_and_tag(buffer, &span.text, &tag_name, true);
+            insert_text_with_emoji_and_tag(view, &span.text, &tag_name, true);
         }
     }
 
     /// Render Markdown text into a GTK TextBuffer at the end.
     /// Parses the text via core, then inserts styled spans.
     /// Convenience wrapper for callers without table-sort support.
-    pub fn append_markdown(buffer: &gtk4::TextBuffer, text: &str) {
+    pub fn append_markdown(view: &EmojiTextView, text: &str) {
         let lines = chlodwig_core::render_markdown(text);
-        append_styled_lines(buffer, &lines, &[], 0);
+        append_styled_lines(view, &lines, &[], 0);
     }
 
     /// Render Markdown text with viewport width constraint.
     /// Convenience wrapper for callers without table-sort support.
-    pub fn append_markdown_with_width(buffer: &gtk4::TextBuffer, text: &str, width: usize) {
+    pub fn append_markdown_with_width(view: &EmojiTextView, text: &str, width: usize) {
         let lines = chlodwig_core::render_markdown_with_width(text, width);
-        append_styled_lines(buffer, &lines, &[], 0);
+        append_styled_lines(view, &lines, &[], 0);
     }
 
     /// Delete a range of text from the buffer (by char offsets) and insert
     /// Markdown-rendered text in its place.
     pub fn replace_range_with_markdown(
-        buffer: &gtk4::TextBuffer,
+        view: &EmojiTextView,
         start_offset: i32,
         end_offset: i32,
         text: &str,
     ) {
+        let buffer = view.buffer();
         let mut start = buffer.iter_at_offset(start_offset);
         let mut end = buffer.iter_at_offset(end_offset);
         buffer.delete(&mut start, &mut end);
@@ -422,24 +427,25 @@ mod gtk_impl {
             }
 
             for span in &line.spans {
-                let tag_name = ensure_tag(buffer, &span.style);
-                insert_text_with_emoji_and_tag(buffer, &span.text, &tag_name, span.style.monospace);
+                let tag_name = ensure_tag(&buffer, &span.style);
+                insert_text_with_emoji_and_tag(view, &span.text, &tag_name, span.style.monospace);
             }
         }
     }
 
-    /// Insert text at the end of the buffer with emoji-as-paintable support.
+    /// Insert text at the end of the view's buffer with emoji-as-overlay support.
     ///
     /// Plain text segments get the specified tag applied.
     /// Emoji segments are rendered via CoreText and drawn as overlays
-    /// over 2-space placeholders. The tag is applied to the placeholder
+    /// over placeholder spaces. The tag is applied to the placeholder
     /// spaces so they inherit the correct font (e.g. monospace for tables).
     pub fn insert_text_with_emoji_and_tag(
-        buffer: &gtk4::TextBuffer,
+        view: &EmojiTextView,
         text: &str,
         tag_name: &str,
         monospace: bool,
     ) {
+        let buffer = view.buffer();
         let segments = emoji::split_emoji_segments(text);
         for seg in &segments {
             match seg {
@@ -452,7 +458,7 @@ mod gtk_impl {
                     buffer.apply_tag_by_name(tag_name, &start_iter, &end_iter);
                 }
                 emoji::TextSegment::Emoji(e) => {
-                    crate::window::insert_emoji_as_overlay(buffer, e, &[tag_name], monospace);
+                    crate::window::insert_emoji_as_overlay(view, e, &[tag_name], monospace);
                 }
             }
         }

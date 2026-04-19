@@ -195,7 +195,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
     // Show current working directory in the output area at startup
     {
         let cwd_msg = app_state.borrow().startup_cwd_message();
-        window::append_styled(&widgets.final_buffer, &format!("{cwd_msg}\n"), "system");
+        window::append_styled(&widgets.final_view, &format!("{cwd_msg}\n"), "system");
     }
 
     // --- Resume session if --resume flag was passed ---
@@ -210,7 +210,6 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
                 };
                 let ctx = restore::RestoreContext {
                     state: &app_state,
-                    output_buf: &widgets.final_buffer,
                     output_view: &widgets.final_view,
                     output_scroll: &widgets.output_scroll,
                     window: &window,
@@ -224,14 +223,14 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
             }
             Ok(None) => {
                 window::append_styled(
-                    &widgets.final_buffer,
+                    &widgets.final_view,
                     "No saved session found — starting fresh.\n",
                     "system",
                 );
             }
             Err(e) => {
                 window::append_styled(
-                    &widgets.final_buffer,
+                    &widgets.final_view,
                     &format!("Failed to load session: {e}\n"),
                     "error",
                 );
@@ -252,9 +251,9 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
 
     // --- Wire up Toggle Tool Usage button ---
     let state_for_toggle = app_state.clone();
-    let final_buf_for_toggle = widgets.final_buffer.clone();
-    let viewport_cols_for_toggle = viewport_cols.clone();
     let final_view_for_toggle = widgets.final_view.clone();
+    let viewport_cols_for_toggle = viewport_cols.clone();
+    let final_view_for_viewport = widgets.final_view.clone();
     widgets.toggle_tool_button.connect_clicked(move |btn| {
         let mut state = state_for_toggle.borrow_mut();
         state.show_tool_usage = !state.show_tool_usage;
@@ -263,11 +262,11 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
         // Re-render entire output from blocks (no scroll — user wants to keep reading).
         viewport_cols_for_toggle.set(
             chlodwig_gtk::viewport::viewport_columns(
-                final_view_for_toggle.upcast_ref::<gtk4::TextView>(),
+                final_view_for_viewport.upcast_ref::<gtk4::TextView>(),
             ),
         );
         render::render_all_blocks_into(
-            &final_buf_for_toggle,
+            &final_view_for_toggle,
             &state,
             viewport_cols_for_toggle.get(),
             true,

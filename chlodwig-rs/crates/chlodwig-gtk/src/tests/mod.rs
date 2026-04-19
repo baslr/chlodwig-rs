@@ -24,6 +24,7 @@ mod edit_render_unification_tests;
 mod variant_b_architecture_tests;
 mod window_tests;
 mod emoji_overlay_tests;
+mod emoji_view_method_tests;
 mod setup_tests;
 mod md_renderer_tests;
 mod emoji_unit_tests;

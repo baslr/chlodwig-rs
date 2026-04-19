@@ -89,7 +89,7 @@ pub fn setup_menu(ctx: MenuContext) {
         let action = gio::SimpleAction::new("new-conversation", None);
         let prompt_tx = prompt_tx.clone();
         let state = app_state.clone();
-        let output_buf = widgets.final_buffer.clone();
+        let output_view = widgets.final_view.clone();
         let status_left = widgets.status_left_label.clone();
         let status_right = widgets.status_right_label.clone();
         action.connect_activate(move |_, _| {
@@ -97,12 +97,13 @@ pub fn setup_menu(ctx: MenuContext) {
                 let mut state = state.borrow_mut();
                 state.clear();
             }
+            output_view.clear_overlays_from(0);
+            let output_buf = output_view.buffer();
             let mut s = output_buf.start_iter();
             let mut e = output_buf.end_iter();
-            chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf, 0);
             output_buf.delete(&mut s, &mut e);
             let cwd_msg = state.borrow().startup_cwd_message();
-            window::append_styled(&output_buf, &format!("{cwd_msg}\n"), "system");
+            window::append_styled(&output_view, &format!("{cwd_msg}\n"), "system");
             let _ = prompt_tx.send(BackgroundCommand::ClearMessages);
             window::update_status(&status_left, &status_right, &state.borrow());
         });
@@ -139,7 +140,6 @@ pub fn setup_menu(ctx: MenuContext) {
         let action = gio::SimpleAction::new("sessions-browser", None);
         let prompt_tx = prompt_tx.clone();
         let state = app_state.clone();
-        let output_buf = widgets.final_buffer.clone();
         let output_view = widgets.final_view.clone();
         let output_scroll = widgets.output_scroll.clone();
         let viewport_cols = viewport_cols.clone();
@@ -150,7 +150,6 @@ pub fn setup_menu(ctx: MenuContext) {
         action.connect_activate(move |_, _| {
             let prompt_tx = prompt_tx.clone();
             let state = state.clone();
-            let output_buf = output_buf.clone();
             let output_view = output_view.clone();
             let output_scroll = output_scroll.clone();
             let viewport_cols = viewport_cols.clone();
@@ -170,7 +169,6 @@ pub fn setup_menu(ctx: MenuContext) {
                         };
                         let ctx = restore::RestoreContext {
                             state: &state,
-                            output_buf: &output_buf,
                             output_view: &output_view,
                             output_scroll: &output_scroll,
                             window: &window_for_resume,
@@ -184,7 +182,7 @@ pub fn setup_menu(ctx: MenuContext) {
                     }
                     Err(e) => {
                         window::append_styled(
-                            &output_buf,
+                            &output_view,
                             &format!("\n✗ Failed to load session: {e}\n"),
                             "error",
                         );

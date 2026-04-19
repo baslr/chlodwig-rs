@@ -5,17 +5,11 @@
 //!   - `/resume` slash command
 //!   - Resume button in the sessions browser
 //!
-//! All three now go through `apply_restored_session_to_ui()`. The pure
+//! All three go through `apply_restored_session_to_ui()`. The pure
 //! AppState mutation lives in `AppState::apply_session_snapshot()` (in
 //! `app_state.rs`) and is unit-tested. This module owns the GTK widget
-//! plumbing (clear buffer, set title, render blocks, send to background
+//! plumbing (clear view, set title, render blocks, send to background
 //! task, update status line, scroll).
-//!
-//! Not unit-tested — needs live GTK widgets. Coverage comes from the
-//! `apply_session_snapshot` tests on the pure layer.
-//!
-//! NOTE: this module is included via `mod restore;` in `main.rs`, so it
-//! can refer to `crate::BackgroundCommand` directly.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -30,12 +24,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::{render, BackgroundCommand};
 
 /// Bag of widgets and channels needed to restore a session into the live UI.
-///
-/// Built once per `activate()` call and re-used by all three resume paths.
-/// Holds `Rc`-clones / references — cheap to construct, cheap to pass.
 pub struct RestoreContext<'a> {
     pub state: &'a Rc<RefCell<AppState>>,
-    pub output_buf: &'a gtk4::TextBuffer,
     pub output_view: &'a EmojiTextView,
     pub output_scroll: &'a gtk4::ScrolledWindow,
     pub window: &'a gtk4::ApplicationWindow,
@@ -49,24 +39,13 @@ pub struct RestoreContext<'a> {
 }
 
 /// Restore a `SessionSnapshot` into the live GTK UI.
-///
-/// Sequence (matches the previous inline copy-paste blocks 1:1):
-///   1. Wipe output buffer (incl. emoji overlays).
-///   2. Apply snapshot to `AppState` (clears + restores messages + table sorts + name).
-///   3. Update window title with the restored name.
-///   4. Recompute viewport columns (so tables fit current width).
-///   5. Render restored blocks into the buffer.
-///   6. Append a "✓ Resumed session (N messages, saved at …)" line.
-///   7. Send `RestoreMessages` to the background task so `ConversationState`
-///      sees the same messages.
-///   8. Update status line and scroll to bottom.
 pub fn apply_restored_session_to_ui(snapshot: SessionSnapshot, ctx: &RestoreContext<'_>) {
     let msg_count = snapshot.messages.len();
     let saved_at = snapshot.saved_at.clone();
     let restored_name = snapshot.name.clone();
 
-    // 1. Clear output buffer (incl. emoji overlays).
-    clear_output_buffer(ctx.output_buf);
+    // 1. Clear view (incl. emoji overlays).
+    clear_output_view(ctx.output_view);
 
     // 2. Apply snapshot to AppState.
     ctx.state.borrow_mut().apply_session_snapshot(&snapshot);
@@ -83,15 +62,15 @@ pub fn apply_restored_session_to_ui(snapshot: SessionSnapshot, ctx: &RestoreCont
 
     // 5. Render the restored blocks.
     render::render_all_blocks_into(
-        ctx.output_buf,
+        ctx.output_view,
         &ctx.state.borrow(),
         ctx.viewport_cols.get(),
-        false, // restore appends below the startup CWD header that's already in the buffer
+        false,
     );
 
     // 6. Confirmation line.
     window::append_styled(
-        ctx.output_buf,
+        ctx.output_view,
         &format!("✓ Resumed session ({msg_count} messages, saved at {saved_at})\n"),
         "system",
     );
@@ -106,13 +85,11 @@ pub fn apply_restored_session_to_ui(snapshot: SessionSnapshot, ctx: &RestoreCont
     window::scroll_to_bottom(ctx.output_scroll);
 }
 
-/// Wipe the output buffer and any emoji-overlay paintables registered on it.
-///
-/// Extracted from inline copy-paste; also re-usable from `/clear` and
-/// "New Conversation" handlers if we ever want to deduplicate those too.
-pub fn clear_output_buffer(buf: &gtk4::TextBuffer) {
+/// Wipe the view and any emoji-overlay entries registered on it.
+pub fn clear_output_view(view: &EmojiTextView) {
+    view.clear_overlays_from(0);
+    let buf = view.buffer();
     let mut s = buf.start_iter();
     let mut e = buf.end_iter();
-    chlodwig_gtk::emoji_overlay::clear_overlays_from(buf, 0);
     buf.delete(&mut s, &mut e);
 }

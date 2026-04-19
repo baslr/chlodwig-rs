@@ -53,7 +53,6 @@ fn wire_header_click_sort(
     session_started_at: &str,
 ) {
     let state_for_sort = app_state.clone();
-    let final_buf_for_sort = widgets.final_buffer.clone();
     let final_view_for_sort = widgets.final_view.clone();
     let viewport_cols_for_sort = viewport_cols.clone();
     let scroll_for_sort = widgets.output_scroll.clone();
@@ -88,7 +87,7 @@ fn wire_header_click_sort(
             if state.sort_table(global_idx, col_idx) {
                 let vw = viewport_cols_for_sort.get();
                 render::rerender_table_in_place(
-                    &final_buf_for_sort,
+                    &final_view_for_sort,
                     &state,
                     global_idx,
                     vw,

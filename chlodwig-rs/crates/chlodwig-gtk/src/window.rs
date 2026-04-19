@@ -486,6 +486,36 @@ pub(crate) fn insert_emoji_as_overlay(
     tag_names: &[&str],
     monospace: bool,
 ) {
+    match render_emoji_texture(emoji_str, monospace) {
+        Some((texture, scale, placeholder_len)) => {
+            view.insert_emoji(
+                texture.upcast(),
+                scale,
+                placeholder_len,
+                tag_names,
+            );
+        }
+        None => {
+            // Fallback: insert raw emoji text into the view's buffer.
+            let buffer = view.buffer();
+            let mut end_iter = buffer.end_iter();
+            buffer.insert(&mut end_iter, emoji_str);
+        }
+    }
+}
+
+/// Buffer-variant removed: every overlay insertion now goes through a view
+/// (per-instance registry, see Gotcha #44).
+
+/// Render the emoji bitmap and return `(texture, scale, placeholder_len)`.
+///
+/// Single source of truth for emoji rendering parameters. Returns `None` if
+/// the platform doesn't support bitmap emoji rendering (callers should
+/// fall back to inserting the raw text).
+fn render_emoji_texture(
+    emoji_str: &str,
+    monospace: bool,
+) -> Option<(gtk4::gdk::MemoryTexture, i32, i32)> {
     // Render emoji at a large fixed font size for maximum bitmap quality.
     // Apple Color Emoji (SBIX) has discrete bitmap strikes — larger size
     // selects a higher-resolution strike. At 40pt with scale=2, CoreText
@@ -501,7 +531,7 @@ pub(crate) fn insert_emoji_as_overlay(
     // for a wider slot that keeps the emoji roughly square.
     let placeholder_len: i32 = if monospace { 2 } else { 3 };
 
-    let result = EMOJI_CACHE.with(|cache| {
+    EMOJI_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
         cache.get_or_render(emoji_str, font_size, scale).map(|bmp| {
             let bytes = gtk4::glib::Bytes::from(&bmp.data);
@@ -512,26 +542,9 @@ pub(crate) fn insert_emoji_as_overlay(
                 &bytes,
                 (bmp.width as usize) * 4,
             );
-            texture
+            (texture, scale, placeholder_len)
         })
-    });
-
-    match result {
-        Some(texture) => {
-            view.insert_emoji(
-                texture.upcast(),
-                scale,
-                placeholder_len,
-                tag_names,
-            );
-        }
-        None => {
-            // Fallback: insert raw emoji text into the view's buffer.
-            let buffer = view.buffer();
-            let mut end_iter = buffer.end_iter();
-            buffer.insert(&mut end_iter, emoji_str);
-        }
-    }
+    })
 }
 
 /// A GdkPaintable wrapper that reports a custom intrinsic size.
