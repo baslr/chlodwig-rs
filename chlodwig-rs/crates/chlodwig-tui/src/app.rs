@@ -472,10 +472,32 @@ pub(crate) struct App {
     pub(crate) git_scroll: usize,                        // Scroll position in git tab
     /// Optional human-readable session name set via `/name`.
     pub(crate) session_name: Option<String>,
+    /// Working directory for this App instance.
+    ///
+    /// Stage 0.6 of MULTIWINDOW_TABS.md: the TUI no longer reads
+    /// `std::env::current_dir()` at random call sites. Every code path
+    /// that needs the cwd reads `self.cwd` instead. The CLI sets this
+    /// once at startup via `App::with_cwd(...)`.
+    pub(crate) cwd: std::path::PathBuf,
 }
 
 impl App {
+    /// Create an App rooted at the process working directory.
+    ///
+    /// Convenience for tests and the default CLI startup. Production code
+    /// that already has the resolved cwd should use [`App::with_cwd`].
     pub(crate) fn new(model: String) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+        Self::with_cwd(model, cwd)
+    }
+
+    /// Create an App rooted at an explicit working directory.
+    ///
+    /// Stage 0.6 of MULTIWINDOW_TABS.md: makes the TUI cwd-aware so it
+    /// behaves consistently with the per-tab GTK frontend. Multi-tab TUI
+    /// is not the goal — the goal is "no random env::current_dir() reads
+    /// hidden in App methods".
+    pub(crate) fn with_cwd(model: String, cwd: std::path::PathBuf) -> Self {
         let mut app = Self {
             display_blocks: Vec::new(),
             input: InputState::new(),
@@ -522,27 +544,29 @@ impl App {
             git_lines: Vec::new(),
             git_scroll: 0,
             session_name: None,
+            cwd,
         };
         app.refresh_git_branch();
         app
     }
 
-    /// Generate startup display blocks that show the current working directory.
+    /// Generate startup display blocks that show the App's working directory.
     /// Returns a `SystemMessage` with the project path label, followed by a
     /// `BashOutput` with an actual `pwd` execution so the user sees the full
     /// resolved path (symlinks, etc.).
-    pub(crate) fn startup_project_dir_blocks() -> Vec<DisplayBlock> {
-        let cwd = std::env::current_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "unknown".to_string());
+    pub(crate) fn startup_project_dir_blocks(&self) -> Vec<DisplayBlock> {
+        let cwd = self.cwd.display().to_string();
 
         let mut blocks = Vec::new();
 
         // 1. System message with directory label
         blocks.push(DisplayBlock::SystemMessage(format!("cwd: {cwd}")));
 
-        // 2. Execute `pwd` and show as BashOutput
+        // 2. Execute `pwd` and show as BashOutput. We pipe via std::process
+        //    rather than reading self.cwd so the user sees what `pwd` itself
+        //    would report from that directory (resolves symlinks, etc.).
         let pwd_output = std::process::Command::new("pwd")
+            .current_dir(&self.cwd)
             .output()
             .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
             .unwrap_or_else(|e| format!("Error: {e}"));

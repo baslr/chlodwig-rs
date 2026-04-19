@@ -556,7 +556,8 @@ pub async fn run_tui(
     initial_state: ConversationState,
     api_client: Arc<dyn ApiClient>,
 ) -> anyhow::Result<()> {
-    run_tui_with_permissions(initial_state, api_client, false, None, None).await
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"));
+    run_tui_with_permissions(initial_state, api_client, false, None, None, cwd).await
 }
 
 pub async fn run_tui_with_permissions(
@@ -565,6 +566,7 @@ pub async fn run_tui_with_permissions(
     bypass_permissions: bool,
     initial_constants: Option<chlodwig_core::ConstantsSnapshot>,
     initial_stats: Option<chlodwig_core::SessionStats>,
+    cwd: std::path::PathBuf,
 ) -> anyhow::Result<()> {
     // Install panic hook before entering raw mode — ensures terminal is
     // restored and crash report is written on any panic.
@@ -628,14 +630,14 @@ pub async fn run_tui_with_permissions(
     let model_name = initial_state.model.clone();
     let system_prompt_blocks = initial_state.system_prompt.clone();
     let initial_messages = initial_state.messages.clone();
-    let mut app = App::new(model_name);
+    let mut app = App::with_cwd(model_name, cwd);
 
     // Generate a unique session start timestamp — this is used as the
     // filename for the per-session save file (YYYY_MM_DD_HH_MM_SS.json).
     let session_started_at = chrono::Local::now().to_rfc3339();
 
     // Determine project name once at startup for notification identification
-    let project_name = crate::notification::project_dir_name();
+    let project_name = crate::notification::project_dir_name(&app.cwd);
 
     // Store system prompt blocks for the Sys-Prompt tab
     app.system_prompt_blocks = system_prompt_blocks;
@@ -657,7 +659,7 @@ pub async fn run_tui_with_permissions(
     } else {
         // Fresh session: show the current working directory and run `pwd`
         // so the user immediately sees where Chlodwig is running.
-        for block in App::startup_project_dir_blocks() {
+        for block in app.startup_project_dir_blocks() {
             app.display_blocks.push(block);
         }
         app.mark_dirty();

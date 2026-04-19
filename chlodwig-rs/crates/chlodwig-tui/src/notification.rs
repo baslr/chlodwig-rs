@@ -131,13 +131,15 @@ fn is_terminal_focused_macos() -> bool {
     }
 }
 
-/// Determine the project directory name from the current working directory.
+/// Determine the project directory name from the supplied working directory.
 /// Returns the last path component (e.g. "chlodwig-rs" for "/Users/me/projects/chlodwig-rs").
-/// Falls back to "unknown" if the CWD can't be determined.
-pub(crate) fn project_dir_name() -> String {
-    std::env::current_dir()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+/// Falls back to "unknown" if the path has no file name component.
+///
+/// Stage 0.6 of MULTIWINDOW_TABS.md: takes an explicit `cwd: &Path` so the
+/// TUI module is free of `std::env::current_dir()` reads.
+pub(crate) fn project_dir_name(cwd: &std::path::Path) -> String {
+    cwd.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "unknown".to_string())
 }
 
@@ -284,8 +286,16 @@ mod tests {
 
     #[test]
     fn test_project_dir_name_returns_non_empty() {
-        let name = project_dir_name();
+        let name = project_dir_name(std::path::Path::new("/Users/me/some-project"));
         assert!(!name.is_empty(), "project_dir_name() must not be empty");
+        assert_eq!(name, "some-project");
+    }
+
+    #[test]
+    fn test_project_dir_name_falls_back_to_unknown() {
+        // A bare "/" has no file_name component.
+        let name = project_dir_name(std::path::Path::new("/"));
+        assert_eq!(name, "unknown");
     }
 
     #[cfg(target_os = "macos")]

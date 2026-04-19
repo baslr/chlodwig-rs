@@ -149,8 +149,8 @@ fn test_notification_includes_project_name() {
         "Event loop must have a project_name variable for notification identification"
     );
     assert!(
-        src.contains("project_dir_name()"),
-        "Event loop must call project_dir_name() to determine the project name"
+        src.contains("project_dir_name(&app.cwd)"),
+        "Event loop must call project_dir_name(&app.cwd) to determine the project name"
     );
 }
 

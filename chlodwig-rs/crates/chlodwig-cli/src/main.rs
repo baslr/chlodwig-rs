@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
         max_tokens: config.max_tokens,
         tools,
         tool_context: ToolContext {
-            working_directory: cwd,
+            working_directory: cwd.clone(),
             timeout: Duration::from_secs(120),
         },
         stop_requested: chlodwig_core::new_stop_flag(),
@@ -178,7 +178,7 @@ async fn main() -> Result<()> {
     if let Some(ref prompt) = cli.print_mode {
         run_headless(state, &client, &cli, prompt).await
     } else {
-        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions, initial_constants, initial_stats).await
+        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions, initial_constants, initial_stats, cwd).await
     }
 }
 
