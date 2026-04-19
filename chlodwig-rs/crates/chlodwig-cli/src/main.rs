@@ -132,6 +132,7 @@ async fn main() -> Result<()> {
             working_directory: std::env::current_dir()?,
             timeout: Duration::from_secs(120),
         },
+        stop_requested: chlodwig_core::new_stop_flag(),
     };
 
     // Resume previous session if --resume flag is set

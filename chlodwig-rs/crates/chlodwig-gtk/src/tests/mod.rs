@@ -18,3 +18,4 @@ mod table_interactions_tests;
 mod submit_tests;
 mod event_dispatch_tests;
 mod session_stats_tests;
+mod stop_turn_tests;

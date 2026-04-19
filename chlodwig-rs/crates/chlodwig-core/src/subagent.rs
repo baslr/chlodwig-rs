@@ -161,6 +161,7 @@ impl Tool for SubAgentTool {
             max_tokens: SUBAGENT_MAX_TOKENS,
             tools,
             tool_context: ctx.clone(),
+            stop_requested: crate::new_stop_flag(),
         };
 
         // Create event channel for the sub-agent

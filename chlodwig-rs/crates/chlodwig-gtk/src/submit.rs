@@ -36,6 +36,8 @@ pub struct SubmitContext {
     pub viewport_cols: Rc<Cell<usize>>,
     pub window: ApplicationWindow,
     pub session_started_at: String,
+    /// Cooperative stop flag shared with the background conversation task.
+    pub stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Build the submit closure, wire it to the Send button, and bind
@@ -48,6 +50,7 @@ pub fn wire(ctx: SubmitContext) {
         viewport_cols,
         window,
         session_started_at,
+        stop_flag,
     } = ctx;
 
     let input_buf = widgets.input_buffer.clone();
@@ -61,6 +64,7 @@ pub fn wire(ctx: SubmitContext) {
     let viewport_cols_for_submit = viewport_cols.clone();
     let output_view_for_submit = widgets.output_view.clone();
     let window_for_submit = window.clone();
+    let stop_flag_for_submit = stop_flag.clone();
     let cwd_name_for_submit: Option<String> = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
@@ -304,6 +308,19 @@ pub fn wire(ctx: SubmitContext) {
                     window::scroll_to_bottom(&scroll_for_submit);
                     return;
                 }
+                Command::Stop => {
+                    // Cooperative interrupt: the flag is observed by run_turn
+                    // in the background task after the current SSE message_stop.
+                    stop_flag_for_submit
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    window::append_styled(
+                        &output_buf_for_submit,
+                        "\n⏸ Stop requested — will interrupt after the current message.\n",
+                        "system",
+                    );
+                    window::scroll_to_bottom(&scroll_for_submit);
+                    return;
+                }
             }
         }
 
@@ -349,4 +366,43 @@ pub fn wire(ctx: SubmitContext) {
         glib::Propagation::Proceed
     });
     widgets.input_view.add_controller(input_view_submit_ctrl);
+
+    // Double-Escape to request stop of the current turn loop.
+    //
+    // Esc is handled at the window level so it fires regardless of focus.
+    // The first press records `Instant::now()`; a second press within
+    // DOUBLE_ESC_WINDOW sets the cooperative stop flag (same effect as
+    // typing `/stop`). A lone Esc is a no-op (doesn't cancel input, etc.).
+    {
+        const DOUBLE_ESC_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
+        let last_esc: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
+        let stop_flag_for_esc = stop_flag.clone();
+        let output_buf_for_esc = widgets.output_buffer.clone();
+        let scroll_for_esc = widgets.output_scroll.clone();
+        let esc_ctrl = gtk4::EventControllerKey::new();
+        esc_ctrl.connect_key_pressed(move |_, key, _keycode, _modifiers| {
+            if key != gtk4::gdk::Key::Escape {
+                return glib::Propagation::Proceed;
+            }
+            let now = std::time::Instant::now();
+            let is_double = last_esc
+                .get()
+                .map(|t| now.duration_since(t) <= DOUBLE_ESC_WINDOW)
+                .unwrap_or(false);
+            if is_double {
+                stop_flag_for_esc.store(true, std::sync::atomic::Ordering::SeqCst);
+                window::append_styled(
+                    &output_buf_for_esc,
+                    "\n⏸ Stop requested (Esc Esc) — will interrupt after the current message.\n",
+                    "system",
+                );
+                window::scroll_to_bottom(&scroll_for_esc);
+                last_esc.set(None);
+            } else {
+                last_esc.set(Some(now));
+            }
+            glib::Propagation::Proceed
+        });
+        window.add_controller(esc_ctrl);
+    }
 }

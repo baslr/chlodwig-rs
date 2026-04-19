@@ -662,6 +662,7 @@ mod tests {
             max_tokens: 1024,
             tools: vec![],
             tool_context: ToolContext::default(),
+            stop_requested: crate::new_stop_flag(),
         }
     }
 

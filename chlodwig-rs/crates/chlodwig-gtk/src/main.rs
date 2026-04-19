@@ -151,6 +151,11 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     // Channel: commands from GTK → background task
     let (prompt_tx, mut prompt_rx) = mpsc::unbounded_channel::<BackgroundCommand>();
 
+    // Shared cooperative stop flag. UI code sets this via `/stop`, bare `stop`,
+    // or double-Escape; `run_turn` in the background task observes it after the
+    // current SSE message_stop and cancels pending tool_uses.
+    let stop_flag: Arc<std::sync::atomic::AtomicBool> = chlodwig_core::new_stop_flag();
+
     // --- Native macOS menu bar ---
     menu::setup_menu(menu::MenuContext {
         app: app.clone(),
@@ -218,6 +223,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         viewport_cols: viewport_cols.clone(),
         window: window.clone(),
         session_started_at: session_started_at.clone(),
+        stop_flag: stop_flag.clone(),
     });
 
     // Char offset in the TextBuffer where the current streaming Markdown starts.
@@ -313,6 +319,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     // --- Start background conversation loop ---
     let event_tx_bg = event_tx.clone();
     let bg_config = resolved_config; // move into background thread
+    let stop_flag_bg = stop_flag.clone();
 
     // Spawn the background task that runs the conversation loop.
     // The Tokio runtime is created inside the thread (not shared with GTK).
@@ -344,6 +351,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                     working_directory: std::env::current_dir().unwrap_or_default(),
                     timeout: Duration::from_secs(120),
                 },
+                stop_requested: stop_flag_bg.clone(),
             };
 
             let permission = chlodwig_core::AutoApprovePrompter;

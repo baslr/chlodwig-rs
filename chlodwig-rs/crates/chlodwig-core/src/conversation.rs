@@ -236,6 +236,31 @@ pub struct ConversationState {
     pub max_tokens: u32,
     pub tools: Vec<Box<dyn Tool>>,
     pub tool_context: ToolContext,
+    /// Cooperative interrupt flag.
+    ///
+    /// When set to `true` during a `run_turn`, the loop will:
+    /// 1. Let the current SSE stream finish naturally (no mid-stream abort).
+    /// 2. Synthesize "Tool execution cancelled by user." results for any
+    ///    tool_use blocks in the just-completed assistant message (required
+    ///    by the API — every tool_use must have a matching tool_result).
+    /// 3. Append a user text block with [`INTERRUPT_MESSAGE`].
+    /// 4. Run ONE final API round (no new tools executed) so the model can
+    ///    acknowledge the interruption, then return.
+    ///
+    /// UI code clones this `Arc` and calls `.store(true, Ordering::SeqCst)`
+    /// to request a stop (e.g. `/stop` command or double-Escape in the TUI).
+    /// The flag is automatically reset to `false` at the start of each
+    /// `run_turn` invocation.
+    pub stop_requested: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// User-facing message appended to the conversation when a turn loop is
+/// interrupted via [`ConversationState::stop_requested`].
+pub const INTERRUPT_MESSAGE: &str = "User intentionally interrupted the turn loop.";
+
+/// Construct a fresh stop flag (`Arc<AtomicBool>` initially `false`).
+pub fn new_stop_flag() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))
 }
 
 // ── Conversation Loop Error ────────────────────────────────────────────
@@ -546,6 +571,12 @@ pub async fn run_turn(
     permission: &dyn PermissionPrompter,
     event_tx: &mpsc::UnboundedSender<ConversationEvent>,
 ) -> Result<(), ConversationLoopError> {
+    // Reset the stop flag at the start of every turn so a previous
+    // interrupt doesn't silently cancel the next turn the user submits.
+    state
+        .stop_requested
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+
     loop {
         // 1. Build request from current state
         let request = build_request(state);
@@ -813,8 +844,62 @@ pub async fn run_turn(
             return Ok(());
         }
 
+        // 4b. Stop requested? Cancel pending tools, append interrupt message,
+        // do ONE follow-up API round (no tools), then return.
+        if state
+            .stop_requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            tracing::info!(
+                pending_tools = tool_uses.len(),
+                "stop requested — cancelling tool_uses and injecting interrupt message"
+            );
+
+            // Synthesize a cancelled ToolResult for every pending tool_use.
+            // The API requires that every tool_use block have a matching
+            // tool_result block in the next user message.
+            let mut cancelled_results: Vec<ContentBlock> = Vec::with_capacity(tool_uses.len());
+            for pending in &tool_uses {
+                let output = ToolResultContent::Text(
+                    "Tool execution cancelled by user.".to_string(),
+                );
+                let _ = event_tx.send(ConversationEvent::ToolResult {
+                    id: pending.id.clone(),
+                    output: output.clone(),
+                    is_error: true,
+                });
+                cancelled_results.push(ContentBlock::ToolResult {
+                    tool_use_id: pending.id.clone(),
+                    content: output,
+                    is_error: Some(true),
+                });
+            }
+
+            // Combined user message: tool_results then an interrupt text block.
+            cancelled_results.push(ContentBlock::Text {
+                text: INTERRUPT_MESSAGE.to_string(),
+            });
+            state.messages.push(Message {
+                role: Role::User,
+                content: cancelled_results,
+            });
+
+            // Clear the flag so the follow-up turn proceeds normally.
+            state
+                .stop_requested
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+
+            // Recurse for one final API round so the model can acknowledge.
+            return Box::pin(run_turn(state, api_client, permission, event_tx)).await;
+        }
+
         // 5. Execute tools
+        // We check `stop_requested` BEFORE every individual tool execution
+        // (sequential) and after each concurrent batch. As soon as the flag
+        // is set, all remaining tool_uses get a synthetic cancelled
+        // tool_result and we inject the interrupt message + recurse.
         let mut tool_results: Vec<ContentBlock> = Vec::new();
+        let mut interrupted = false;
 
         // Partition into concurrent and sequential
         let (concurrent, sequential): (Vec<_>, Vec<_>) =
@@ -827,29 +912,104 @@ pub async fn run_turn(
                     .unwrap_or(false)
             });
 
-        // Run concurrent tools in parallel
+        // Concurrent tools: cannot be cancelled mid-batch, but if the flag was
+        // set BEFORE the batch even started, skip the entire batch.
+        let mut remaining_concurrent: Vec<PendingToolUse> = Vec::new();
         if !concurrent.is_empty() {
-            let results = futures::future::join_all(concurrent.into_iter().map(|pending| {
-                execute_tool_with_permission(pending, &state.tools, &state.tool_context, permission, event_tx)
-            }))
-            .await;
-
-            for result in results {
-                tool_results.push(result?);
+            if state
+                .stop_requested
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                remaining_concurrent = concurrent;
+                interrupted = true;
+            } else {
+                let results = futures::future::join_all(concurrent.into_iter().map(|pending| {
+                    execute_tool_with_permission(
+                        pending,
+                        &state.tools,
+                        &state.tool_context,
+                        permission,
+                        event_tx,
+                    )
+                }))
+                .await;
+                for result in results {
+                    tool_results.push(result?);
+                }
             }
         }
 
-        // Run sequential tools one by one
-        for pending in sequential {
-            let result = execute_tool_with_permission(
-                pending,
-                &state.tools,
-                &state.tool_context,
-                permission,
-                event_tx,
-            )
-            .await?;
-            tool_results.push(result);
+        // Sequential tools: check flag before EACH execution. As soon as it's
+        // set, the rest of the queue is moved into `remaining_sequential` and
+        // never executed.
+        let mut remaining_sequential: Vec<PendingToolUse> = Vec::new();
+        let mut sequential_iter = sequential.into_iter();
+        if !interrupted {
+            for pending in sequential_iter.by_ref() {
+                if state
+                    .stop_requested
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    // Push back and break — this tool and all following ones
+                    // get cancelled.
+                    remaining_sequential.push(pending);
+                    interrupted = true;
+                    break;
+                }
+                let result = execute_tool_with_permission(
+                    pending,
+                    &state.tools,
+                    &state.tool_context,
+                    permission,
+                    event_tx,
+                )
+                .await?;
+                tool_results.push(result);
+            }
+        }
+        // Drain the rest into remaining_sequential (after break, or if
+        // concurrent batch already triggered interrupt).
+        remaining_sequential.extend(sequential_iter);
+
+        if interrupted {
+            tracing::info!(
+                executed = tool_results.len(),
+                cancelled = remaining_concurrent.len() + remaining_sequential.len(),
+                "stop requested during tool execution — cancelling remaining tools"
+            );
+
+            // Synthetic cancelled tool_results for every skipped tool_use.
+            for pending in remaining_concurrent.iter().chain(remaining_sequential.iter()) {
+                let output = ToolResultContent::Text(
+                    "Tool execution cancelled by user.".to_string(),
+                );
+                let _ = event_tx.send(ConversationEvent::ToolResult {
+                    id: pending.id.clone(),
+                    output: output.clone(),
+                    is_error: true,
+                });
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: pending.id.clone(),
+                    content: output,
+                    is_error: Some(true),
+                });
+            }
+
+            // Append the interrupt text block so the model knows why it
+            // was stopped.
+            tool_results.push(ContentBlock::Text {
+                text: INTERRUPT_MESSAGE.to_string(),
+            });
+            state.messages.push(Message {
+                role: Role::User,
+                content: tool_results,
+            });
+
+            // Clear the flag and recurse for one final acknowledgement turn.
+            state
+                .stop_requested
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            return Box::pin(run_turn(state, api_client, permission, event_tx)).await;
         }
 
         // 6. Push user message with tool results → loop back
@@ -1049,6 +1209,7 @@ mod tests {
             max_tokens: 1024,
             tools: vec![Box::new(EchoTool)],
             tool_context: ToolContext::default(),
+            stop_requested: new_stop_flag(),
         }
     }
 
@@ -1208,6 +1369,689 @@ mod tests {
         assert_eq!(state.messages[2].role, Role::User);
         assert_eq!(state.messages[3].role, Role::Assistant);
         assert_eq!(state.messages[3].text(), "The echo said: hello");
+    }
+
+    // ── Stop / interrupt tests ─────────────────────────────────────
+
+    /// Tool that records how many times `call()` was invoked.
+    /// Used to verify that stop_requested truly prevents tool execution.
+    struct CountingTool {
+        counter: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for CountingTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "Echo".into(),
+                description: "counts calls".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<ToolOutput, ToolError> {
+            self.counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(ToolOutput {
+                content: ToolResultContent::Text("should not appear".into()),
+                is_error: false,
+            })
+        }
+        fn is_concurrent(&self) -> bool {
+            false
+        }
+    }
+
+    fn tool_use_round() -> Vec<SseEvent> {
+        vec![
+            SseEvent::MessageStart {
+                message: MessageStartInfo {
+                    id: "msg_1".into(),
+                    model: "test".into(),
+                    usage: None,
+                },
+            },
+            SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStartInfo::ToolUse {
+                    id: "toolu_1".into(),
+                    name: "Echo".into(),
+                },
+            },
+            SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: Delta::InputJsonDelta {
+                    partial_json: r#"{"text":"hi"}"#.into(),
+                },
+            },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta {
+                delta: MessageDeltaInfo {
+                    stop_reason: Some("tool_use".into()),
+                },
+                usage: None,
+            },
+            SseEvent::MessageStop,
+        ]
+    }
+
+    fn text_round(text: &str) -> Vec<SseEvent> {
+        vec![
+            SseEvent::MessageStart {
+                message: MessageStartInfo {
+                    id: "msg_2".into(),
+                    model: "test".into(),
+                    usage: None,
+                },
+            },
+            SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStartInfo::Text { text: None },
+            },
+            SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: Delta::TextDelta {
+                    text: text.into(),
+                },
+            },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta {
+                delta: MessageDeltaInfo {
+                    stop_reason: Some("end_turn".into()),
+                },
+                usage: None,
+            },
+            SseEvent::MessageStop,
+        ]
+    }
+
+    #[tokio::test]
+    async fn test_stop_requested_cancels_pending_tools_and_injects_interrupt_message() {
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![
+                tool_use_round(),
+                text_round("Understood, I've stopped."),
+            ]),
+        };
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let stop_flag = new_stop_flag();
+        // Pre-set the stop flag: the very first check after stream end will fire.
+        stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        // But run_turn resets stop_requested at start — so we need to set it
+        // DURING the run. We use a custom test: inject stop via a tool
+        // inside the pre_turn flag. Instead, override run_turn's reset by
+        // setting the flag AFTER entry. Simplest: use a custom stop_flag
+        // that gets set by the mock API during streaming.
+        // The MockApiClient yields events synchronously via futures::stream::iter,
+        // so there's no await point for the test to set the flag mid-stream.
+        // Workaround: use a wrapper MockApiClient that flips the flag on
+        // the first stream_message() call.
+
+        struct StopSettingClient {
+            inner: MockApiClient,
+            flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+        #[async_trait::async_trait]
+        impl ApiClient for StopSettingClient {
+            async fn stream_message(
+                &self,
+                request: ApiRequest,
+            ) -> Result<SseStream, ApiError> {
+                // After the first request returns its stream, set the flag so
+                // run_turn's post-stream check sees it.
+                let stream = self.inner.stream_message(request).await?;
+                self.flag
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(stream)
+            }
+        }
+
+        let client = StopSettingClient {
+            inner: mock,
+            flag: stop_flag.clone(),
+        };
+
+        let mut state = ConversationState {
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "do a thing".into(),
+                }],
+            }],
+            model: "test".into(),
+            system_prompt: vec![SystemBlock::text("sys")],
+            max_tokens: 1024,
+            tools: vec![Box::new(CountingTool {
+                counter: counter.clone(),
+            })],
+            tool_context: ToolContext::default(),
+            stop_requested: stop_flag.clone(),
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        run_turn(&mut state, &client, &AutoApprovePrompter, &tx)
+            .await
+            .unwrap();
+
+        // The tool must NEVER have been called.
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "CountingTool must not be invoked when stop was requested"
+        );
+
+        // The message history must contain the interrupt text.
+        let all_text: String = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all_text.contains(INTERRUPT_MESSAGE),
+            "INTERRUPT_MESSAGE must appear in the conversation history, got:\n{all_text}"
+        );
+
+        // A cancelled ToolResult event must have been emitted.
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                ConversationEvent::ToolResult { is_error: true, .. }
+            )),
+            "expected a cancelled ToolResult event with is_error=true"
+        );
+
+        // The follow-up text ("Understood...") must also appear.
+        assert!(
+            all_text.contains("Understood"),
+            "follow-up assistant text missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stop_flag_reset_at_start_of_run_turn() {
+        // If the flag was left set from a previous turn, run_turn should
+        // clear it immediately so it doesn't spuriously interrupt the new turn.
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![text_round("done")]),
+        };
+        let stop_flag = new_stop_flag();
+        stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let mut state = ConversationState {
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "hi".into(),
+                }],
+            }],
+            model: "test".into(),
+            system_prompt: vec![SystemBlock::text("sys")],
+            max_tokens: 1024,
+            tools: vec![],
+            tool_context: ToolContext::default(),
+            stop_requested: stop_flag.clone(),
+        };
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        run_turn(&mut state, &mock, &AutoApprovePrompter, &tx)
+            .await
+            .unwrap();
+
+        assert!(
+            !stop_flag.load(std::sync::atomic::Ordering::SeqCst),
+            "stop_requested must be reset to false at the start of run_turn"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stop_without_pending_tools_is_noop() {
+        // If the stream ends with no tool_uses, the turn completes normally —
+        // the stop flag has nothing to interrupt.
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![text_round("all done")]),
+        };
+        let stop_flag = new_stop_flag();
+
+        struct FlagSetter {
+            inner: MockApiClient,
+            flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+        #[async_trait::async_trait]
+        impl ApiClient for FlagSetter {
+            async fn stream_message(
+                &self,
+                request: ApiRequest,
+            ) -> Result<SseStream, ApiError> {
+                let stream = self.inner.stream_message(request).await?;
+                self.flag
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(stream)
+            }
+        }
+
+        let client = FlagSetter {
+            inner: mock,
+            flag: stop_flag.clone(),
+        };
+
+        let mut state = ConversationState {
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "hi".into(),
+                }],
+            }],
+            model: "test".into(),
+            system_prompt: vec![SystemBlock::text("sys")],
+            max_tokens: 1024,
+            tools: vec![],
+            tool_context: ToolContext::default(),
+            stop_requested: stop_flag.clone(),
+        };
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        run_turn(&mut state, &client, &AutoApprovePrompter, &tx)
+            .await
+            .unwrap();
+
+        // No INTERRUPT_MESSAGE — it's only injected when there are pending tool_uses.
+        let all_text: String = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !all_text.contains(INTERRUPT_MESSAGE),
+            "INTERRUPT_MESSAGE must NOT appear when there were no pending tool_uses"
+        );
+        assert!(all_text.contains("all done"));
+    }
+
+    #[tokio::test]
+    async fn test_stop_preserves_tool_use_tool_result_pairing() {
+        // The Anthropic API rejects conversations where a tool_use block
+        // doesn't have a matching tool_result in the next user message.
+        // Verify that interrupt synthesis produces the required pairing.
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![
+                tool_use_round(),
+                text_round("ok"),
+            ]),
+        };
+        let stop_flag = new_stop_flag();
+
+        struct FlagSetter {
+            inner: MockApiClient,
+            flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        }
+        #[async_trait::async_trait]
+        impl ApiClient for FlagSetter {
+            async fn stream_message(
+                &self,
+                request: ApiRequest,
+            ) -> Result<SseStream, ApiError> {
+                let stream = self.inner.stream_message(request).await?;
+                self.flag
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(stream)
+            }
+        }
+        let client = FlagSetter {
+            inner: mock,
+            flag: stop_flag.clone(),
+        };
+
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let mut state = ConversationState {
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "do it".into(),
+                }],
+            }],
+            model: "test".into(),
+            system_prompt: vec![SystemBlock::text("sys")],
+            max_tokens: 1024,
+            tools: vec![Box::new(CountingTool { counter })],
+            tool_context: ToolContext::default(),
+            stop_requested: stop_flag.clone(),
+        };
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        run_turn(&mut state, &client, &AutoApprovePrompter, &tx)
+            .await
+            .unwrap();
+
+        // Find the assistant message with the tool_use block.
+        let tool_use_ids: Vec<String> = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_use_ids.len(), 1);
+
+        // Every tool_use id must have a matching tool_result id in the history.
+        let tool_result_ids: Vec<String> = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            })
+            .collect();
+        for id in &tool_use_ids {
+            assert!(
+                tool_result_ids.contains(id),
+                "tool_use id {id} must have a matching tool_result"
+            );
+        }
+    }
+
+    /// A tool that records every call AND sets the stop flag during the FIRST call.
+    /// Models the real-world scenario: the user presses Esc-Esc while tool 1 of N
+    /// is running. Tools 2..N must NOT execute.
+    struct StopOnFirstCallTool {
+        counter: std::sync::Arc<std::sync::atomic::AtomicU32>,
+        flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    #[async_trait::async_trait]
+    impl Tool for StopOnFirstCallTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "Echo".into(),
+                description: "stops on first call".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }
+        }
+        async fn call(
+            &self,
+            _input: serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<ToolOutput, ToolError> {
+            let n = self
+                .counter
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                // Simulate: while tool 1 is running, user presses Esc-Esc.
+                self.flag
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(ToolOutput {
+                content: ToolResultContent::Text(format!("call #{n}")),
+                is_error: false,
+            })
+        }
+        fn is_concurrent(&self) -> bool {
+            false
+        }
+    }
+
+    fn three_tool_use_round() -> Vec<SseEvent> {
+        let mut events = vec![SseEvent::MessageStart {
+            message: MessageStartInfo {
+                id: "msg_3tu".into(),
+                model: "test".into(),
+                usage: None,
+            },
+        }];
+        for i in 0..3u32 {
+            events.push(SseEvent::ContentBlockStart {
+                index: i,
+                content_block: ContentBlockStartInfo::ToolUse {
+                    id: format!("toolu_{i}"),
+                    name: "Echo".into(),
+                },
+            });
+            events.push(SseEvent::ContentBlockDelta {
+                index: i,
+                delta: Delta::InputJsonDelta {
+                    partial_json: format!(r#"{{"n":{i}}}"#),
+                },
+            });
+            events.push(SseEvent::ContentBlockStop { index: i });
+        }
+        events.push(SseEvent::MessageDelta {
+            delta: MessageDeltaInfo {
+                stop_reason: Some("tool_use".into()),
+            },
+            usage: None,
+        });
+        events.push(SseEvent::MessageStop);
+        events
+    }
+
+    #[tokio::test]
+    async fn test_stop_during_first_sequential_tool_skips_remaining_tools() {
+        // Scenario the user explicitly demanded:
+        // 3 sequential tool_uses are pending. Tool 1 starts, user presses Esc-Esc
+        // (modeled by tool 1 setting the stop_flag during its call). Tools 2 and 3
+        // MUST NOT execute. The conversation history MUST still satisfy the
+        // Anthropic API's 1:1 tool_use ↔ tool_result pairing requirement, and
+        // the cancelled tools get synthetic "Tool execution cancelled by user."
+        // tool_results.
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![
+                three_tool_use_round(),
+                text_round("Stopped as requested."),
+            ]),
+        };
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let stop_flag = new_stop_flag();
+
+        let mut state = ConversationState {
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "do three things".into(),
+                }],
+            }],
+            model: "test".into(),
+            system_prompt: vec![SystemBlock::text("sys")],
+            max_tokens: 1024,
+            tools: vec![Box::new(StopOnFirstCallTool {
+                counter: counter.clone(),
+                flag: stop_flag.clone(),
+            })],
+            tool_context: ToolContext::default(),
+            stop_requested: stop_flag.clone(),
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        run_turn(&mut state, &mock, &AutoApprovePrompter, &tx)
+            .await
+            .unwrap();
+
+        // EXACTLY one tool call — the second and third must have been skipped.
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the first sequential tool may run; remaining tools must be cancelled"
+        );
+
+        // All three tool_use IDs must still have matching tool_results
+        // (1 real + 2 synthetic cancelled).
+        let tool_use_ids: Vec<String> = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tool_use_ids.len(), 3, "expected 3 tool_use blocks");
+
+        let tool_results: Vec<(&String, &ToolResultContent, Option<bool>)> = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::ToolResult {
+                    tool_use_id,
+                    content,
+                    is_error,
+                } => Some((tool_use_id, content, *is_error)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            tool_results.len(),
+            3,
+            "expected 3 tool_result blocks (1:1 pairing)"
+        );
+        for id in &tool_use_ids {
+            assert!(
+                tool_results.iter().any(|(rid, _, _)| *rid == id),
+                "tool_use id {id} must have a matching tool_result"
+            );
+        }
+
+        // Exactly 2 of the 3 tool_results must be cancelled (is_error=true with
+        // the cancellation message).
+        let cancelled: Vec<_> = tool_results
+            .iter()
+            .filter(|(_, content, is_err)| {
+                matches!(is_err, Some(true))
+                    && matches!(
+                        content,
+                        ToolResultContent::Text(t) if t.contains("cancelled by user")
+                    )
+            })
+            .collect();
+        assert_eq!(
+            cancelled.len(),
+            2,
+            "exactly 2 tool_results must be cancellation markers (the 2 skipped tools)"
+        );
+
+        // The interrupt message must appear in history.
+        let all_text: String = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            all_text.contains(INTERRUPT_MESSAGE),
+            "INTERRUPT_MESSAGE must appear after a mid-batch stop"
+        );
+        assert!(
+            all_text.contains("Stopped as requested."),
+            "the follow-up assistant turn must run after the interrupt"
+        );
+
+        // Cancelled-ToolResult events must have been emitted on the channel
+        // for the 2 skipped tools (so the UI can render them).
+        let events: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+        let cancelled_events = events
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    ConversationEvent::ToolResult {
+                        is_error: true,
+                        output: ToolResultContent::Text(t),
+                        ..
+                    } if t.contains("cancelled by user")
+                )
+            })
+            .count();
+        assert_eq!(
+            cancelled_events, 2,
+            "expected 2 cancelled-ToolResult events for the 2 skipped tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stop_after_all_tools_completed_still_injects_interrupt_for_next_round() {
+        // Edge case: the stop flag is set *after* the last sequential tool finishes
+        // (e.g. user pressed Esc-Esc during the LAST tool). In that case all tools
+        // have legitimately run; no synthetic cancellation is needed. The flag will
+        // be picked up at the top of the NEXT loop iteration's tool_uses check
+        // (existing behavior — covered by test_stop_requested_cancels_pending...).
+        // This test just verifies that "stop after the only tool finished" doesn't
+        // double-emit cancellations or corrupt history.
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![
+                tool_use_round(),
+                text_round("done"),
+            ]),
+        };
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let stop_flag = new_stop_flag();
+
+        let mut state = ConversationState {
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "one thing".into(),
+                }],
+            }],
+            model: "test".into(),
+            system_prompt: vec![SystemBlock::text("sys")],
+            max_tokens: 1024,
+            tools: vec![Box::new(StopOnFirstCallTool {
+                counter: counter.clone(),
+                flag: stop_flag.clone(),
+            })],
+            tool_context: ToolContext::default(),
+            stop_requested: stop_flag.clone(),
+        };
+        let (tx, _rx) = mpsc::unbounded_channel();
+
+        run_turn(&mut state, &mock, &AutoApprovePrompter, &tx)
+            .await
+            .unwrap();
+
+        // The single tool ran exactly once.
+        assert_eq!(counter.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        // tool_use ↔ tool_result pairing is intact.
+        let tool_use_ids: Vec<String> = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::ToolUse { id, .. } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let tool_result_ids: Vec<String> = state
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|c| match c {
+                ContentBlock::ToolResult { tool_use_id, .. } => Some(tool_use_id.clone()),
+                _ => None,
+            })
+            .collect();
+        for id in &tool_use_ids {
+            assert!(tool_result_ids.contains(id));
+        }
     }
 
     #[tokio::test]
@@ -1918,6 +2762,7 @@ mod tests {
                 working_directory: std::path::PathBuf::from("/tmp"),
                 timeout: std::time::Duration::from_secs(30),
             },
+            stop_requested: new_stop_flag(),
         };
 
         compact_conversation(&mut state, &client, &tx, None)
@@ -1976,6 +2821,7 @@ mod tests {
                 working_directory: std::path::PathBuf::from("/tmp"),
                 timeout: std::time::Duration::from_secs(30),
             },
+            stop_requested: new_stop_flag(),
         };
 
         compact_conversation(&mut state, &client, &tx, None)
@@ -2060,6 +2906,7 @@ mod tests {
                 working_directory: std::path::PathBuf::from("/tmp"),
                 timeout: std::time::Duration::from_secs(30),
             },
+            stop_requested: new_stop_flag(),
         };
 
         compact_conversation(
@@ -2550,6 +3397,7 @@ mod tests {
                 working_directory: std::path::PathBuf::new(),
                 timeout: std::time::Duration::from_secs(1),
             },
+            stop_requested: crate::new_stop_flag(),
         };
         let (tx, _rx) = mpsc::unbounded_channel();
         let mock = MockApiClient { responses: std::sync::Mutex::new(vec![]) };
@@ -2578,6 +3426,7 @@ mod tests {
                 working_directory: std::path::PathBuf::new(),
                 timeout: std::time::Duration::from_secs(1),
             },
+            stop_requested: crate::new_stop_flag(),
         };
         let (tx, mut rx) = mpsc::unbounded_channel();
         // Mock returns a summary response for the compaction call

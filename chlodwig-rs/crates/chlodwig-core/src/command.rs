@@ -22,6 +22,10 @@ pub enum Command {
     Resume(Option<String>),
     /// `/save` — manually save the current session.
     Save,
+    /// `/stop` or bare `stop` — interrupt the agentic turn loop.
+    /// After the current SSE message_stop, sends a user message
+    /// "User intentionally interrupted the turn loop." to the model.
+    Stop,
     /// `/name <name>` — set a human-readable name for this session.
     /// Empty name (`/name` with no argument) clears the name.
     Name(Option<String>),
@@ -99,6 +103,7 @@ impl Command {
             "exit" | "quit" | "/exit" | "/quit" => Some(Command::Quit),
             "/sessions" => Some(Command::Sessions),
             "/save" => Some(Command::Save),
+            "/stop" | "stop" => Some(Command::Stop),
             _ => None,
         }
     }
@@ -117,6 +122,7 @@ pub const COMMANDS_HELP: &str = "\
   /name <name>          Set a human-readable name for this session
   /compact [instr]      Compact conversation history
   /clear, /reset, /new  Clear conversation, start fresh
+  /stop, stop           Interrupt the agentic turn loop (or press Esc twice)
   ! <cmd>               Execute shell command
   exit, quit            Exit";
 
@@ -135,6 +141,7 @@ pub fn help_markdown_commands() -> String {
 | `/name <name>` | Set a human-readable name for this session |
 | `/compact [instr]` | Compact conversation history |
 | `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
+| `/stop`, `stop` | Interrupt the agentic turn loop (or press Esc twice) |
 | `! <cmd>` | Execute shell command |
 | `exit`, `quit` | Exit |"
         .to_string()
@@ -299,6 +306,27 @@ mod tests {
     #[test]
     fn test_parse_save() {
         assert_eq!(Command::parse("/save"), Some(Command::Save));
+    }
+
+    #[test]
+    fn test_parse_stop_slash_form() {
+        assert_eq!(Command::parse("/stop"), Some(Command::Stop));
+        assert_eq!(Command::parse("  /stop  "), Some(Command::Stop));
+    }
+
+    #[test]
+    fn test_parse_stop_bare_form() {
+        assert_eq!(Command::parse("stop"), Some(Command::Stop));
+        assert_eq!(Command::parse("Stop"), Some(Command::Stop));
+        assert_eq!(Command::parse("STOP"), Some(Command::Stop));
+        assert_eq!(Command::parse("  stop  "), Some(Command::Stop));
+    }
+
+    #[test]
+    fn test_parse_stop_does_not_match_substrings() {
+        // "stop the world" is a real prompt, not the /stop command.
+        assert_eq!(Command::parse("stop the world"), None);
+        assert_eq!(Command::parse("stopwatch"), None);
     }
 
     #[test]

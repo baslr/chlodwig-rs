@@ -683,6 +683,14 @@ pub async fn run_tui_with_permissions(
         chlodwig_tools::UserQuestionTool::new(uq_tx),
     ));
 
+    // Stop flag: cloned from `initial_state.stop_requested` BEFORE moving the
+    // state into the Arc<Mutex<_>>. UI code (e.g. /stop command, double-Escape)
+    // triggers a stop via `stop_flag.store(true, SeqCst)` without needing to
+    // acquire the Mutex (which is held by the conversation task while a turn
+    // is running).
+    let stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool> =
+        initial_state.stop_requested.clone();
+
     // Shared state in Arc for the background task
     let state = std::sync::Arc::new(tokio::sync::Mutex::new(initial_state));
     let permission_prompter: std::sync::Arc<dyn PermissionPrompter> = if bypass_permissions {
@@ -695,6 +703,12 @@ pub async fn run_tui_with_permissions(
     let mut redraw_count: u64 = 0;
     let mut last_resize = Instant::now();
     let mut conversation_handle: Option<tokio::task::JoinHandle<()>> = None;
+
+    // Double-Escape stop trigger: if Escape is pressed twice within this
+    // window while a turn is running, set the stop flag. First press
+    // records the timestamp; second press within the window triggers stop.
+    let mut last_esc_at: Option<Instant> = None;
+    const DOUBLE_ESC_WINDOW: Duration = Duration::from_millis(500);
 
     // Track tool_use_id → (tool_name, input) so ToolResult can identify Read calls
     let mut tool_id_to_info: std::collections::HashMap<String, (String, serde_json::Value)> =
@@ -1053,6 +1067,25 @@ pub async fn run_tui_with_permissions(
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
                                 }
+                                Command::Stop => {
+                            // Set the cooperative stop flag. The running
+                            // turn (if any) will notice after the current
+                            // SSE message_stop, cancel any pending tools,
+                            // and inject the INTERRUPT_MESSAGE.
+                            if app.is_loading {
+                                stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                                app.display_blocks.push(DisplayBlock::SystemMessage(
+                                    "⏸ Stop requested — will interrupt after the current message.".into(),
+                                ));
+                            } else {
+                                app.display_blocks.push(DisplayBlock::SystemMessage(
+                                    "Nothing to stop — no turn is running.".into(),
+                                ));
+                            }
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
+                            break; // exit inner drain loop
+                                }
                                 Command::Compact(custom_instructions) => {
                             app.is_loading = true;
                             app.scroll_to_bottom();
@@ -1239,6 +1272,25 @@ pub async fn run_tui_with_permissions(
                         if app.constants.apply_edit() {
                             // Value changed — persist to constants.json
                             trigger_constants_save(app.constants.to_snapshot());
+                        }
+                    }
+                    // Double-Escape while a turn is running: request stop.
+                    // Must come BEFORE any tab-specific Esc handler so it
+                    // fires regardless of which tab is active.
+                    KeyCode::Esc if app.is_loading => {
+                        let now = Instant::now();
+                        let is_double = last_esc_at
+                            .map(|t| now.duration_since(t) <= DOUBLE_ESC_WINDOW)
+                            .unwrap_or(false);
+                        if is_double {
+                            stop_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                            app.display_blocks.push(DisplayBlock::SystemMessage(
+                                "⏸ Stop requested (Esc Esc) — will interrupt after the current message.".into(),
+                            ));
+                            app.mark_dirty();
+                            last_esc_at = None;
+                        } else {
+                            last_esc_at = Some(now);
                         }
                     }
                     KeyCode::Esc if app.active_tab == 3 && app.constants.is_editing => {
