@@ -89,7 +89,7 @@ pub fn setup_menu(ctx: MenuContext) {
         let action = gio::SimpleAction::new("new-conversation", None);
         let prompt_tx = prompt_tx.clone();
         let state = app_state.clone();
-        let output_buf = widgets.output_buffer.clone();
+        let output_buf = widgets.final_buffer.clone();
         let status_left = widgets.status_left_label.clone();
         let status_right = widgets.status_right_label.clone();
         action.connect_activate(move |_, _| {
@@ -139,8 +139,8 @@ pub fn setup_menu(ctx: MenuContext) {
         let action = gio::SimpleAction::new("sessions-browser", None);
         let prompt_tx = prompt_tx.clone();
         let state = app_state.clone();
-        let output_buf = widgets.output_buffer.clone();
-        let output_view = widgets.output_view.clone();
+        let output_buf = widgets.final_buffer.clone();
+        let output_view = widgets.final_view.clone();
         let output_scroll = widgets.output_scroll.clone();
         let viewport_cols = viewport_cols.clone();
         let status_left = widgets.status_left_label.clone();

@@ -15,7 +15,7 @@
 //! as `restore.rs` / `menu.rs` / `table_interactions.rs` / `submit.rs`.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -40,7 +40,6 @@ pub struct EventDispatchContext {
     pub uq_rx: Rc<RefCell<Option<UnboundedReceiver<chlodwig_tools::UserQuestionRequest>>>>,
     pub prompt_tx: UnboundedSender<BackgroundCommand>,
     pub viewport_cols: Rc<Cell<usize>>,
-    pub streaming_start_offset: Rc<Cell<i32>>,
     pub window: ApplicationWindow,
     pub session_started_at: String,
 }
@@ -55,21 +54,20 @@ pub fn wire(ctx: EventDispatchContext) {
         uq_rx,
         prompt_tx,
         viewport_cols,
-        streaming_start_offset,
         window,
         session_started_at,
     } = ctx;
 
     let state_for_events = app_state.clone();
-    let output_buf = widgets.output_buffer.clone();
+    let final_buf = widgets.final_buffer.clone();
+    let streaming_buf = widgets.streaming_buffer_widget.clone();
+    let streaming_view = widgets.streaming_view.clone();
     let scroll = widgets.output_scroll.clone();
     let status_left_label = widgets.status_left_label.clone();
     let status_right_label = widgets.status_right_label.clone();
     let window_for_notify = window.clone();
     let window_for_uq = window.clone();
     // Sequential dialog queue: only one UserQuestion dialog at a time.
-    // Incoming requests are pushed to uq_queue; when no dialog is open
-    // (uq_dialog_open == false), the next request is popped and shown.
     let uq_queue: Rc<RefCell<VecDeque<chlodwig_tools::UserQuestionRequest>>> =
         Rc::new(RefCell::new(VecDeque::new()));
     let uq_dialog_open: Rc<Cell<bool>> = Rc::new(Cell::new(false));
@@ -77,23 +75,11 @@ pub fn wire(ctx: EventDispatchContext) {
     let prompt_tx_for_events = prompt_tx.clone();
     let session_started_at_for_events = session_started_at.clone();
     let viewport_cols_for_events = viewport_cols.clone();
-    let output_view_for_events = widgets.output_view.clone();
+    let final_view_for_events = widgets.final_view.clone();
 
-    // Use glib::timeout_add_local to periodically check for events
-    // This bridges the async Tokio world with the GTK main loop.
     let event_rx_cell = event_rx.clone();
     let uq_rx_cell = uq_rx.clone();
-    // Track tool_use_id → (tool_name, input) so ToolResult can identify Read/Bash/Write/Grep
-    let mut tool_id_to_info: HashMap<String, (String, serde_json::Value)> = HashMap::new();
-    // Snapshot of the streaming buffer text for Markdown rendering.
-    // Filled from AppState on each tick; used for the per-tick re-render.
-    let mut last_streaming_snapshot = String::new();
-    // Track last rendered viewport width (in monospace columns) to detect resize.
-    // When the width changes and we're NOT streaming, re-render all blocks so
-    // tables adapt to the new width.
     let mut last_rendered_cols: usize = 0;
-    // Debounce resize: count consecutive ticks with a new (stable) width before
-    // triggering re-render. At 16ms/tick, 10 ticks ≈ 160ms debounce.
     let mut resize_stable_ticks: u32 = 0;
     let mut resize_pending_cols: usize = 0;
     glib::timeout_add_local(Duration::from_millis(16), move || {
@@ -103,55 +89,73 @@ pub fn wire(ctx: EventDispatchContext) {
             None => return glib::ControlFlow::Continue,
         };
 
-        // Drain all pending events (non-blocking).
-        // TextDelta is NOT rendered here — it only accumulates in
-        // AppState.streaming_buffer. The Markdown re-render happens
-        // once per tick, after all events are drained.
+        // ── Drain all pending events ──────────────────────────────────
+        //
+        // For each event:
+        //   1. Determine whether it adds a new DisplayBlock.
+        //      If yes, snapshot state.blocks.len() BEFORE handle_event so
+        //      we know which block index will be the new one (for table
+        //      lookup in the renderer).
+        //   2. Call state.handle_event(event) — it may push a new block,
+        //      append to streaming_buffer, etc.
+        //   3. If a new block was pushed, render it via append_block into
+        //      the final_buffer.
+        //
+        // TextDelta still just accumulates into state.streaming_buffer
+        // (no immediate render). The streaming_view is updated AFTER the
+        // event drain, once per tick.
         let mut needs_scroll = false;
-        let mut streaming_finalized = false; // TextComplete or ToolUseStart ended streaming
-        let mut finalized_text: Option<String> = None; // TextComplete's full_text
-        let mut should_save_session = false; // TurnComplete or CompactionComplete → auto-save
+        let mut should_save_session = false;
+        let mut streaming_just_finalized = false;
+        let viewport_w = chlodwig_gtk::viewport::viewport_columns(
+            final_view_for_events.upcast_ref::<gtk4::TextView>(),
+        );
+        viewport_cols_for_events.set(viewport_w);
+
         while let Ok(event) = rx.try_recv() {
-            let should_update = {
-                let mut state = state_for_events.borrow_mut();
+            // Auto-save trigger detection
+            if matches!(
+                event,
+                ConversationEvent::TurnComplete | ConversationEvent::CompactionComplete { .. }
+            ) {
+                should_save_session = true;
+            }
 
-                // Detect TextComplete and ToolUseStart: snapshot the buffer
-                // BEFORE handle_event clears it.
-                match &event {
-                    ConversationEvent::TextComplete(full_text) => {
-                        streaming_finalized = true;
-                        finalized_text = Some(full_text.clone());
-                    }
-                    ConversationEvent::ToolUseStart { .. } => {
-                        if !state.streaming_buffer.is_empty() {
-                            streaming_finalized = true;
-                            finalized_text = Some(state.streaming_buffer.clone());
-                        }
-                    }
-                    // Auto-save on turn complete and compaction complete
-                    ConversationEvent::TurnComplete
-                    | ConversationEvent::CompactionComplete { .. } => {
-                        should_save_session = true;
-                    }
-                    _ => {}
+            // TextComplete also flushes streaming → it produces a new
+            // AssistantText block and clears state.streaming_buffer.
+            if matches!(event, ConversationEvent::TextComplete(_)) {
+                streaming_just_finalized = true;
+            }
+            // ToolUseStart while streaming flushes streaming first too.
+            if matches!(event, ConversationEvent::ToolUseStart { .. }) {
+                let state = state_for_events.borrow();
+                if !state.streaming_buffer.is_empty() {
+                    streaming_just_finalized = true;
                 }
+            }
 
-                // Render non-streaming events into the TextBuffer
-                let show_tools = state.show_tool_usage;
-                render::render_event_to_buffer(
-                    &output_buf,
-                    &event,
-                    &mut tool_id_to_info,
-                    show_tools,
-                );
-                state.handle_event(event)
-            };
+            let blocks_before = state_for_events.borrow().blocks.len();
+            let should_update = state_for_events.borrow_mut().handle_event(event);
+            let state = state_for_events.borrow();
+
+            // Render any newly added block(s) — handle_event may add 1
+            // or 2 blocks per event (e.g. ToolUseStart while streaming
+            // flushes the streaming buffer as AssistantText AND adds the
+            // ToolUseStart block).
+            if state.blocks.len() > blocks_before {
+                for block_idx in blocks_before..state.blocks.len() {
+                    let ctx = render::RenderCtx::for_block(&state, viewport_w, block_idx);
+                    render::append_block(&final_buf, &state.blocks[block_idx], &ctx);
+                }
+            }
+            drop(state);
+
             if should_update {
                 needs_scroll = true;
             }
         }
 
-        // Auto-save session after TurnComplete or CompactionComplete
+        // Auto-save session
         if should_save_session {
             let _ = prompt_tx_for_events.send(BackgroundCommand::SaveSession {
                 started_at: session_started_at_for_events.clone(),
@@ -161,7 +165,7 @@ pub fn wire(ctx: EventDispatchContext) {
             });
         }
 
-        // Drain pending UserQuestion requests into the queue.
+        // ── UserQuestion dialog queue ─────────────────────────────────
         {
             let mut uq_opt = uq_rx_cell.borrow_mut();
             if let Some(uq) = uq_opt.as_mut() {
@@ -170,8 +174,6 @@ pub fn wire(ctx: EventDispatchContext) {
                 }
             }
         }
-
-        // Show the next queued dialog if none is currently open.
         if !uq_dialog_open.get() {
             let next = uq_queue.borrow_mut().pop_front();
             if let Some(req) = next {
@@ -185,10 +187,7 @@ pub fn wire(ctx: EventDispatchContext) {
                     &req.options,
                     req.respond,
                     Box::new(move || {
-                        // Called when the dialog closes — show next queued dialog if any.
                         uq_dialog_open_clone.set(false);
-                        // Trigger next dialog on the next event loop tick
-                        // (the timeout_add_local will pick it up).
                         let _ = &uq_queue_clone;
                         let _ = &window_clone;
                     }),
@@ -196,97 +195,41 @@ pub fn wire(ctx: EventDispatchContext) {
             }
         }
 
-        // --- Streaming Markdown rendering (once per tick) ---
+        // ── Streaming view update (once per tick) ─────────────────────
         //
-        // Three cases:
-        // 1. Streaming is ongoing (dirty) → re-render streaming_buffer as Markdown
-        // 2. Streaming was finalized this tick (TextComplete/ToolUseStart) → render final text
-        // 3. Neither → nothing to do
+        // Renders state.streaming_buffer into the SEPARATE streaming_view's
+        // buffer. The streaming view's buffer is owned by the streaming
+        // widget, not interleaved into the final history.
         {
-            // Update viewport columns from the current widget allocation
-            viewport_cols_for_events.set(
-                chlodwig_gtk::viewport::viewport_columns(
-                    output_view_for_events.upcast_ref::<gtk4::TextView>(),
-                ),
-            );
             let mut state = state_for_events.borrow_mut();
-
-            // Case 1: ongoing streaming with new deltas
-            if state.streaming_dirty && !streaming_finalized {
-                // First delta in this streaming run: record start offset
-                if streaming_start_offset.get() < 0 {
-                    if output_buf.end_iter().offset() > 0 {
-                        window::append_to_output(&output_buf, "\n");
-                    }
-                    streaming_start_offset.set(output_buf.end_iter().offset());
-                }
-
-                render::rerender_streaming_markdown(
-                    &output_buf,
-                    streaming_start_offset.get(),
+            if state.streaming_dirty {
+                let visible = render::render_streaming_into(
+                    &streaming_buf,
                     &state.streaming_buffer,
-                    viewport_cols_for_events.get(),
+                    viewport_w,
                 );
-                last_streaming_snapshot = state.streaming_buffer.clone();
+                streaming_view.set_visible(visible);
                 state.acknowledge_streaming_render();
                 needs_scroll = true;
             }
-
-            // Case 2: streaming was finalized this tick
-            if streaming_finalized {
-                if streaming_start_offset.get() < 0 {
-                    // Edge case: TextComplete arrived in the same tick as the first delta
-                    if output_buf.end_iter().offset() > 0 {
-                        window::append_to_output(&output_buf, "\n");
-                    }
-                    streaming_start_offset.set(output_buf.end_iter().offset());
-                }
-
-                let final_text = finalized_text.as_deref().unwrap_or("");
-                let vp = viewport_cols_for_events.get();
-
-                // Build table overrides if the finalized block has tables
-                let block_idx = state.blocks.len().saturating_sub(1);
-                let table_overrides: Vec<(usize, &chlodwig_core::TableData)> = state
-                    .tables
-                    .iter()
-                    .filter(|(bi, _, _)| *bi == block_idx)
-                    .map(|(_, ti, td)| (*ti, td))
-                    .collect();
-                let lines = if table_overrides.is_empty() {
-                    chlodwig_core::render_markdown_with_width(final_text, vp)
-                } else {
-                    chlodwig_core::render_markdown_with_table_overrides(final_text, vp, &table_overrides)
-                };
-
-                // Delete previous streaming render
-                chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf, streaming_start_offset.get());
-                let end_off = output_buf.end_iter().offset();
-                if end_off > streaming_start_offset.get() {
-                    let mut start = output_buf.iter_at_offset(streaming_start_offset.get());
-                    let mut end = output_buf.iter_at_offset(end_off);
-                    output_buf.delete(&mut start, &mut end);
-                }
-
-                // Re-render with table header tags
-                chlodwig_gtk::md_renderer::append_styled_lines(&output_buf, &lines, &state.tables, block_idx);
-                window::append_to_output(&output_buf, "\n");
-
-                streaming_start_offset.set(-1);
-                last_streaming_snapshot.clear();
-                state.acknowledge_streaming_render();
-                needs_scroll = true;
+            // If streaming was just finalized this tick, the buffer is now
+            // empty → hide the streaming view.
+            if streaming_just_finalized && state.streaming_buffer.is_empty() {
+                let _ = render::render_streaming_into(&streaming_buf, "", viewport_w);
+                streaming_view.set_visible(false);
             }
         }
 
         if needs_scroll {
-            // Update auto_scroll state — incoming content should not yank
-            // the user back to bottom if they've scrolled up manually.
-            state_for_events.borrow_mut().auto_scroll.scroll_to_bottom_if_auto();
-
-            window::update_status(&status_left_label, &status_right_label, &state_for_events.borrow());
-
-            // Only scroll if auto_scroll is still active
+            state_for_events
+                .borrow_mut()
+                .auto_scroll
+                .scroll_to_bottom_if_auto();
+            window::update_status(
+                &status_left_label,
+                &status_right_label,
+                &state_for_events.borrow(),
+            );
             if state_for_events.borrow().auto_scroll.is_active() {
                 let scroll_clone = scroll.clone();
                 glib::idle_add_local_once(move || {
@@ -294,14 +237,14 @@ pub fn wire(ctx: EventDispatchContext) {
                 });
             }
         } else if state_for_events.borrow().is_streaming {
-            // No new events this tick, but still streaming — update status bar
-            // so the spinner animation keeps rotating (~every 16ms tick).
-            window::update_status(&status_left_label, &status_right_label, &state_for_events.borrow());
+            window::update_status(
+                &status_left_label,
+                &status_right_label,
+                &state_for_events.borrow(),
+            );
         }
 
-        // --- System notification on turn complete ---
-        // Send a desktop notification when a turn finishes and the window
-        // is NOT focused (user switched to another app while waiting).
+        // ── System notification on turn complete ──────────────────────
         {
             let mut state = state_for_events.borrow_mut();
             if state.take_should_notify() && !window_for_notify.is_active() {
@@ -309,14 +252,10 @@ pub fn wire(ctx: EventDispatchContext) {
             }
         }
 
-        // --- Resize detection: re-render tables when viewport width changes ---
-        // Check every tick if the viewport column count changed. Debounce by
-        // waiting 10 consecutive ticks (~160ms) with the same new width before
-        // triggering a full re-render. Skip during active streaming (the
-        // streaming re-render already uses the current width).
+        // ── Resize detection: re-render final_view on width change ────
         {
             let current_cols = chlodwig_gtk::viewport::viewport_columns(
-                output_view_for_events.upcast_ref::<gtk4::TextView>(),
+                final_view_for_events.upcast_ref::<gtk4::TextView>(),
             );
             if current_cols != last_rendered_cols {
                 if current_cols == resize_pending_cols {
@@ -326,13 +265,12 @@ pub fn wire(ctx: EventDispatchContext) {
                     resize_stable_ticks = 1;
                 }
                 if resize_stable_ticks >= 10 {
-                    // Width has been stable for ~160ms — re-render
                     last_rendered_cols = current_cols;
                     viewport_cols_for_events.set(current_cols);
                     resize_stable_ticks = 0;
                     let state = state_for_events.borrow();
                     if !state.is_streaming {
-                        render::rerender_all_blocks(&output_buf, &state, current_cols);
+                        render::render_all_blocks_into(&final_buf, &state, current_cols, true);
                         if state.auto_scroll.is_active() {
                             let scroll_clone = scroll.clone();
                             glib::idle_add_local_once(move || {

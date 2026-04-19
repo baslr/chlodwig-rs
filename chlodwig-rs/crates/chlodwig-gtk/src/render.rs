@@ -1,246 +1,99 @@
-//! GTK TextBuffer rendering functions.
+//! GTK TextBuffer rendering — single source of truth.
 //!
-//! All functions that render conversation content (blocks, events, ANSI,
-//! syntax-highlighted lines) into a `gtk4::TextBuffer` live here.
-//! Extracted from `main.rs` to keep it manageable.
+//! After Variant B refactor, there is ONE function per concern:
+//!
+//!   - [`render_block`] — renders a single `DisplayBlock` into a buffer.
+//!     Used by both the live-append path and the full re-render path.
+//!     This is THE place where tool-specific rendering (Bash ANSI, Read
+//!     line numbers, Edit diff, Write summary, Grep) lives.
+//!
+//!   - [`append_block`] — thin wrapper that calls `render_block`. Used by
+//!     the live event loop when a new `DisplayBlock` is added.
+//!
+//!   - [`render_all_blocks_into`] — clears the buffer and renders every
+//!     block from `state.blocks`. Used for resize, restore, theme/toggle.
+//!     Replaces the old `rerender_all_blocks` AND `render_restored_blocks`.
+//!
+//!   - [`render_streaming_into`] — renders the live streaming text into
+//!     a SEPARATE TextBuffer (the `streaming_view`'s buffer). Called every
+//!     tick while content is being streamed.
+//!
+//! There is intentionally NO `render_event_to_buffer` anymore. Live events
+//! flow through `AppState::handle_event` → produces a `DisplayBlock` →
+//! `append_block` renders it. One render path. No drift.
 
 use gtk4::prelude::*;
 use chlodwig_gtk::app_state::{AppState, DisplayBlock};
 use chlodwig_gtk::window;
-use chlodwig_core::ConversationEvent;
 
-/// Re-render ALL display blocks from AppState into the TextBuffer.
-///
-/// Clears the buffer first, then renders each block. Used after `/clear`,
-/// table sort, or any operation that needs a full refresh.
-pub fn rerender_all_blocks(
-    buffer: &gtk4::TextBuffer,
-    state: &AppState,
-    viewport_width: usize,
-) {
-    // Clear the entire buffer including emoji overlays
-    chlodwig_gtk::emoji_overlay::clear_overlays_from(buffer, 0);
-    let mut start = buffer.start_iter();
-    let mut end = buffer.end_iter();
-    buffer.delete(&mut start, &mut end);
-
-    // Show CWD at the top (same as startup)
-    let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
-    window::append_styled(buffer, &format!("{cwd_msg}\n"), "system");
-
-    for (block_idx, block) in state.blocks.iter().enumerate() {
-        match block {
-            DisplayBlock::UserMessage(text) => {
-                window::append_styled(buffer, &format!("\n▶ {text}\n"), "user");
-            }
-            DisplayBlock::AssistantText(text) => {
-                window::append_to_output(buffer, "\n");
-                let overrides: Vec<(usize, &chlodwig_core::TableData)> = state.tables.iter()
-                    .filter(|(bi, _, _)| *bi == block_idx)
-                    .map(|(_, ti, td)| (*ti, td))
-                    .collect();
-                let lines = if overrides.is_empty() {
-                    chlodwig_core::render_markdown_with_width(text, viewport_width)
-                } else {
-                    chlodwig_core::render_markdown_with_table_overrides(text, viewport_width, &overrides)
-                };
-                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &state.tables, block_idx);
-                window::append_to_output(buffer, "\n");
-            }
-            DisplayBlock::ToolUseStart { name, input } => {
-                if !state.show_tool_usage {
-                    continue;
-                }
-                if name == "Edit" {
-                    render_edit_tool_use(buffer, input);
-                } else {
-                    window::append_styled(
-                        buffer,
-                        &format!("── Tool: {name} ──\n"),
-                        "tool",
-                    );
-                    if let Ok(pretty) = serde_json::to_string_pretty(input) {
-                        for line in pretty.lines().take(5) {
-                            window::append_styled(buffer, &format!("  {line}\n"), "result");
-                        }
-                    }
-                }
-            }
-            DisplayBlock::ToolResult { output, is_error } => {
-                if !state.show_tool_usage {
-                    continue;
-                }
-                let (prefix, tag) = if *is_error {
-                    ("ERROR", "error")
-                } else {
-                    ("OK", "result_ok")
-                };
-                window::append_styled(
-                    buffer,
-                    &format!("── [{prefix}] ──\n"),
-                    tag,
-                );
-                let preview = if output.len() > 500 {
-                    let mut end = 500;
-                    while end > 0 && !output.is_char_boundary(end) {
-                        end -= 1;
-                    }
-                    format!("{}...", &output[..end])
-                } else {
-                    output.clone()
-                };
-                for line in preview.lines().take(10) {
-                    window::append_styled(buffer, &format!("  {line}\n"), "result");
-                }
-            }
-            DisplayBlock::SystemMessage(msg) => {
-                window::append_styled(buffer, &format!("{msg}\n"), "system");
-            }
-            DisplayBlock::Error(msg) => {
-                window::append_styled(buffer, &format!("\n✗ Error: {msg}\n"), "error");
-            }
-        }
-    }
-
-    // If there's streaming text in progress, render it too
-    if !state.streaming_buffer.is_empty() {
-        window::append_to_output(buffer, "\n");
-        let lines = chlodwig_core::render_markdown_with_width(&state.streaming_buffer, viewport_width);
-        chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &[], 0);
-    }
+/// Context passed to `render_block` so it can resolve table data, viewport
+/// width, and the show-tool-usage preference. Carries borrowed references
+/// only — cheap to construct on every render.
+pub struct RenderCtx<'a> {
+    pub viewport_width: usize,
+    pub show_tool_usage: bool,
+    /// All extracted tables, indexed by `(block_index, table_index_within_block, data)`.
+    pub tables: &'a [(usize, usize, chlodwig_core::TableData)],
+    /// Index of the block currently being rendered (used to filter `tables`
+    /// for `AssistantText` blocks). For `append_block` this is the position
+    /// the new block will occupy after push.
+    pub block_index: usize,
 }
 
-/// Render all display blocks from AppState into the TextBuffer (append).
-///
-/// Used after session restore (--resume or /resume) to populate the output
-/// area with the restored conversation. Unlike `rerender_all_blocks`, this
-/// does NOT clear the buffer first — it appends to whatever is already there.
-pub fn render_restored_blocks(
-    buffer: &gtk4::TextBuffer,
-    state: &AppState,
-    viewport_width: usize,
-) {
-    for (block_idx, block) in state.blocks.iter().enumerate() {
-        match block {
-            DisplayBlock::UserMessage(text) => {
-                window::append_styled(buffer, &format!("\n▶ {text}\n"), "user");
-            }
-            DisplayBlock::AssistantText(text) => {
-                window::append_to_output(buffer, "\n");
-                let overrides: Vec<(usize, &chlodwig_core::TableData)> = state.tables.iter()
-                    .filter(|(bi, _, _)| *bi == block_idx)
-                    .map(|(_, ti, td)| (*ti, td))
-                    .collect();
-                let lines = if overrides.is_empty() {
-                    chlodwig_core::render_markdown_with_width(text, viewport_width)
-                } else {
-                    chlodwig_core::render_markdown_with_table_overrides(text, viewport_width, &overrides)
-                };
-                chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &state.tables, block_idx);
-                window::append_to_output(buffer, "\n");
-            }
-            DisplayBlock::ToolUseStart { name, input } => {
-                if !state.show_tool_usage {
-                    continue;
-                }
-                if name == "Edit" {
-                    render_edit_tool_use(buffer, input);
-                } else {
-                    window::append_styled(
-                        buffer,
-                        &format!("── Tool: {name} ──\n"),
-                        "tool",
-                    );
-                    if let Ok(pretty) = serde_json::to_string_pretty(input) {
-                        for line in pretty.lines().take(5) {
-                            window::append_styled(buffer, &format!("  {line}\n"), "result");
-                        }
-                    }
-                }
-            }
-            DisplayBlock::ToolResult { output, is_error } => {
-                if !state.show_tool_usage {
-                    continue;
-                }
-                let (prefix, tag) = if *is_error {
-                    ("ERROR", "error")
-                } else {
-                    ("OK", "result_ok")
-                };
-                window::append_styled(
-                    buffer,
-                    &format!("── [{prefix}] ──\n"),
-                    tag,
-                );
-                let preview = chlodwig_core::truncate_preview(output, 500);
-                for line in preview.lines().take(10) {
-                    window::append_styled(buffer, &format!("  {line}\n"), "result");
-                }
-            }
-            DisplayBlock::SystemMessage(msg) => {
-                window::append_styled(buffer, &format!("{msg}\n"), "system");
-            }
-            DisplayBlock::Error(msg) => {
-                window::append_styled(buffer, &format!("\n✗ Error: {msg}\n"), "error");
-            }
+impl<'a> RenderCtx<'a> {
+    /// Construct a RenderCtx from the AppState for a specific block index.
+    pub fn for_block(state: &'a AppState, viewport_width: usize, block_index: usize) -> Self {
+        Self {
+            viewport_width,
+            show_tool_usage: state.show_tool_usage,
+            tables: &state.tables,
+            block_index,
         }
     }
 }
 
-/// Called once per tick to update the live-streaming Markdown view.
-/// `start_offset` is the char offset where streaming started in the TextBuffer.
-pub fn rerender_streaming_markdown(
-    buffer: &gtk4::TextBuffer,
-    start_offset: i32,
-    markdown_text: &str,
-    viewport_width: usize,
-) {
-    // Remove emoji overlays in the streaming range BEFORE deleting text.
-    chlodwig_gtk::emoji_overlay::clear_overlays_from(buffer, start_offset);
-
-    // Delete previous render
-    let end_off = buffer.end_iter().offset();
-    if end_off > start_offset {
-        let mut start = buffer.iter_at_offset(start_offset);
-        let mut end = buffer.iter_at_offset(end_off);
-        buffer.delete(&mut start, &mut end);
-    }
-
-    // Re-render as Markdown
-    let lines = chlodwig_core::render_markdown_with_width(markdown_text, viewport_width);
-    chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &[], 0);
-}
-
-/// Render a single ConversationEvent into the GTK TextBuffer.
+/// Render a single `DisplayBlock` into the buffer, appending at the end.
 ///
-/// Handles all non-streaming events: tool calls, tool results, errors, etc.
-/// **TextDelta and TextComplete are handled by the per-tick streaming re-render
-/// in the main event loop** — they are no-ops here.
-pub fn render_event_to_buffer(
-    buffer: &gtk4::TextBuffer,
-    event: &ConversationEvent,
-    tool_id_to_info: &mut std::collections::HashMap<String, (String, serde_json::Value)>,
-    show_tool_usage: bool,
-) {
-    match event {
-        // Streaming events are handled by the per-tick Markdown re-render.
-        ConversationEvent::TextDelta(_) | ConversationEvent::TextComplete(_) => {}
-        ConversationEvent::ToolUseStart { id, name, input } => {
-            // Track tool id → (name, input) for ToolResult matching
-            tool_id_to_info.insert(id.clone(), (name.clone(), input.clone()));
-
-            if !show_tool_usage {
+/// This is the SINGLE source of truth for "how a block looks in the GTK
+/// output". `append_block` and `render_all_blocks_into` both delegate here.
+pub fn render_block(buffer: &gtk4::TextBuffer, block: &DisplayBlock, ctx: &RenderCtx) {
+    match block {
+        DisplayBlock::UserMessage(text) => {
+            window::append_styled(buffer, &format!("\n▶ {text}\n"), "user");
+        }
+        DisplayBlock::AssistantText(text) => {
+            window::append_to_output(buffer, "\n");
+            let overrides: Vec<(usize, &chlodwig_core::TableData)> = ctx
+                .tables
+                .iter()
+                .filter(|(bi, _, _)| *bi == ctx.block_index)
+                .map(|(_, ti, td)| (*ti, td))
+                .collect();
+            let lines = if overrides.is_empty() {
+                chlodwig_core::render_markdown_with_width(text, ctx.viewport_width)
+            } else {
+                chlodwig_core::render_markdown_with_table_overrides(
+                    text,
+                    ctx.viewport_width,
+                    &overrides,
+                )
+            };
+            chlodwig_gtk::md_renderer::append_styled_lines(
+                buffer,
+                &lines,
+                ctx.tables,
+                ctx.block_index,
+            );
+            window::append_to_output(buffer, "\n");
+        }
+        DisplayBlock::ToolUseStart { name, input } => {
+            if !ctx.show_tool_usage {
                 return;
             }
-
             if name == "Edit" {
                 render_edit_tool_use(buffer, input);
             } else {
-                window::append_styled(
-                    buffer,
-                    &format!("── Tool: {name} ──\n"),
-                    "tool",
-                );
+                window::append_styled(buffer, &format!("── Tool: {name} ──\n"), "tool");
                 if let Ok(pretty) = serde_json::to_string_pretty(input) {
                     for line in pretty.lines().take(5) {
                         window::append_styled(buffer, &format!("  {line}\n"), "result");
@@ -248,153 +101,189 @@ pub fn render_event_to_buffer(
                 }
             }
         }
-        ConversationEvent::ToolResult {
-            id, output, is_error,
+        DisplayBlock::ToolResult {
+            output,
+            is_error,
+            tool_name,
+            tool_input,
         } => {
-            let tool_info = tool_id_to_info.remove(id);
-
-            if !show_tool_usage {
+            if !ctx.show_tool_usage {
                 return;
             }
-
-            let text = extract_tool_result_text(output);
-
-            if let Some((ref tool_name, ref tool_input)) = tool_info {
-                // Bash → $ command + output with ANSI color rendering
-                if tool_name == "Bash" {
-                    let command = tool_input["command"]
-                        .as_str()
-                        .unwrap_or("(unknown)");
-                    window::append_multi_styled(
-                        buffer,
-                        &format!("$ {command}\n"),
-                        &["bash_header", "code"],
-                    );
-                    render_ansi_output(buffer, &text);
-                    window::append_to_output(buffer, "\n");
-                    return;
-                }
-                // Read → ── Read: path ── + numbered lines with syntax highlighting
-                if tool_name == "Read" && !is_error {
-                    let file_path = tool_input["file_path"]
-                        .as_str()
-                        .unwrap_or("(unknown)");
-                    let lang = chlodwig_core::highlight::lang_from_path(file_path);
-                    window::append_styled(
-                        buffer,
-                        &format!("── Read: {file_path} ──\n"),
-                        "read_header",
-                    );
-                    let formatted = chlodwig_gtk::format_numbered_lines(&text);
-                    for (gutter, code) in &formatted {
-                        if !gutter.is_empty() {
-                            window::append_styled(buffer, gutter, "line_number");
-                            render_highlighted_line(buffer, lang, code, "code");
-                            window::append_to_output(buffer, "\n");
-                        } else {
-                            window::append_styled(buffer, &format!("  {code}\n"), "result");
-                        }
-                    }
-                    window::append_to_output(buffer, "\n");
-                    return;
-                }
-                // Write → ── Write: path ── + summary + numbered lines with syntax highlighting
-                if tool_name == "Write" && !is_error {
-                    let file_path = tool_input["file_path"]
-                        .as_str()
-                        .unwrap_or("(unknown)");
-                    let lang = chlodwig_core::highlight::lang_from_path(file_path);
-                    let content = tool_input["content"]
-                        .as_str()
-                        .unwrap_or("");
-                    window::append_styled(
-                        buffer,
-                        &format!("── Write: {file_path} ──\n"),
-                        "write_header",
-                    );
-                    window::append_styled(
-                        buffer,
-                        &format!("  {text}\n"),
-                        "result",
-                    );
-                    let line_count = content.lines().count();
-                    let num_width = if line_count == 0 {
-                        1
-                    } else {
-                        (line_count as f64).log10().floor() as usize + 1
-                    };
-                    for (i, code_line) in content.lines().enumerate() {
-                        let line_num = i + 1;
-                        window::append_styled(
-                            buffer,
-                            &format!(" {:>width$} │ ", line_num, width = num_width),
-                            "line_number",
-                        );
-                        render_highlighted_line(buffer, lang, code_line, "code");
-                        window::append_to_output(buffer, "\n");
-                    }
-                    window::append_to_output(buffer, "\n");
-                    return;
-                }
-                // Grep → ── Grep ── + results
-                if tool_name == "Grep" && !is_error {
-                    window::append_styled(buffer, "── Grep ──\n", "grep_header");
-                    for line in text.lines() {
-                        window::append_styled(
-                            buffer,
-                            &format!("  {line}\n"),
-                            "result",
-                        );
-                    }
-                    window::append_to_output(buffer, "\n");
-                    return;
-                }
-            }
-
-            // Fallback: generic ToolResult display
-            let (prefix, tag) = if *is_error {
-                ("ERROR", "error")
-            } else {
-                ("OK", "result_ok")
-            };
-            window::append_styled(
-                buffer,
-                &format!("── [{prefix}] ──\n"),
-                tag,
-            );
-            let preview = if text.len() > 500 {
-                let mut end = 500;
-                while end > 0 && !text.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}...", &text[..end])
-            } else {
-                text
-            };
-            for line in preview.lines().take(10) {
-                window::append_styled(
-                    buffer,
-                    &format!("  {line}\n"),
-                    "result",
-                );
-            }
-            window::append_to_output(buffer, "\n");
+            render_tool_result(buffer, output, *is_error, tool_name, tool_input);
         }
-        ConversationEvent::Error(msg) => {
+        DisplayBlock::SystemMessage(msg) => {
+            window::append_styled(buffer, &format!("{msg}\n"), "system");
+        }
+        DisplayBlock::Error(msg) => {
             window::append_styled(buffer, &format!("\n✗ Error: {msg}\n"), "error");
         }
-        ConversationEvent::CompactionStarted => {
-            window::append_styled(buffer, "\n⏳ Compacting conversation…\n", "system");
+    }
+}
+
+/// Append a single block to the buffer. Thin wrapper around `render_block`
+/// for the live-event path — kept as its own name purely for call-site
+/// readability ("append a new block" vs. "render every block").
+pub fn append_block(buffer: &gtk4::TextBuffer, block: &DisplayBlock, ctx: &RenderCtx) {
+    render_block(buffer, block, ctx);
+}
+
+/// Clear the buffer and render every block from `state.blocks`.
+///
+/// Used for: window resize, session restore, theme toggle, show-tools toggle,
+/// and any other operation that needs a full repaint.
+///
+/// Replaces the old `rerender_all_blocks` AND `render_restored_blocks` —
+/// both were doing the same thing minus the "clear at the top" step. That
+/// difference is now expressed by passing `include_cwd_header: true|false`.
+pub fn render_all_blocks_into(
+    buffer: &gtk4::TextBuffer,
+    state: &AppState,
+    viewport_width: usize,
+    include_cwd_header: bool,
+) {
+    chlodwig_gtk::emoji_overlay::clear_overlays_from(buffer, 0);
+    let mut start = buffer.start_iter();
+    let mut end = buffer.end_iter();
+    buffer.delete(&mut start, &mut end);
+
+    if include_cwd_header {
+        let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+        window::append_styled(buffer, &format!("{cwd_msg}\n"), "system");
+    }
+
+    for (block_idx, block) in state.blocks.iter().enumerate() {
+        let ctx = RenderCtx::for_block(state, viewport_width, block_idx);
+        render_block(buffer, block, &ctx);
+    }
+}
+
+/// Render the live streaming text into the streaming view's buffer.
+///
+/// This buffer is SEPARATE from the final history buffer — that's the whole
+/// point of Variant B. We can simply set_text + re-render as Markdown without
+/// touching the history.
+///
+/// Returns `true` if the streaming buffer should be made visible (text is
+/// non-empty), `false` if it should be hidden.
+pub fn render_streaming_into(
+    buffer: &gtk4::TextBuffer,
+    text: &str,
+    viewport_width: usize,
+) -> bool {
+    chlodwig_gtk::emoji_overlay::clear_overlays_from(buffer, 0);
+    let mut start = buffer.start_iter();
+    let mut end = buffer.end_iter();
+    buffer.delete(&mut start, &mut end);
+
+    if text.is_empty() {
+        return false;
+    }
+
+    let lines = chlodwig_core::render_markdown_with_width(text, viewport_width);
+    chlodwig_gtk::md_renderer::append_styled_lines(buffer, &lines, &[], 0);
+    true
+}
+
+/// Internal helper: render the body of a `DisplayBlock::ToolResult` based
+/// on the tool name (Bash/Read/Write/Grep/Edit get rich rendering; everything
+/// else falls back to the generic `── [OK] ──` preview).
+fn render_tool_result(
+    buffer: &gtk4::TextBuffer,
+    output: &str,
+    is_error: bool,
+    tool_name: &str,
+    tool_input: &serde_json::Value,
+) {
+    // Bash → $ command + ANSI-colored output
+    if tool_name == "Bash" {
+        let command = tool_input["command"].as_str().unwrap_or("(unknown)");
+        window::append_multi_styled(
+            buffer,
+            &format!("$ {command}\n"),
+            &["bash_header", "code"],
+        );
+        render_ansi_output(buffer, output);
+        window::append_to_output(buffer, "\n");
+        return;
+    }
+    // Read → ── Read: path ── + numbered, syntax-highlighted lines
+    if tool_name == "Read" && !is_error {
+        let file_path = tool_input["file_path"].as_str().unwrap_or("(unknown)");
+        let lang = chlodwig_core::highlight::lang_from_path(file_path);
+        window::append_styled(buffer, &format!("── Read: {file_path} ──\n"), "read_header");
+        let formatted = chlodwig_gtk::format_numbered_lines(output);
+        for (gutter, code) in &formatted {
+            if !gutter.is_empty() {
+                window::append_styled(buffer, gutter, "line_number");
+                render_highlighted_line(buffer, lang, code, "code");
+                window::append_to_output(buffer, "\n");
+            } else {
+                window::append_styled(buffer, &format!("  {code}\n"), "result");
+            }
         }
-        ConversationEvent::CompactionComplete { old_messages, summary_tokens } => {
+        window::append_to_output(buffer, "\n");
+        return;
+    }
+    // Write → ── Write: path ── + summary + content with line numbers
+    if tool_name == "Write" && !is_error {
+        let file_path = tool_input["file_path"].as_str().unwrap_or("(unknown)");
+        let lang = chlodwig_core::highlight::lang_from_path(file_path);
+        let content = tool_input["content"].as_str().unwrap_or("");
+        window::append_styled(
+            buffer,
+            &format!("── Write: {file_path} ──\n"),
+            "write_header",
+        );
+        window::append_styled(buffer, &format!("  {output}\n"), "result");
+        let line_count = content.lines().count();
+        let num_width = if line_count == 0 {
+            1
+        } else {
+            (line_count as f64).log10().floor() as usize + 1
+        };
+        for (i, code_line) in content.lines().enumerate() {
+            let line_num = i + 1;
             window::append_styled(
                 buffer,
-                &format!("✓ Compacted: {old_messages} messages → summary ({summary_tokens} tokens)\n"),
-                "system",
+                &format!(" {:>width$} │ ", line_num, width = num_width),
+                "line_number",
             );
+            render_highlighted_line(buffer, lang, code_line, "code");
+            window::append_to_output(buffer, "\n");
         }
-        _ => {} // Other events handled by AppState only
+        window::append_to_output(buffer, "\n");
+        return;
     }
+    // Grep → ── Grep ── + results
+    if tool_name == "Grep" && !is_error {
+        window::append_styled(buffer, "── Grep ──\n", "grep_header");
+        for line in output.lines() {
+            window::append_styled(buffer, &format!("  {line}\n"), "result");
+        }
+        window::append_to_output(buffer, "\n");
+        return;
+    }
+    // Fallback: generic ── [OK] / [ERROR] ── + truncated preview
+    let (prefix, tag) = if is_error {
+        ("ERROR", "error")
+    } else {
+        ("OK", "result_ok")
+    };
+    window::append_styled(buffer, &format!("── [{prefix}] ──\n"), tag);
+    let preview = if output.len() > 500 {
+        let mut end = 500;
+        while end > 0 && !output.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &output[..end])
+    } else {
+        output.to_string()
+    };
+    for line in preview.lines().take(10) {
+        window::append_styled(buffer, &format!("  {line}\n"), "result");
+    }
+    window::append_to_output(buffer, "\n");
 }
 
 // `append_styled_lines_with_table_headers` was removed — its functionality
@@ -484,30 +373,11 @@ pub fn rerender_table_in_place(
     chlodwig_gtk::md_renderer::append_styled_lines(buffer, &table_lines, &state.tables, block_idx);
 }
 
-/// Extract text from a ToolResultContent (text or blocks → joined text).
-pub fn extract_tool_result_text(output: &chlodwig_core::ToolResultContent) -> String {
-    match output {
-        chlodwig_core::ToolResultContent::Text(t) => t.clone(),
-        chlodwig_core::ToolResultContent::Blocks(blocks) => {
-            blocks
-                .iter()
-                .map(|b| match b {
-                    chlodwig_core::ToolResultBlock::Text { text } => text.as_str(),
-                    chlodwig_core::ToolResultBlock::Image { .. } => "[image]",
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        }
-    }
-}
-
 /// Render an Edit-tool tool_use block as a syntax-highlighted diff.
 ///
-/// This is the SINGLE source of truth for "how an Edit tool_use looks in
-/// the GTK output". All three render paths call it:
-///   - `render_event_to_buffer()` (live SSE streaming)
-///   - `render_restored_blocks()` (after `--resume` / `/resume`)
-///   - `rerender_all_blocks()` (after table interaction or other full re-render)
+/// Single source of truth for "how an Edit tool_use looks in the GTK
+/// output". Called from `render_block` for `DisplayBlock::ToolUseStart`
+/// when `name == "Edit"`.
 ///
 /// `input` is the raw `serde_json::Value` from `ContentBlock::ToolUse.input`,
 /// expected to contain `file_path`, `old_string`, and `new_string` keys

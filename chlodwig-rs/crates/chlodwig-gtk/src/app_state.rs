@@ -19,7 +19,19 @@ pub enum DisplayBlock {
     /// A tool invocation header: name + JSON input.
     ToolUseStart { name: String, input: serde_json::Value },
     /// Tool result: output text + error flag.
-    ToolResult { output: String, is_error: bool },
+    ///
+    /// `tool_name` and `tool_input` are populated so the renderer can
+    /// reproduce rich tool-specific output (Bash with ANSI colors, Read
+    /// with numbered lines, Write with file summary, Grep with results)
+    /// even when the block is re-rendered after session restore or
+    /// window resize. Old sessions without this metadata fall back to
+    /// the generic `── [OK] ──` / `── [ERROR] ──` preview format.
+    ToolResult {
+        output: String,
+        is_error: bool,
+        tool_name: String,
+        tool_input: serde_json::Value,
+    },
     /// System info message (e.g. "Resumed session").
     SystemMessage(String),
     /// Error message.
@@ -67,6 +79,13 @@ pub struct AppState {
     pub tables: Vec<(usize, usize, chlodwig_core::TableData)>,
     /// Optional human-readable name for this session (set via `/name`).
     pub session_name: Option<String>,
+    /// Tracks tool_use_id → (tool_name, tool_input) so that the matching
+    /// ToolResult event (which only carries `id`) can be turned into a
+    /// fully-populated `DisplayBlock::ToolResult` with the tool metadata.
+    /// This used to live as a HashMap inside `event_dispatch.rs`; pulling
+    /// it into AppState lets the renderer be purely block-driven (no
+    /// separate event-rendering path).
+    tool_id_to_info: std::collections::HashMap<String, (String, serde_json::Value)>,
 }
 
 impl AppState {
@@ -89,6 +108,7 @@ impl AppState {
             show_tool_usage: true,
             tables: Vec::new(),
             session_name: None,
+            tool_id_to_info: std::collections::HashMap::new(),
         }
     }
 
@@ -109,13 +129,17 @@ impl AppState {
                 self.push_assistant_text(text);
                 true
             }
-            ConversationEvent::ToolUseStart { name, input, .. } => {
+            ConversationEvent::ToolUseStart { id, name, input } => {
                 // Flush any pending streaming text first
                 self.flush_streaming();
+                // Track tool_use_id → (name, input) so the matching ToolResult
+                // event can recover the tool metadata for rich rendering.
+                self.tool_id_to_info
+                    .insert(id, (name.clone(), input.clone()));
                 self.blocks.push(DisplayBlock::ToolUseStart { name, input });
                 true
             }
-            ConversationEvent::ToolResult { output, is_error, .. } => {
+            ConversationEvent::ToolResult { id, output, is_error, .. } => {
                 let text = match &output {
                     chlodwig_core::ToolResultContent::Text(t) => t.clone(),
                     chlodwig_core::ToolResultContent::Blocks(blocks) => {
@@ -129,9 +153,15 @@ impl AppState {
                             .join("\n")
                     }
                 };
+                let (tool_name, tool_input) = self
+                    .tool_id_to_info
+                    .remove(&id)
+                    .unwrap_or_else(|| (String::new(), serde_json::Value::Null));
                 self.blocks.push(DisplayBlock::ToolResult {
                     output: text,
                     is_error,
+                    tool_name,
+                    tool_input,
                 });
                 true
             }
@@ -291,6 +321,7 @@ impl AppState {
         self.should_notify = false;
         self.auto_scroll.scroll_to_bottom();
         self.session_name = None;
+        self.tool_id_to_info.clear();
     }
 
     /// Extract table sort states for session persistence.
@@ -381,40 +412,52 @@ impl AppState {
                     });
                 }
                 RestoredBlock::BashOutput { command, output } => {
-                    // Represent as a ToolResult (the GTK render_event_to_buffer
-                    // handles Bash rendering separately during live streaming,
-                    // but for restore we store the output directly)
+                    // Synthesize a Bash tool_input so the renderer can re-create
+                    // the live `$ command\n<ANSI output>` rendering on restore.
                     self.blocks.push(DisplayBlock::ToolResult {
-                        output: format!("$ {command}\n{output}"),
+                        output,
                         is_error: false,
+                        tool_name: "Bash".into(),
+                        tool_input: serde_json::json!({ "command": command }),
                     });
                 }
                 RestoredBlock::ReadOutput { file_path, content } => {
                     self.blocks.push(DisplayBlock::ToolResult {
-                        output: format!("── Read: {file_path} ──\n{content}"),
+                        output: content,
                         is_error: false,
+                        tool_name: "Read".into(),
+                        tool_input: serde_json::json!({ "file_path": file_path }),
                     });
                 }
                 RestoredBlock::WriteOutput {
                     file_path,
-                    content: _,
+                    content,
                     summary,
                 } => {
                     self.blocks.push(DisplayBlock::ToolResult {
-                        output: format!("── Write: {file_path} ──\n{summary}"),
+                        output: summary,
                         is_error: false,
+                        tool_name: "Write".into(),
+                        tool_input: serde_json::json!({
+                            "file_path": file_path,
+                            "content": content,
+                        }),
                     });
                 }
                 RestoredBlock::GrepOutput { content, .. } => {
                     self.blocks.push(DisplayBlock::ToolResult {
                         output: content,
                         is_error: false,
+                        tool_name: "Grep".into(),
+                        tool_input: serde_json::Value::Null,
                     });
                 }
                 RestoredBlock::ToolResult { is_error, output } => {
                     self.blocks.push(DisplayBlock::ToolResult {
                         output,
                         is_error,
+                        tool_name: String::new(),
+                        tool_input: serde_json::Value::Null,
                     });
                 }
                 RestoredBlock::SystemMessage(text) => {

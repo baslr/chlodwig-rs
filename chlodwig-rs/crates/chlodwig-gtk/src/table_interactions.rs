@@ -53,8 +53,8 @@ fn wire_header_click_sort(
     session_started_at: &str,
 ) {
     let state_for_sort = app_state.clone();
-    let output_buf_for_sort = widgets.output_buffer.clone();
-    let output_view_for_sort = widgets.output_view.clone();
+    let final_buf_for_sort = widgets.final_buffer.clone();
+    let final_view_for_sort = widgets.final_view.clone();
     let viewport_cols_for_sort = viewport_cols.clone();
     let scroll_for_sort = widgets.output_scroll.clone();
     let prompt_tx_for_sort = prompt_tx.clone();
@@ -63,12 +63,12 @@ fn wire_header_click_sort(
     gesture.set_button(1); // left click only
     gesture.connect_released(move |_gesture, _n_press, x, y| {
         // Convert widget coordinates to buffer coordinates
-        let (bx, by) = output_view_for_sort.window_to_buffer_coords(
+        let (bx, by) = final_view_for_sort.window_to_buffer_coords(
             gtk4::TextWindowType::Widget,
             x as i32,
             y as i32,
         );
-        let Some(iter) = output_view_for_sort.iter_at_location(bx, by) else {
+        let Some(iter) = final_view_for_sort.iter_at_location(bx, by) else {
             return;
         };
         // Check all tags at this position for table_sort:G:C
@@ -88,7 +88,7 @@ fn wire_header_click_sort(
             if state.sort_table(global_idx, col_idx) {
                 let vw = viewport_cols_for_sort.get();
                 render::rerender_table_in_place(
-                    &output_buf_for_sort,
+                    &final_buf_for_sort,
                     &state,
                     global_idx,
                     vw,
@@ -109,7 +109,7 @@ fn wire_header_click_sort(
             }
         }
     });
-    widgets.output_view.add_controller(gesture);
+    widgets.final_view.add_controller(gesture);
 }
 
 /// Mouse motion over the output view → highlight the table data row under the cursor.
@@ -119,21 +119,21 @@ fn wire_row_hover_highlight(widgets: &window::UiWidgets) {
         .name("table_row_highlight")
         .background("rgba(255,255,255,0.08)")
         .build();
-    widgets.output_buffer.tag_table().add(&highlight_tag);
+    widgets.final_buffer.tag_table().add(&highlight_tag);
 
-    let output_view_for_motion = widgets.output_view.clone();
-    let output_buf_for_motion = widgets.output_buffer.clone();
+    let final_view_for_motion = widgets.final_view.clone();
+    let final_buf_for_motion = widgets.final_buffer.clone();
     let prev_highlight_line = Rc::new(Cell::new(-1i32));
 
     let motion = gtk4::EventControllerMotion::new();
     let prev_line_for_motion = prev_highlight_line.clone();
     motion.connect_motion(move |_ctrl, x, y| {
-        let (bx, by) = output_view_for_motion.window_to_buffer_coords(
+        let (bx, by) = final_view_for_motion.window_to_buffer_coords(
             gtk4::TextWindowType::Widget,
             x as i32,
             y as i32,
         );
-        let buf = &output_buf_for_motion;
+        let buf = &final_buf_for_motion;
 
         // Remove previous highlight
         let prev = prev_line_for_motion.get();
@@ -147,7 +147,7 @@ fn wire_row_hover_highlight(widgets: &window::UiWidgets) {
         }
 
         // Check if cursor is on a table data row (contains │ but not ┌┐└┘├┤)
-        if let Some(iter) = output_view_for_motion.iter_at_location(bx, by) {
+        if let Some(iter) = final_view_for_motion.iter_at_location(bx, by) {
             let line = iter.line();
             let line_start = buf.iter_at_line(line).unwrap_or_else(|| buf.start_iter());
             let mut line_end = line_start;
@@ -176,22 +176,22 @@ fn wire_row_hover_highlight(widgets: &window::UiWidgets) {
     });
 
     // Clear highlight when mouse leaves the view
-    let output_buf_for_leave = widgets.output_buffer.clone();
+    let final_buf_for_leave = widgets.final_buffer.clone();
     let prev_line_for_leave = prev_highlight_line.clone();
     motion.connect_leave(move |_ctrl| {
         let prev = prev_line_for_leave.get();
         if prev >= 0 {
-            if let Some(tag) = output_buf_for_leave.tag_table().lookup("table_row_highlight") {
-                let start = output_buf_for_leave
+            if let Some(tag) = final_buf_for_leave.tag_table().lookup("table_row_highlight") {
+                let start = final_buf_for_leave
                     .iter_at_line(prev)
-                    .unwrap_or_else(|| output_buf_for_leave.start_iter());
+                    .unwrap_or_else(|| final_buf_for_leave.start_iter());
                 let mut end = start;
                 end.forward_to_line_end();
-                output_buf_for_leave.remove_tag(&tag, &start, &end);
+                final_buf_for_leave.remove_tag(&tag, &start, &end);
             }
             prev_line_for_leave.set(-1);
         }
     });
 
-    widgets.output_view.add_controller(motion);
+    widgets.final_view.add_controller(motion);
 }

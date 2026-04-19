@@ -148,8 +148,18 @@ thread_local! {
 /// Holds references to all important widgets so we can update them.
 #[derive(Clone)]
 pub struct UiWidgets {
-    pub output_view: EmojiTextView,
-    pub output_buffer: gtk4::TextBuffer,
+    /// Append-only history view: every completed `DisplayBlock` is rendered
+    /// here. Resize/restore/toggle re-renders this from `state.blocks`.
+    pub final_view: EmojiTextView,
+    pub final_buffer: gtk4::TextBuffer,
+    /// Live-streaming view: shows `state.streaming_buffer` while the
+    /// assistant is responding. Hidden when empty. On `TextComplete` the
+    /// streaming text becomes a final block (appended to `final_view`),
+    /// then this view is cleared and hidden.
+    pub streaming_view: EmojiTextView,
+    pub streaming_buffer_widget: gtk4::TextBuffer,
+    /// The single `ScrolledWindow` containing the vertical box that stacks
+    /// `final_view` above `streaming_view`. Scroll-to-bottom drives this.
     pub output_scroll: ScrolledWindow,
     pub input_view: TextView,
     pub input_buffer: gtk4::TextBuffer,
@@ -186,36 +196,56 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
     // --- Load application CSS ---
     load_app_css();
 
-    // --- Output: read-only scrollable text view (selectable for copy) ---
-    let output_buffer = gtk4::TextBuffer::new(None::<&gtk4::TextTagTable>);
-    let output_view = EmojiTextView::with_buffer(&output_buffer);
-    output_view.set_editable(false);
-    output_view.set_cursor_visible(false);
-    output_view.set_wrap_mode(WrapMode::WordChar);
-    output_view.set_top_margin(8);
-    output_view.set_bottom_margin(8);
-    output_view.set_left_margin(12);
-    output_view.set_right_margin(12);
-    output_view.set_vexpand(true);
-    output_view.set_hexpand(true);
+    // --- Output: TWO read-only TextViews stacked in a vertical Box ---
+    //
+    // `final_view`     — append-only history of completed DisplayBlocks.
+    // `streaming_view` — live streaming text, hidden when empty.
+    //
+    // Both live in the SAME ScrolledWindow → they scroll together as one
+    // continuous output region. This way the user can scroll past the
+    // streaming area into earlier history; auto-scroll keeps both pinned
+    // at the bottom while content is flowing in.
+    let final_buffer = gtk4::TextBuffer::new(None::<&gtk4::TextTagTable>);
+    let final_view = EmojiTextView::with_buffer(&final_buffer);
+    final_view.set_editable(false);
+    final_view.set_cursor_visible(false);
+    final_view.set_wrap_mode(WrapMode::WordChar);
+    final_view.set_top_margin(8);
+    final_view.set_bottom_margin(0); // streaming_view follows below
+    final_view.set_left_margin(12);
+    final_view.set_right_margin(12);
+    final_view.set_hexpand(true);
+    disable_text_view_drag(final_view.upcast_ref::<TextView>());
+    setup_output_context_menu(final_view.upcast_ref::<TextView>());
 
-    // Disable drag-and-drop on the output view.
-    // GTK4 on macOS crashes when a drag gesture is initiated on a read-only
-    // TextView: GdkMacosPasteboardItem does not respond to -localObject,
-    // causing an NSInvalidArgumentException in beginDraggingSessionWithItems.
-    // Since we only need select+copy (not drag), we remove the built-in drag
-    // gesture controller that GtkTextView installs by default.
-    disable_text_view_drag(output_view.upcast_ref::<TextView>());
+    let streaming_buffer_widget = gtk4::TextBuffer::new(None::<&gtk4::TextTagTable>);
+    let streaming_view = EmojiTextView::with_buffer(&streaming_buffer_widget);
+    streaming_view.set_editable(false);
+    streaming_view.set_cursor_visible(false);
+    streaming_view.set_wrap_mode(WrapMode::WordChar);
+    streaming_view.set_top_margin(0);
+    streaming_view.set_bottom_margin(8);
+    streaming_view.set_left_margin(12);
+    streaming_view.set_right_margin(12);
+    streaming_view.set_hexpand(true);
+    streaming_view.set_visible(false); // hidden until first TextDelta
+    disable_text_view_drag(streaming_view.upcast_ref::<TextView>());
+    setup_output_context_menu(streaming_view.upcast_ref::<TextView>());
 
-    // Install a right-click context menu with "Copy" action.
-    setup_output_context_menu(output_view.upcast_ref::<TextView>());
+    let output_inner_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(0)
+        .hexpand(true)
+        .build();
+    output_inner_box.append(&final_view);
+    output_inner_box.append(&streaming_view);
 
     let output_scroll = ScrolledWindow::builder()
         .vexpand(true)
         .hexpand(true)
         .hscrollbar_policy(PolicyType::Never)
         .vscrollbar_policy(PolicyType::Automatic)
-        .child(&output_view)
+        .child(&output_inner_box)
         .build();
 
     // --- Input: editable text view + send button ---
@@ -324,8 +354,10 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
     window.set_child(Some(&main_box));
 
     let widgets = UiWidgets {
-        output_view,
-        output_buffer,
+        final_view,
+        final_buffer,
+        streaming_view,
+        streaming_buffer_widget,
         output_scroll,
         input_view,
         input_buffer,
@@ -337,7 +369,7 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
 
     // Read the actual text font size from the output TextView's Pango context
     // so emoji bitmaps match the surrounding text height.
-    init_emoji_font_size(&widgets.output_view);
+    init_emoji_font_size(&widgets.final_view);
 
     (window, widgets)
 }

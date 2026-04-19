@@ -131,8 +131,8 @@ fn test_event_loop_has_resize_rerender() {
     // changes, so tables adapt to the new column count.
     let source = include_str!("../event_dispatch.rs");
     assert!(
-        source.contains("rerender_all_blocks") && source.contains("resize_stable_ticks"),
-        "event_dispatch.rs must contain resize-debounced rerender_all_blocks call"
+        source.contains("render_all_blocks_into") && source.contains("resize_stable_ticks"),
+        "event_dispatch.rs must contain resize-debounced render_all_blocks_into call"
     );
 }
 

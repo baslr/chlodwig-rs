@@ -72,11 +72,19 @@ fn test_gtk_restore_read_tool() {
     assert_eq!(state.blocks.len(), 2);
     // ToolUse → ToolUseStart
     assert!(matches!(&state.blocks[0], DisplayBlock::ToolUseStart { name, .. } if name == "Read"));
-    // Read result → ToolResult with Read header
+    // Read result → ToolResult with tool_name="Read" and the raw content
+    // (the "Read: /tmp/test.rs" header is now produced by render_block at
+    // render time, NOT pre-baked into the output string).
     match &state.blocks[1] {
-        DisplayBlock::ToolResult { output, is_error } => {
+        DisplayBlock::ToolResult {
+            output,
+            is_error,
+            tool_name,
+            tool_input,
+        } => {
             assert!(!is_error);
-            assert!(output.contains("Read: /tmp/test.rs"), "Should contain Read header, got: {output}");
+            assert_eq!(tool_name, "Read");
+            assert_eq!(tool_input["file_path"], "/tmp/test.rs");
             assert!(output.contains("fn main() {}"));
         }
         other => panic!("Expected ToolResult, got {:?}", other),
@@ -94,10 +102,16 @@ fn test_gtk_restore_bash_tool() {
 
     assert_eq!(state.blocks.len(), 2);
     match &state.blocks[1] {
-        DisplayBlock::ToolResult { output, is_error } => {
+        DisplayBlock::ToolResult {
+            output,
+            is_error,
+            tool_name,
+            tool_input,
+        } => {
             assert!(!is_error);
-            assert!(output.contains("$ echo hi"), "Should contain command, got: {output}");
-            assert!(output.contains("hi\n"));
+            assert_eq!(tool_name, "Bash");
+            assert_eq!(tool_input["command"], "echo hi");
+            assert!(output.contains("hi"), "Should contain raw output, got: {output}");
         }
         other => panic!("Expected ToolResult, got {:?}", other),
     }
@@ -140,7 +154,7 @@ fn test_gtk_restore_error_tool_result() {
 
     assert_eq!(state.blocks.len(), 2);
     match &state.blocks[1] {
-        DisplayBlock::ToolResult { output, is_error } => {
+        DisplayBlock::ToolResult { output, is_error, .. } => {
             assert!(is_error);
             assert_eq!(output, "No such file");
         }

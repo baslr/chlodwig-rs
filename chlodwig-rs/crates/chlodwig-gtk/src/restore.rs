@@ -82,10 +82,11 @@ pub fn apply_restored_session_to_ui(snapshot: SessionSnapshot, ctx: &RestoreCont
     ));
 
     // 5. Render the restored blocks.
-    render::render_restored_blocks(
+    render::render_all_blocks_into(
         ctx.output_buf,
         &ctx.state.borrow(),
         ctx.viewport_cols.get(),
+        false, // restore appends below the startup CWD header that's already in the buffer
     );
 
     // 6. Confirmation line.

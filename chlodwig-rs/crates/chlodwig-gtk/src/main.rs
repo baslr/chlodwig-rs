@@ -173,7 +173,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     // Show current working directory in the output area at startup
     {
         let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
-        window::append_styled(&widgets.output_buffer, &format!("{cwd_msg}\n"), "system");
+        window::append_styled(&widgets.final_buffer, &format!("{cwd_msg}\n"), "system");
     }
 
     // --- Resume session if --resume flag was passed ---
@@ -186,8 +186,8 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                     .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
                 let ctx = restore::RestoreContext {
                     state: &app_state,
-                    output_buf: &widgets.output_buffer,
-                    output_view: &widgets.output_view,
+                    output_buf: &widgets.final_buffer,
+                    output_view: &widgets.final_view,
                     output_scroll: &widgets.output_scroll,
                     window: &window,
                     viewport_cols: &viewport_cols,
@@ -200,14 +200,14 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
             }
             Ok(None) => {
                 window::append_styled(
-                    &widgets.output_buffer,
+                    &widgets.final_buffer,
                     "No saved session found — starting fresh.\n",
                     "system",
                 );
             }
             Err(e) => {
                 window::append_styled(
-                    &widgets.output_buffer,
+                    &widgets.final_buffer,
                     &format!("Failed to load session: {e}\n"),
                     "error",
                 );
@@ -226,32 +226,28 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         stop_flag: stop_flag.clone(),
     });
 
-    // Char offset in the TextBuffer where the current streaming Markdown starts.
-    // -1 means "no streaming in progress".
-    // Shared with the toggle button handler so it can reset when re-rendering.
-    let streaming_start_offset: Rc<Cell<i32>> = Rc::new(Cell::new(-1));
-
     // --- Wire up Toggle Tool Usage button ---
     let state_for_toggle = app_state.clone();
-    let output_buf_for_toggle = widgets.output_buffer.clone();
-    let streaming_offset_for_toggle = streaming_start_offset.clone();
+    let final_buf_for_toggle = widgets.final_buffer.clone();
     let viewport_cols_for_toggle = viewport_cols.clone();
-    let output_view_for_toggle = widgets.output_view.clone();
+    let final_view_for_toggle = widgets.final_view.clone();
     widgets.toggle_tool_button.connect_clicked(move |btn| {
         let mut state = state_for_toggle.borrow_mut();
         state.show_tool_usage = !state.show_tool_usage;
         btn.set_label(if state.show_tool_usage { "Hide Tools" } else { "Show Tools" });
 
         // Re-render entire output from blocks (no scroll — user wants to keep reading).
-        // Reset streaming_start_offset so the event loop doesn't use a stale offset
-        // after we cleared and re-built the buffer.
         viewport_cols_for_toggle.set(
             chlodwig_gtk::viewport::viewport_columns(
-                output_view_for_toggle.upcast_ref::<gtk4::TextView>(),
+                final_view_for_toggle.upcast_ref::<gtk4::TextView>(),
             ),
         );
-        render::rerender_all_blocks(&output_buf_for_toggle, &state, viewport_cols_for_toggle.get());
-        streaming_offset_for_toggle.set(-1);
+        render::render_all_blocks_into(
+            &final_buf_for_toggle,
+            &state,
+            viewport_cols_for_toggle.get(),
+            true,
+        );
     });
 
     // macOS Cmd/Option shortcuts (shared with UserQuestion dialog)
@@ -270,7 +266,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     let state_for_copy = app_state.clone();
     let status_left_for_copy = widgets.status_left_label.clone();
     let status_right_for_copy = widgets.status_right_label.clone();
-    widgets.output_view.connect_copy_clipboard(move |_view| {
+    widgets.final_view.connect_copy_clipboard(move |_view| {
         state_for_copy.borrow_mut().set_copy_feedback("✓ Copied!");
         // Show feedback immediately
         status_left_for_copy.set_label("✓ Copied!");
@@ -311,7 +307,6 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         uq_rx: uq_rx.clone(),
         prompt_tx: prompt_tx.clone(),
         viewport_cols: viewport_cols.clone(),
-        streaming_start_offset: streaming_start_offset.clone(),
         window: window.clone(),
         session_started_at: session_started_at.clone(),
     });

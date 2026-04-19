@@ -79,7 +79,7 @@ fn test_tool_result_creates_block() {
     assert!(changed);
     assert_eq!(state.blocks.len(), 1);
     match &state.blocks[0] {
-        DisplayBlock::ToolResult { output, is_error } => {
+        DisplayBlock::ToolResult { output, is_error, .. } => {
             assert_eq!(output, "file.txt\n");
             assert!(!is_error);
         }
@@ -1196,13 +1196,16 @@ fn test_finalized_streaming_render_uses_table_headers() {
     // The finalized streaming render (Case 2: TextComplete) must use the
     // unified `md_renderer::append_styled_lines(..., &state.tables, block_idx)`
     // call so that table sort tags are present immediately — not only after
-    // a resize. (The function signature with `&state.tables` distinguishes
-    // it from accidental calls without table info.)
-    let source = include_str!("../event_dispatch.rs");
+    // a resize. After Variant B refactor: the live block path uses
+    // `append_block` which calls `render_block` which calls
+    // `append_styled_lines` with `ctx.tables`. We grep for the renderer's
+    // ctx-based table access pattern.
+    let render_src = include_str!("../render.rs");
     assert!(
-        source.contains("streaming_finalized") && source.contains("&state.tables"),
-        "Finalized streaming render must pass &state.tables to append_styled_lines \
-         so table sort tags are present immediately, not only after resize"
+        render_src.contains("append_styled_lines") && render_src.contains("ctx.tables"),
+        "render.rs::render_block must pass ctx.tables to append_styled_lines \
+         so table sort tags are present immediately on the live append path \
+         (not only after a resize-triggered full re-render)"
     );
 }
 
