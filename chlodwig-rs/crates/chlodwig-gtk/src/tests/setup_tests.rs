@@ -193,3 +193,143 @@ fn test_read_and_clear_finder_pasteboard_clears_after_read() {
     let second = read_and_clear_finder_pasteboard();
     assert!(second.is_none());
 }
+
+// ── Pure resolver tests (Stage 0.2 of MULTIWINDOW_TABS.md) ────────────
+// New resolve_* functions return the resolved path WITHOUT calling
+// set_current_dir(). This is the foundation for per-tab CWD.
+
+#[test]
+fn test_resolve_project_dir_with_valid_dir_does_not_change_cwd() {
+    let _lock = serial_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let original_cwd = std::env::current_dir().unwrap();
+
+    std::env::set_var("CHLODWIG_PROJECT_DIR", dir.to_str().unwrap());
+    let result = resolve_project_dir();
+    std::env::remove_var("CHLODWIG_PROJECT_DIR");
+
+    assert_eq!(result, Some(dir));
+    // Process CWD must be untouched.
+    assert_eq!(std::env::current_dir().unwrap(), original_cwd);
+}
+
+#[test]
+fn test_resolve_project_dir_nonexistent_returns_none() {
+    let _lock = serial_lock();
+    let original = std::env::current_dir().unwrap();
+
+    std::env::set_var("CHLODWIG_PROJECT_DIR", "/nonexistent/path/abc123");
+    let result = resolve_project_dir();
+    std::env::remove_var("CHLODWIG_PROJECT_DIR");
+
+    assert!(result.is_none());
+    assert_eq!(std::env::current_dir().unwrap(), original);
+}
+
+#[test]
+fn test_resolve_project_dir_not_set_returns_none() {
+    let _lock = serial_lock();
+    std::env::remove_var("CHLODWIG_PROJECT_DIR");
+    let result = resolve_project_dir();
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_resolve_project_dir_from_args_no_dirs() {
+    // When running tests, args don't contain directories.
+    let result = resolve_project_dir_from_args();
+    let _ = result;
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn test_resolve_project_dir_from_finder_does_not_change_cwd() {
+    let _lock = serial_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let original_cwd = std::env::current_dir().unwrap();
+
+    write_finder_pasteboard(dir.to_str().unwrap());
+
+    let result = resolve_project_dir_from_finder();
+    assert_eq!(result, Some(dir));
+    // CWD must be unchanged.
+    assert_eq!(std::env::current_dir().unwrap(), original_cwd);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn test_resolve_project_dir_from_finder_empty_pasteboard() {
+    let _lock = serial_lock();
+    let original = std::env::current_dir().unwrap();
+    clear_finder_pasteboard();
+
+    let result = resolve_project_dir_from_finder();
+    assert!(result.is_none());
+    assert_eq!(std::env::current_dir().unwrap(), original);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn test_resolve_project_dir_from_finder_nonexistent_returns_none() {
+    let _lock = serial_lock();
+    let original = std::env::current_dir().unwrap();
+    write_finder_pasteboard("/nonexistent/path/xyz789");
+
+    let result = resolve_project_dir_from_finder();
+    assert!(result.is_none());
+    assert_eq!(std::env::current_dir().unwrap(), original);
+}
+
+#[test]
+#[cfg(target_os = "macos")]
+fn test_resolve_project_dir_from_finder_trims_whitespace() {
+    let _lock = serial_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+
+    write_finder_pasteboard(&format!("{}\n", dir.display()));
+
+    let result = resolve_project_dir_from_finder();
+    assert_eq!(result, Some(dir));
+}
+
+// ── resolve_initial_cwd: priority + fallback ──────────────────────────
+
+/// Priority: Finder pasteboard > CHLODWIG_PROJECT_DIR > CLI args > process CWD.
+/// All resolvers must run without side effects on the process CWD.
+#[test]
+fn test_resolve_initial_cwd_prefers_env_over_process_cwd() {
+    let _lock = serial_lock();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().canonicalize().unwrap();
+    let original_cwd = std::env::current_dir().unwrap();
+
+    // Make sure no Finder pasteboard interferes.
+    #[cfg(target_os = "macos")]
+    clear_finder_pasteboard();
+
+    std::env::set_var("CHLODWIG_PROJECT_DIR", dir.to_str().unwrap());
+    let result = resolve_initial_cwd();
+    std::env::remove_var("CHLODWIG_PROJECT_DIR");
+
+    assert_eq!(result, dir);
+    assert_eq!(std::env::current_dir().unwrap(), original_cwd);
+}
+
+#[test]
+fn test_resolve_initial_cwd_falls_back_to_process_cwd() {
+    let _lock = serial_lock();
+    std::env::remove_var("CHLODWIG_PROJECT_DIR");
+    #[cfg(target_os = "macos")]
+    clear_finder_pasteboard();
+
+    let original = std::env::current_dir().unwrap();
+    let result = resolve_initial_cwd();
+    // Either the test process CWD or a directory found in CLI args.
+    // At minimum: result must be a real directory, and CWD must be unchanged.
+    assert!(result.is_dir(), "result {:?} should be a directory", result);
+    assert_eq!(std::env::current_dir().unwrap(), original);
+}
+
