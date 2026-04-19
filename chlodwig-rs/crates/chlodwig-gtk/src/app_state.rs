@@ -130,6 +130,29 @@ impl AppState {
         }
     }
 
+    /// Project-directory name, derived from `self.cwd`.
+    ///
+    /// Returns the last path component (e.g. `"chlodwig-rs"` for
+    /// `/Users/me/projects/chlodwig-rs`). Returns an empty string if
+    /// `self.cwd` is `/` or has no file name.
+    ///
+    /// Stage 0.3 of MULTIWINDOW_TABS.md — replaces the free function
+    /// `project_dir_name()` (which read the process CWD).
+    pub fn project_dir_name(&self) -> String {
+        self.cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    }
+
+    /// Startup message that shows this tab's working directory, e.g.
+    /// `"cwd: /Users/me/projects/chlodwig-rs"`.
+    ///
+    /// Displayed as a `SystemMessage` in the output area when a tab opens.
+    pub fn startup_cwd_message(&self) -> String {
+        format!("cwd: {}", self.cwd.display())
+    }
+
     /// Process a ConversationEvent and update state accordingly.
     /// Returns `true` if the UI should be refreshed.
     pub fn handle_event(&mut self, event: ConversationEvent) -> bool {

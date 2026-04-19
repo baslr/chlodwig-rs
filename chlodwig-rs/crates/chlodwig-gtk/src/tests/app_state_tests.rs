@@ -54,6 +54,45 @@ fn test_two_app_states_have_independent_cwds() {
     assert_eq!(std::env::current_dir().unwrap(), process_cwd_before);
 }
 
+// ── Methods derived from state.cwd (Stage 0.3) ──────────────────────
+
+#[test]
+fn test_project_dir_name_method_uses_state_cwd() {
+    let state = AppState::with_cwd(
+        "m".into(),
+        std::path::PathBuf::from("/Users/me/projects/my-cool-app"),
+    );
+    assert_eq!(state.project_dir_name(), "my-cool-app");
+}
+
+#[test]
+fn test_project_dir_name_method_root_returns_empty() {
+    let state = AppState::with_cwd("m".into(), std::path::PathBuf::from("/"));
+    assert_eq!(state.project_dir_name(), "");
+}
+
+#[test]
+fn test_startup_cwd_message_method_uses_state_cwd() {
+    let state = AppState::with_cwd(
+        "m".into(),
+        std::path::PathBuf::from("/tmp/per-tab/here"),
+    );
+    let msg = state.startup_cwd_message();
+    assert!(msg.contains("/tmp/per-tab/here"), "got: {msg}");
+    assert!(msg.contains("cwd"), "label missing in: {msg}");
+}
+
+/// Two AppStates with different CWDs must produce different startup
+/// messages — proves the method is reading state.cwd, not the process CWD.
+#[test]
+fn test_startup_cwd_message_method_distinguishes_two_states() {
+    let a = AppState::with_cwd("m".into(), std::path::PathBuf::from("/tab/a"));
+    let b = AppState::with_cwd("m".into(), std::path::PathBuf::from("/tab/b"));
+    assert_ne!(a.startup_cwd_message(), b.startup_cwd_message());
+    assert!(a.startup_cwd_message().contains("/tab/a"));
+    assert!(b.startup_cwd_message().contains("/tab/b"));
+}
+
 #[test]
 fn test_text_delta_accumulates_in_streaming_buffer() {
     let mut state = AppState::new("m".into());

@@ -148,7 +148,7 @@ pub fn render_all_blocks_into(
     buffer.delete(&mut start, &mut end);
 
     if include_cwd_header {
-        let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+        let cwd_msg = state.startup_cwd_message();
         window::append_styled(buffer, &format!("{cwd_msg}\n"), "system");
     }
 

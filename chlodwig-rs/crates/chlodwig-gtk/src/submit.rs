@@ -65,9 +65,10 @@ pub fn wire(ctx: SubmitContext) {
     let final_view_for_submit = widgets.final_view.clone();
     let window_for_submit = window.clone();
     let stop_flag_for_submit = stop_flag.clone();
-    let cwd_name_for_submit: Option<String> = std::env::current_dir()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let cwd_name_for_submit: Option<String> = {
+        let n = app_state.borrow().project_dir_name();
+        if n.is_empty() { None } else { Some(n) }
+    };
 
     let submit = move || {
         let start = input_buf.start_iter();
@@ -95,7 +96,7 @@ pub fn wire(ctx: SubmitContext) {
                     chlodwig_gtk::emoji_overlay::clear_overlays_from(&final_buf_for_submit, 0);
                     final_buf_for_submit.delete(&mut s, &mut e);
                     // Show CWD again
-                    let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+                    let cwd_msg = state_for_submit.borrow().startup_cwd_message();
                     window::append_styled(&final_buf_for_submit, &format!("{cwd_msg}\n"), "system");
                     // Tell background task to clear ConversationState.messages
                     let _ = prompt_tx_clone.send(BackgroundCommand::ClearMessages);

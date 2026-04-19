@@ -79,12 +79,13 @@ fn main() -> glib::ExitCode {
     // Check for --resume flag before GTK init
     let resume_flag = std::env::args().any(|a| a == "--resume" || a == "-r");
 
-    // Set working directory: Finder marker > env var > CLI args
-    if chlodwig_gtk::setup::apply_project_dir_from_finder().is_none() {
-        if chlodwig_gtk::setup::apply_project_dir().is_none() {
-            chlodwig_gtk::setup::apply_project_dir_from_args();
-        }
-    }
+    // Resolve the initial working directory for the (single, for now) tab.
+    // Priority: Finder pasteboard > CHLODWIG_PROJECT_DIR > CLI args > process CWD.
+    // No longer calls set_current_dir(): per Stage 0.3 of MULTIWINDOW_TABS.md
+    // each tab carries its own cwd in AppState. The process CWD stays as-is
+    // so future tabs/windows can have independent working directories.
+    let initial_cwd = chlodwig_gtk::setup::resolve_initial_cwd();
+    tracing::info!("Initial tab cwd: {}", initial_cwd.display());
 
     // Initialize Adwaita application
     let app = libadwaita::Application::builder()
@@ -92,14 +93,14 @@ fn main() -> glib::ExitCode {
         .build();
 
     app.connect_activate(move |app| {
-        activate(app, resume_flag);
+        activate(app, resume_flag, initial_cwd.clone());
     });
 
     app.run()
 }
 
-fn activate(app: &libadwaita::Application, resume_flag: bool) {
-    let (window, widgets) = window::build_window(app);
+fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::path::PathBuf) {
+    let (window, widgets) = window::build_window(app, &initial_cwd);
 
     // --- Viewport width tracking for Markdown table rendering ---
     // Tables use monospace font, so we need to know how many monospace
@@ -136,8 +137,9 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
     };
 
     // --- Shared state ---
-    let app_state = Rc::new(RefCell::new(AppState::new(
+    let app_state = Rc::new(RefCell::new(AppState::with_cwd(
         resolved_config.model.clone(),
+        initial_cwd.clone(),
     )));
 
     // Channel: conversation events from background task → GTK main loop
@@ -172,7 +174,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
 
     // Show current working directory in the output area at startup
     {
-        let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+        let cwd_msg = app_state.borrow().startup_cwd_message();
         window::append_styled(&widgets.final_buffer, &format!("{cwd_msg}\n"), "system");
     }
 
@@ -181,9 +183,11 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
         match chlodwig_core::load_latest_session() {
             Ok(Some(snapshot)) => {
                 tracing::info!("Resuming session with {} messages", snapshot.messages.len());
-                let cwd_name: Option<String> = std::env::current_dir()
-                    .ok()
-                    .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+                let cwd_name: Option<String> = {
+                    let s = app_state.borrow();
+                    let n = s.project_dir_name();
+                    if n.is_empty() { None } else { Some(n) }
+                };
                 let ctx = restore::RestoreContext {
                     state: &app_state,
                     output_buf: &widgets.final_buffer,
@@ -343,7 +347,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool) {
                 max_tokens: bg_config.max_tokens,
                 tools,
                 tool_context: ToolContext {
-                    working_directory: std::env::current_dir().unwrap_or_default(),
+                    working_directory: initial_cwd.clone(),
                     timeout: Duration::from_secs(120),
                 },
                 stop_requested: stop_flag_bg.clone(),

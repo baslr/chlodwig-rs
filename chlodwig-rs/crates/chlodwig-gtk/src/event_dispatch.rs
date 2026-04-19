@@ -71,7 +71,7 @@ pub fn wire(ctx: EventDispatchContext) {
     let uq_queue: Rc<RefCell<VecDeque<chlodwig_tools::UserQuestionRequest>>> =
         Rc::new(RefCell::new(VecDeque::new()));
     let uq_dialog_open: Rc<Cell<bool>> = Rc::new(Cell::new(false));
-    let project_name = chlodwig_gtk::app_state::project_dir_name();
+    let project_name = app_state.borrow().project_dir_name();
     let prompt_tx_for_events = prompt_tx.clone();
     let session_started_at_for_events = session_started_at.clone();
     let viewport_cols_for_events = viewport_cols.clone();

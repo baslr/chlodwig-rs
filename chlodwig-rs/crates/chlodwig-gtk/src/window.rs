@@ -192,7 +192,14 @@ pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
 }
 
 /// Build the main application window and return widget references.
-pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidgets) {
+///
+/// `cwd` is the working directory of the (initial) tab; used to derive
+/// the window title (`"chlodwig — <project-dir>"`). Per Stage 0.3 of
+/// MULTIWINDOW_TABS.md the title no longer reads `env::current_dir()`.
+pub fn build_window(
+    app: &libadwaita::Application,
+    cwd: &std::path::Path,
+) -> (ApplicationWindow, UiWidgets) {
     // --- Load application CSS ---
     load_app_css();
 
@@ -340,9 +347,9 @@ pub fn build_window(app: &libadwaita::Application) -> (ApplicationWindow, UiWidg
     main_box.append(&Separator::new(Orientation::Horizontal));
     main_box.append(&status_bar);
 
-    let cwd_name = std::env::current_dir()
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+    let cwd_name = cwd
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned());
     let title = format_window_title(cwd_name.as_deref(), None);
 
     let window = ApplicationWindow::builder()

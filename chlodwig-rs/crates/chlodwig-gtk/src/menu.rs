@@ -101,7 +101,7 @@ pub fn setup_menu(ctx: MenuContext) {
             let mut e = output_buf.end_iter();
             chlodwig_gtk::emoji_overlay::clear_overlays_from(&output_buf, 0);
             output_buf.delete(&mut s, &mut e);
-            let cwd_msg = chlodwig_gtk::app_state::startup_cwd_message();
+            let cwd_msg = state.borrow().startup_cwd_message();
             window::append_styled(&output_buf, &format!("{cwd_msg}\n"), "system");
             let _ = prompt_tx.send(BackgroundCommand::ClearMessages);
             window::update_status(&status_left, &status_right, &state.borrow());
@@ -164,9 +164,10 @@ pub fn setup_menu(ctx: MenuContext) {
                 current_file,
                 Box::new(move |path| match chlodwig_core::load_session_from(&path) {
                     Ok(snapshot) => {
-                        let cwd_name: Option<String> = std::env::current_dir()
-                            .ok()
-                            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()));
+                        let cwd_name: Option<String> = {
+                            let n = state.borrow().project_dir_name();
+                            if n.is_empty() { None } else { Some(n) }
+                        };
                         let ctx = restore::RestoreContext {
                             state: &state,
                             output_buf: &output_buf,
