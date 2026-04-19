@@ -331,9 +331,10 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
             }
             let api_client: Arc<dyn chlodwig_core::ApiClient> = Arc::new(client);
 
-            let system_prompt = chlodwig_core::build_system_prompt(
+            let system_prompt = chlodwig_core::build_system_prompt_with_cwd(
                 None,
                 chlodwig_core::UiContext::Gui,
+                &initial_cwd,
             );
             let mut tools = chlodwig_tools::builtin_tools();
             // Inject UserQuestion tool — uq_tx was created in GTK scope,

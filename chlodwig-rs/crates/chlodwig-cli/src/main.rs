@@ -111,9 +111,16 @@ async fn main() -> Result<()> {
 
     let tools = chlodwig_tools::builtin_tools();
 
-    let system_prompt = chlodwig_core::build_system_prompt(
+    // Resolve the working directory once at startup. The CLI has no concept
+    // of multiple tabs, but routing both system_prompt and ToolContext through
+    // an explicit cwd keeps the core library free of process-CWD reads
+    // (Stage 0.4 of MULTIWINDOW_TABS.md).
+    let cwd = std::env::current_dir()?;
+
+    let system_prompt = chlodwig_core::build_system_prompt_with_cwd(
         cli.system_prompt.as_deref(),
         chlodwig_core::UiContext::Cli,
+        &cwd,
     );
 
     tracing::info!(
@@ -129,7 +136,7 @@ async fn main() -> Result<()> {
         max_tokens: config.max_tokens,
         tools,
         tool_context: ToolContext {
-            working_directory: std::env::current_dir()?,
+            working_directory: cwd,
             timeout: Duration::from_secs(120),
         },
         stop_requested: chlodwig_core::new_stop_flag(),
