@@ -1,5 +1,25 @@
 //! Shared utility functions for tool implementations.
 
+use chlodwig_core::ToolContext;
+use std::path::{Path, PathBuf};
+
+/// Resolve a user-supplied path against the tool context's working directory.
+///
+/// - Absolute paths are returned unchanged.
+/// - Relative paths are joined onto `ctx.working_directory`.
+///
+/// This is essential for the multi-tab GTK feature: each tab has its own
+/// `cwd`, and tools must honour the per-tab `working_directory` instead of
+/// the process-global `std::env::current_dir()`. See `MULTIWINDOW_TABS.md`.
+pub(crate) fn resolve_path(ctx: &ToolContext, input: &str) -> PathBuf {
+    let p = Path::new(input);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        ctx.working_directory.join(p)
+    }
+}
+
 /// Truncate `text` in-place to at most `max_bytes`, appending `suffix` if truncated.
 ///
 /// Unlike `String::truncate(max)`, this never panics on multi-byte UTF-8
@@ -84,5 +104,55 @@ mod tests {
         let mut text = "hello".to_string();
         safe_truncate(&mut text, 0, " [cut]");
         assert_eq!(text, " [cut]");
+    }
+
+    // ── resolve_path ────────────────────────────────────────────────
+
+    fn ctx_with_cwd(cwd: &str) -> ToolContext {
+        ToolContext {
+            working_directory: PathBuf::from(cwd),
+            timeout: std::time::Duration::from_secs(10),
+        }
+    }
+
+    #[test]
+    fn test_resolve_path_absolute_unchanged() {
+        let ctx = ctx_with_cwd("/some/cwd");
+        let resolved = resolve_path(&ctx, "/etc/hosts");
+        assert_eq!(resolved, PathBuf::from("/etc/hosts"));
+    }
+
+    #[test]
+    fn test_resolve_path_relative_joined_to_cwd() {
+        let ctx = ctx_with_cwd("/projects/chlodwig");
+        let resolved = resolve_path(&ctx, "src/lib.rs");
+        assert_eq!(resolved, PathBuf::from("/projects/chlodwig/src/lib.rs"));
+    }
+
+    #[test]
+    fn test_resolve_path_relative_dot() {
+        let ctx = ctx_with_cwd("/projects/chlodwig");
+        let resolved = resolve_path(&ctx, "./README.md");
+        assert_eq!(resolved, PathBuf::from("/projects/chlodwig/./README.md"));
+    }
+
+    #[test]
+    fn test_resolve_path_bare_filename() {
+        let ctx = ctx_with_cwd("/var/tmp");
+        let resolved = resolve_path(&ctx, "out.log");
+        assert_eq!(resolved, PathBuf::from("/var/tmp/out.log"));
+    }
+
+    /// Different ToolContexts must resolve the same relative input differently.
+    /// This is the property that enables per-tab CWD without process-CWD changes.
+    #[test]
+    fn test_resolve_path_two_contexts_independent() {
+        let ctx_a = ctx_with_cwd("/tab/a");
+        let ctx_b = ctx_with_cwd("/tab/b");
+        let a = resolve_path(&ctx_a, "src/main.rs");
+        let b = resolve_path(&ctx_b, "src/main.rs");
+        assert_ne!(a, b);
+        assert_eq!(a, PathBuf::from("/tab/a/src/main.rs"));
+        assert_eq!(b, PathBuf::from("/tab/b/src/main.rs"));
     }
 }

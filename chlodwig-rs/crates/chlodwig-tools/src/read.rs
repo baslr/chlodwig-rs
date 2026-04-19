@@ -43,12 +43,13 @@ impl Tool for ReadTool {
     async fn call(
         &self,
         input: serde_json::Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Result<ToolOutput, ToolError> {
         let input: ReadInput =
             serde_json::from_value(input).map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
-        let content = tokio::fs::read_to_string(&input.file_path).await?;
+        let path = crate::util::resolve_path(ctx, &input.file_path);
+        let content = tokio::fs::read_to_string(&path).await?;
         let lines: Vec<&str> = content.lines().collect();
 
         let offset = input.offset.unwrap_or(0);
@@ -180,6 +181,69 @@ mod tests {
 
         match &output.content {
             ToolResultContent::Text(t) => assert!(t.contains("empty file")),
+            _ => panic!("Expected text"),
+        }
+    }
+
+    /// Relative file_path must be resolved against `ctx.working_directory`,
+    /// not the process-global CWD. This is the property that enables per-tab
+    /// CWD isolation in the GTK multi-tab feature.
+    #[tokio::test]
+    async fn test_read_relative_path_uses_ctx_working_directory() {
+        use chlodwig_core::ToolContext;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("hello.txt");
+        std::fs::write(&file_path, "from ctx cwd").unwrap();
+
+        let ctx = ToolContext {
+            working_directory: dir.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let tool = ReadTool;
+        let output = tool
+            .call(serde_json::json!({"file_path": "hello.txt"}), &ctx)
+            .await
+            .unwrap();
+
+        match &output.content {
+            ToolResultContent::Text(t) => assert!(t.contains("from ctx cwd"), "got: {t}"),
+            _ => panic!("Expected text"),
+        }
+    }
+
+    /// Absolute paths must remain unaffected by `ctx.working_directory`.
+    #[tokio::test]
+    async fn test_read_absolute_path_ignores_ctx_working_directory() {
+        use chlodwig_core::ToolContext;
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let real_dir = TempDir::new().unwrap();
+        let file_path = real_dir.path().join("absolute.txt");
+        std::fs::write(&file_path, "absolute content").unwrap();
+
+        // Wrong cwd — must be ignored because file_path is absolute.
+        let bogus_dir = TempDir::new().unwrap();
+        let ctx = ToolContext {
+            working_directory: bogus_dir.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let tool = ReadTool;
+        let output = tool
+            .call(
+                serde_json::json!({"file_path": file_path.to_str().unwrap()}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+
+        match &output.content {
+            ToolResultContent::Text(t) => assert!(t.contains("absolute content")),
             _ => panic!("Expected text"),
         }
     }

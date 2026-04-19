@@ -86,10 +86,27 @@ pub struct AppState {
     /// it into AppState lets the renderer be purely block-driven (no
     /// separate event-rendering path).
     tool_id_to_info: std::collections::HashMap<String, (String, serde_json::Value)>,
+    /// Working directory for this tab/window.
+    ///
+    /// Stage 0 of the multi-window/tabs refactor (see `MULTIWINDOW_TABS.md`):
+    /// each tab owns its own CWD so tools can resolve relative paths against
+    /// the per-tab `working_directory` instead of the process-global
+    /// `std::env::current_dir()`. This eliminates cross-talk between tabs.
+    pub cwd: std::path::PathBuf,
 }
 
 impl AppState {
+    /// Build an `AppState` with the process's current working directory.
+    /// Equivalent to `with_cwd(model, env::current_dir().unwrap_or_default())`.
+    /// Prefer `with_cwd` when the caller already knows the per-tab CWD.
     pub fn new(model: String) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        Self::with_cwd(model, cwd)
+    }
+
+    /// Build an `AppState` with an explicit working directory.
+    /// Used by per-tab construction so each tab carries its own CWD.
+    pub fn with_cwd(model: String, cwd: std::path::PathBuf) -> Self {
         Self {
             blocks: Vec::new(),
             streaming_buffer: String::new(),
@@ -109,6 +126,7 @@ impl AppState {
             tables: Vec::new(),
             session_name: None,
             tool_id_to_info: std::collections::HashMap::new(),
+            cwd,
         }
     }
 

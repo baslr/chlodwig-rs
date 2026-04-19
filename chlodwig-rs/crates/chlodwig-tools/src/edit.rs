@@ -52,12 +52,13 @@ impl Tool for EditTool {
     async fn call(
         &self,
         input: serde_json::Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Result<ToolOutput, ToolError> {
         let input: EditInput =
             serde_json::from_value(input).map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
-        let content = tokio::fs::read_to_string(&input.file_path).await?;
+        let path = crate::util::resolve_path(ctx, &input.file_path);
+        let content = tokio::fs::read_to_string(&path).await?;
 
         let matches: Vec<_> = content.match_indices(&input.old_string).collect();
 
@@ -86,7 +87,7 @@ impl Tool for EditTool {
             content.replacen(&input.old_string, &input.new_string, 1)
         };
 
-        tokio::fs::write(&input.file_path, &new_content).await?;
+        tokio::fs::write(&path, &new_content).await?;
 
         let replaced_count = if input.replace_all { matches.len() } else { 1 };
 
@@ -241,5 +242,67 @@ mod tests {
         let content = std::fs::read_to_string(file.path()).unwrap();
         assert!(content.contains("    let x = 42;"));
         assert!(content.contains("    let y = 2;"));
+    }
+
+    /// Relative file_path must resolve against `ctx.working_directory`
+    /// (per-tab CWD isolation, see MULTIWINDOW_TABS.md).
+    #[tokio::test]
+    async fn test_edit_relative_path_uses_ctx_working_directory() {
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let target = dir.path().join("rel.txt");
+        std::fs::write(&target, "hello WORLD").unwrap();
+
+        let ctx = ToolContext {
+            working_directory: dir.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let tool = EditTool;
+        tool.call(
+            serde_json::json!({
+                "file_path": "rel.txt",
+                "old_string": "WORLD",
+                "new_string": "rust"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "hello rust");
+    }
+
+    /// Absolute file_path is unaffected by `ctx.working_directory`.
+    #[tokio::test]
+    async fn test_edit_absolute_path_ignores_ctx_working_directory() {
+        use std::time::Duration;
+        use tempfile::TempDir;
+
+        let real_dir = TempDir::new().unwrap();
+        let bogus_dir = TempDir::new().unwrap();
+        let target = real_dir.path().join("abs.txt");
+        std::fs::write(&target, "old").unwrap();
+
+        let ctx = ToolContext {
+            working_directory: bogus_dir.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let tool = EditTool;
+        tool.call(
+            serde_json::json!({
+                "file_path": target.to_str().unwrap(),
+                "old_string": "old",
+                "new_string": "new"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "new");
     }
 }

@@ -38,17 +38,17 @@ impl Tool for WriteTool {
     async fn call(
         &self,
         input: serde_json::Value,
-        _ctx: &ToolContext,
+        ctx: &ToolContext,
     ) -> Result<ToolOutput, ToolError> {
         let input: WriteInput =
             serde_json::from_value(input).map_err(|e| ToolError::InvalidInput(e.to_string()))?;
 
-        let path = std::path::Path::new(&input.file_path);
+        let path = crate::util::resolve_path(ctx, &input.file_path);
         if let Some(parent) = path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
-        tokio::fs::write(path, &input.content).await?;
+        tokio::fs::write(&path, &input.content).await?;
 
         let line_count = input.content.lines().count();
         let byte_count = input.content.len();
@@ -146,5 +146,62 @@ mod tests {
         .unwrap();
 
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new content");
+    }
+
+    /// Relative file_path must resolve against `ctx.working_directory`
+    /// (per-tab CWD isolation, see MULTIWINDOW_TABS.md).
+    #[tokio::test]
+    async fn test_write_relative_path_uses_ctx_working_directory() {
+        use std::time::Duration;
+
+        let dir = TempDir::new().unwrap();
+        let ctx = ToolContext {
+            working_directory: dir.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let tool = WriteTool;
+        tool.call(
+            serde_json::json!({
+                "file_path": "subdir/out.txt",
+                "content": "isolated"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        let expected = dir.path().join("subdir/out.txt");
+        assert!(expected.exists(), "file should be in ctx cwd");
+        assert_eq!(std::fs::read_to_string(&expected).unwrap(), "isolated");
+    }
+
+    /// Absolute file_path is unaffected by `ctx.working_directory`.
+    #[tokio::test]
+    async fn test_write_absolute_path_ignores_ctx_working_directory() {
+        use std::time::Duration;
+
+        let real_dir = TempDir::new().unwrap();
+        let bogus_dir = TempDir::new().unwrap();
+        let path = real_dir.path().join("absolute.txt");
+
+        let ctx = ToolContext {
+            working_directory: bogus_dir.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let tool = WriteTool;
+        tool.call(
+            serde_json::json!({
+                "file_path": path.to_str().unwrap(),
+                "content": "absolute"
+            }),
+            &ctx,
+        )
+        .await
+        .unwrap();
+
+        assert!(path.exists());
+        assert!(!bogus_dir.path().join("absolute.txt").exists());
     }
 }

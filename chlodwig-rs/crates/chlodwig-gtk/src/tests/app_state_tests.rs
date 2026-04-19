@@ -15,6 +15,45 @@ fn test_new_state_is_empty() {
     assert_eq!(state.model, "test-model");
 }
 
+// ── Per-tab CWD (Stage 0 of MULTIWINDOW_TABS.md) ──────────────────
+
+/// `AppState` must own its working directory as a field, not read it from
+/// the process-global `std::env::current_dir()`. This is the foundation
+/// for per-tab CWD isolation.
+#[test]
+fn test_app_state_has_cwd_field() {
+    let cwd = std::path::PathBuf::from("/tmp/some/tab/cwd");
+    let state = AppState::with_cwd("m".into(), cwd.clone());
+    assert_eq!(state.cwd, cwd);
+}
+
+/// The legacy `new(model)` constructor must still work — it falls back to
+/// the current process CWD as a default. Callers that care about per-tab
+/// isolation should use `with_cwd`.
+#[test]
+fn test_app_state_new_defaults_cwd_to_process_cwd() {
+    let state = AppState::new("m".into());
+    let expected = std::env::current_dir().unwrap_or_default();
+    assert_eq!(state.cwd, expected);
+}
+
+/// Two `AppState` instances must be able to hold independent CWDs without
+/// affecting each other or the process CWD.
+#[test]
+fn test_two_app_states_have_independent_cwds() {
+    let process_cwd_before = std::env::current_dir().unwrap();
+
+    let a = AppState::with_cwd("m".into(), std::path::PathBuf::from("/tab/a"));
+    let b = AppState::with_cwd("m".into(), std::path::PathBuf::from("/tab/b"));
+
+    assert_eq!(a.cwd, std::path::PathBuf::from("/tab/a"));
+    assert_eq!(b.cwd, std::path::PathBuf::from("/tab/b"));
+    assert_ne!(a.cwd, b.cwd);
+
+    // Crucially: creating per-tab AppStates must not touch the process CWD.
+    assert_eq!(std::env::current_dir().unwrap(), process_cwd_before);
+}
+
 #[test]
 fn test_text_delta_accumulates_in_streaming_buffer() {
     let mut state = AppState::new("m".into());
