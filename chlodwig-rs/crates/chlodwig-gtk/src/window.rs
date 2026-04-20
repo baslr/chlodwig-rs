@@ -29,6 +29,44 @@ pub fn setup_macos_input_shortcuts(view: &TextView) {
     let view_for_key = view.clone();
     let key_ctrl = gtk4::EventControllerKey::new();
     key_ctrl.connect_key_pressed(move |_, key, _keycode, modifiers| {
+        // Helper: snapshot the parent ScrolledWindow's vadjustment value
+        // BEFORE an edit, then restore it AFTER (clamped to the new
+        // [0, upper - page_size] range). Without this, two GTK behaviors
+        // conspire to snap the input viewport to its first line:
+        //   (1) `buf.delete(...)` may shrink `upper`, causing
+        //       GtkAdjustment to auto-clamp `value` downward.
+        //   (2) GtkTextView calls `scroll_mark_onscreen(insert_mark)`
+        //       when the cursor moves; if the new cursor sits far above
+        //       the previous viewport (e.g. word-back delete jumps to
+        //       the start of a long line), the input scrolls up.
+        // We snapshot before, then re-pin via an idle (after layout) so
+        // GTK's post-edit scroll-to-cursor cannot win the race.
+        fn parent_scroll(view: &TextView) -> Option<ScrolledWindow> {
+            let mut node: Option<gtk4::Widget> = view.parent();
+            while let Some(w) = node {
+                if let Ok(sw) = w.clone().downcast::<ScrolledWindow>() {
+                    return Some(sw);
+                }
+                node = w.parent();
+            }
+            None
+        }
+        fn snapshot_and_restore_input_scroll<F: FnOnce()>(view: &TextView, edit: F) {
+            let sw = parent_scroll(view);
+            let saved = sw.as_ref().map(|s| s.vadjustment().value());
+            edit();
+            if let (Some(sw), Some(saved)) = (sw, saved) {
+                let sw_idle = sw.clone();
+                gtk4::glib::idle_add_local_once(move || {
+                    let adj = sw_idle.vadjustment();
+                    let max = (adj.upper() - adj.page_size()).max(0.0);
+                    let target = saved.clamp(0.0, max);
+                    if (adj.value() - target).abs() > 0.5 {
+                        adj.set_value(target);
+                    }
+                });
+            }
+        }
         let is_cmd = modifiers.contains(gtk4::gdk::ModifierType::META_MASK)
             || modifiers.contains(gtk4::gdk::ModifierType::CONTROL_MASK);
 
@@ -52,13 +90,21 @@ pub fn setup_macos_input_shortcuts(view: &TextView) {
                     return gtk4::glib::Propagation::Stop;
                 }
                 k if k == gtk4::gdk::Key::BackSpace => {
+                    // Local edit (not buf.set_text!) so the input
+                    // ScrolledWindow does not jump to the first line
+                    // (issue #30). set_text replaces the whole buffer
+                    // and resets the insert mark + viewport offset.
                     let buf = view_for_key.buffer();
                     let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
                     let cursor = buf.cursor_position() as usize;
-                    let (new_text, new_cursor) = crate::app_state::delete_to_line_start(&text, cursor);
-                    buf.set_text(&new_text);
-                    let iter = buf.iter_at_offset(new_cursor as i32);
-                    buf.place_cursor(&iter);
+                    let line_start = crate::app_state::line_start_pos(&text, cursor);
+                    if line_start < cursor {
+                        snapshot_and_restore_input_scroll(&view_for_key, || {
+                            let mut start_iter = buf.iter_at_offset(line_start as i32);
+                            let mut end_iter = buf.iter_at_offset(cursor as i32);
+                            buf.delete(&mut start_iter, &mut end_iter);
+                        });
+                    }
                     return gtk4::glib::Propagation::Stop;
                 }
                 k if k == gtk4::gdk::Key::Left => {
@@ -115,13 +161,20 @@ pub fn setup_macos_input_shortcuts(view: &TextView) {
                     return gtk4::glib::Propagation::Stop;
                 }
                 k if k == gtk4::gdk::Key::BackSpace => {
+                    // Local edit (not buf.set_text!) so the input
+                    // ScrolledWindow does not jump to the first line
+                    // (issue #30). Same fix as Cmd+Backspace above.
                     let buf = view_for_key.buffer();
                     let text = buf.text(&buf.start_iter(), &buf.end_iter(), false).to_string();
                     let cursor = buf.cursor_position() as usize;
-                    let (new_text, new_cursor) = crate::app_state::delete_word_back(&text, cursor);
-                    buf.set_text(&new_text);
-                    let iter = buf.iter_at_offset(new_cursor as i32);
-                    buf.place_cursor(&iter);
+                    let word_start = crate::app_state::word_left_pos(&text, cursor);
+                    if word_start < cursor {
+                        snapshot_and_restore_input_scroll(&view_for_key, || {
+                            let mut start_iter = buf.iter_at_offset(word_start as i32);
+                            let mut end_iter = buf.iter_at_offset(cursor as i32);
+                            buf.delete(&mut start_iter, &mut end_iter);
+                        });
+                    }
                     return gtk4::glib::Propagation::Stop;
                 }
                 _ => {}

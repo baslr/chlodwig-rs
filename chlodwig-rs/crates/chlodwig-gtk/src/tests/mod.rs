@@ -33,3 +33,4 @@ mod click_no_scroll_top_tests;
 mod scroll_simplification_tests;
 mod scroll_anchor_tests;
 mod value_changed_classification_tests;
+mod input_scroll_jump_tests;
