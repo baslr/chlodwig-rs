@@ -13,6 +13,14 @@ exclude = [
     "tools/sha1-asm-bug",  # standalone — uses sha1 with "asm" feature to reproduce bug
 ]
 
+[workspace.metadata.gc]
+# Auto-cleanup of stale build artefacts (custom cargo fork:
+# baslr/cargo, see commit 1fae34138 "feat(target-gc)").
+# Sweeps target/<profile>/{fingerprint,deps,build,incremental}/
+# entries whose .last-used marker is older than the threshold,
+# before each compile. Best-effort; I/O errors only warn.
+auto-target-days = 2
+
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

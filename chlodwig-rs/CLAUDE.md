@@ -161,24 +161,23 @@ When summarizing the conversation, focus on:
 
 ## Commands
 
-**RELEASE BUILDS ONLY.** Never run `cargo build` / `cargo test` / `cargo run`
-without `--release`. Debug builds bloat `target/` to 25-30 GB (multiple
-GTK4 rebuilds × 73-150 MB each, plus 8 GB incremental cache). Release
-artefacts are ~5× smaller and the project compiles fast enough that the
-edit-test cycle penalty is acceptable. The aliases below make this the
-default — always prefer `cargo b` / `cargo t` / `cargo r` over the long
-form.
+Debug builds are OK again. We use a custom cargo fork
+(`github.com/baslr/cargo`, installed in PATH ahead of system cargo)
+that auto-cleans `target/`, so the historic 25-30 GB debug-build bloat
+(GTK4 hash-versioned rebuilds + 8 GB incremental cache) is no longer
+an issue. Pass `--release` only when you actually want optimized
+binaries (benchmarks, shipping).
 
 ```bash
-cargo t                         # Run all tests (= test --release --workspace)
-cargo b                         # Build (= build --release)
-cargo r                         # Run TUI (= run --release)
-cargo r -- --resume             # Resume last saved session
+cargo t                         # Run all tests (= test --workspace, debug)
+cargo b                         # Build (debug)
+cargo r                         # Run TUI (debug)
+cargo t --release               # Release tests when explicitly needed
+cargo r --release -- --resume   # Resume last saved session, optimized
 cargo r -- --print "prompt"     # Headless mode
 ```
 
-The aliases are defined in `.cargo/config.toml`. If you must invoke
-cargo directly (e.g. `cargo build -p some-crate`), always pass `--release`.
+The aliases are defined in `.cargo/config.toml`.
 
 ### TUI Commands
 
