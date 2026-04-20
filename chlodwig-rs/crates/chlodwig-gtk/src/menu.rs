@@ -151,6 +151,8 @@ pub fn setup_menu(ctx: MenuContext) {
                 &t.widgets.status_right_label,
                 &t.app_state.borrow(),
             );
+            // Refresh tab title — clear() reset session_name to None.
+            t.refresh_tab_title();
         });
         app.add_action(&action);
         app.set_accels_for_action("app.new-conversation", &["<Meta>n"]);
@@ -234,6 +236,9 @@ pub fn setup_menu(ctx: MenuContext) {
                             cwd_name: cwd_name.as_deref(),
                         };
                         restore::apply_restored_session_to_ui(snapshot, &ctx);
+                        // Refresh tab title — restore may have set a
+                        // session_name (or cleared it).
+                        t_for_browser.refresh_tab_title();
                     }
                     Err(e) => {
                         window::append_styled(

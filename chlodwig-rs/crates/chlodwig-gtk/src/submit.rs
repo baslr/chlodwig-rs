@@ -37,6 +37,10 @@ pub struct SubmitContext {
     pub viewport_cols: Rc<Cell<usize>>,
     pub window: ApplicationWindow,
     pub session_started_at: String,
+    /// The `adw::TabPage` this submit handler is bound to. Used to look
+    /// up the owning `AiConversationTab` for tab-title refreshes after
+    /// `/name` / `/clear` (single SSoT — `AiConversationTab::refresh_tab_title`).
+    pub page: libadwaita::TabPage,
     /// Cooperative stop flag shared with the background conversation task.
     pub stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -51,6 +55,7 @@ pub fn wire(ctx: SubmitContext) {
         viewport_cols,
         window,
         session_started_at,
+        page,
         stop_flag,
     } = ctx;
 
@@ -66,6 +71,7 @@ pub fn wire(ctx: SubmitContext) {
     let streaming_view_for_submit = widgets.streaming_view.clone();
     let window_for_submit = window.clone();
     let stop_flag_for_submit = stop_flag.clone();
+    let page_for_submit = page.clone();
     let cwd_name_for_submit: Option<String> = {
         let n = app_state.borrow().project_dir_name();
         if n.is_empty() { None } else { Some(n) }
@@ -99,6 +105,10 @@ pub fn wire(ctx: SubmitContext) {
                     // Tell background task to clear ConversationState.messages
                     let _ = prompt_tx_clone.send(BackgroundCommand::ClearMessages);
                     window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
+                    // Refresh tab title — clearing also clears session_name.
+                    if let Some(t) = crate::tab::ai_conversation::lookup_by_page(&page_for_submit) {
+                        t.refresh_tab_title();
+                    }
                     return;
                 }
                 Command::Help => {
@@ -219,6 +229,10 @@ pub fn wire(ctx: SubmitContext) {
                                 cwd_name: cwd_name_for_submit.as_deref(),
                             };
                             restore::apply_restored_session_to_ui(snapshot, &ctx);
+                            // Refresh tab title — restore may have set a session_name.
+                            if let Some(t) = crate::tab::ai_conversation::lookup_by_page(&page_for_submit) {
+                                t.refresh_tab_title();
+                            }
                         }
                         Ok(None) => {
                             let msg = match &prefix {
@@ -281,6 +295,11 @@ pub fn wire(ctx: SubmitContext) {
                         new_name.as_deref(),
                     );
                     window_for_submit.set_title(Some(&new_title));
+                    // Refresh the tab tab title (single SSoT —
+                    // AiConversationTab::refresh_tab_title).
+                    if let Some(t) = crate::tab::ai_conversation::lookup_by_page(&page_for_submit) {
+                        t.refresh_tab_title();
+                    }
                     // Persist immediately.
                     let _ = prompt_tx_clone.send(BackgroundCommand::SaveSession {
                         started_at: session_started_at_for_submit.clone(),

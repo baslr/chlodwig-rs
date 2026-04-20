@@ -119,6 +119,37 @@ impl crate::tab::Tab for AiConversationTab {
     }
 }
 
+impl AiConversationTab {
+    /// Re-apply the tab-page title from the current `session_name` + `cwd`.
+    ///
+    /// Single source of truth for "what the tab tab text is". Called:
+    ///   - Once at tab creation (in `attach_new`).
+    ///   - From `submit.rs` after the `/name` command sets a new session name.
+    ///   - From `restore.rs` after a session-restore that brings in a
+    ///     persisted `session_name`.
+    ///   - From the `/clear` action which clears `session_name` to `None`.
+    ///
+    /// The full title (with `Chlodwig` suffix) is also updated as the
+    /// tooltip so the user can hover for the long form.
+    pub fn refresh_tab_title(&self) {
+        let cwd_name = self.cwd
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned());
+        let session_name = self.app_state.borrow().session_name.clone();
+        let tab_title = chlodwig_gtk::window::format_tab_title(
+            session_name.as_deref(),
+            cwd_name.as_deref(),
+        );
+        self.page.set_title(&tab_title);
+        // Tooltip: full window-style title for hover.
+        let tooltip = chlodwig_gtk::window::format_window_title(
+            cwd_name.as_deref(),
+            session_name.as_deref(),
+        );
+        self.page.set_tooltip(&tooltip);
+    }
+}
+
 /// Resolved configuration values needed to spawn an AI tab.
 ///
 /// Cloned (not moved) into each tab so opening N tabs all use the same
@@ -229,19 +260,10 @@ impl AiConversationTab {
         let stop_flag: Arc<AtomicBool> = chlodwig_core::new_stop_flag();
 
         // ── 3. Append page to TabView ─────────────────────────────────
+        // Title + tooltip are applied via `refresh_tab_title()` after the
+        // `AiConversationTab` value is constructed below — single source
+        // of truth for the tab-title format.
         let page = ctx.tab_view.append(&root);
-        let tab_title = window::format_window_title(
-            cwd.file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .as_deref(),
-            None,
-        );
-        let short_title = cwd
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "(no project)".to_string());
-        page.set_title(&short_title);
-        page.set_tooltip(&tab_title);
 
         // ── 4. Initial UI render: status bar + startup CWD banner ─────
         window::update_status(
@@ -351,6 +373,7 @@ impl AiConversationTab {
             viewport_cols: viewport_cols.clone(),
             window: ctx.window.clone(),
             session_started_at: session_started_at.clone(),
+            page: page.clone(),
             stop_flag: stop_flag.clone(),
         });
         table_interactions::wire(
@@ -396,7 +419,11 @@ impl AiConversationTab {
         ctx.registry
             .borrow_mut()
             .push((page.clone(), tab.clone() as Rc<dyn crate::tab::Tab>));
-        register(page.clone(), tab);
+        register(page.clone(), tab.clone());
+
+        // Apply the initial tab title now that the AiConversationTab value
+        // exists (single SSoT — same path used after /name, /clear, restore).
+        tab.refresh_tab_title();
 
         page
     }

@@ -38,3 +38,4 @@ mod input_max_half_height_tests;
 mod multiwindow_stage_a_tests;
 mod multiwindow_stage_b_tests;
 mod tab_trait_tests;
+mod tab_title_format_tests;

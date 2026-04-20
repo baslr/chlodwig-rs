@@ -167,6 +167,7 @@ fn activate(
                     cwd_name: cwd_name.as_deref(),
                 };
                 restore::apply_restored_session_to_ui(snapshot, &ctx);
+                initial_tab.refresh_tab_title();
             }
             Ok(None) => {
                 chlodwig_gtk::window::append_styled(

@@ -271,6 +271,31 @@ pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
     parts.join(" \u{30FB} ")
 }
 
+/// Format the `adw::TabPage` title for an AI-conversation tab.
+///
+/// Layout:
+///   - With session name:  `🤖 {session_name} ・ {cwd_basename}`
+///   - Without name:       `🤖 {cwd_basename}`
+///   - Without cwd:        `🤖 {session_name}`
+///   - Neither:            `🤖`
+///
+/// The robot emoji is the visual marker for the AI tab kind. Future tab
+/// kinds (Browser, Terminal, File-viewer, Image-viewer) get their own
+/// emoji prefix from their own format helper. Empty strings are treated
+/// as `None` so callers don't need to filter.
+///
+/// Uses the same `・` (U+30FB) separator as `format_window_title`.
+pub fn format_tab_title(session_name: Option<&str>, cwd_basename: Option<&str>) -> String {
+    let name = session_name.filter(|s| !s.is_empty());
+    let cwd = cwd_basename.filter(|s| !s.is_empty());
+    match (name, cwd) {
+        (Some(n), Some(c)) => format!("🤖 {n} \u{30FB} {c}"),
+        (Some(n), None) => format!("🤖 {n}"),
+        (None, Some(c)) => format!("🤖 {c}"),
+        (None, None) => "🤖".to_string(),
+    }
+}
+
 /// Build the empty window shell with its `adw::TabView` host
 /// (Stage B of MULTIWINDOW_TABS.md).
 ///
