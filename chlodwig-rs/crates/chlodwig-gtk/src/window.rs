@@ -353,10 +353,15 @@ pub fn build_window(
         .right_margin(8)
         .build();
 
-    // Limit input height to ~5 lines but allow scrolling
+    // Input ScrolledWindow with dynamic max-content-height: capped at
+    // half the window height (issue #26). The cap is set initially
+    // from the default-height (700 → 350), then updated whenever the
+    // window's `default-height` property changes (resize events).
+    // When the input content exceeds the cap the internal vertical
+    // scrollbar appears (PolicyType::Automatic).
     let input_scroll = ScrolledWindow::builder()
         .hexpand(true)
-        .max_content_height(120)
+        .max_content_height(350)
         .propagate_natural_height(true)
         .hscrollbar_policy(PolicyType::Never)
         .vscrollbar_policy(PolicyType::Automatic)
@@ -445,6 +450,24 @@ pub fn build_window(
         .default_height(700)
         .build();
     window.set_child(Some(&main_box));
+
+    // Issue #26: dynamically cap the input ScrolledWindow's max-content
+    // height at half the window height. React to window resizes via
+    // `notify::default-height` so the cap updates as the window grows
+    // or shrinks. We also set it once now so the initial layout is
+    // correct even before the first notify fires.
+    {
+        let input_scroll_for_resize = input_scroll.clone();
+        let apply_cap = move |height: i32| {
+            let cap = (height / 2).max(40);
+            input_scroll_for_resize.set_max_content_height(cap);
+        };
+        apply_cap(window.default_height());
+        let apply_cap_clone = apply_cap.clone();
+        window.connect_default_height_notify(move |w| {
+            apply_cap_clone(w.default_height());
+        });
+    }
 
     let widgets = UiWidgets {
         final_view,

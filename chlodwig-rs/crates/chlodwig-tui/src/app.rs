@@ -1297,6 +1297,27 @@ impl App {
         total_visual.max(1).min(self.constants.input_max_visual_lines)
     }
 
+    /// Same as `input_visual_line_count` but caps the result at
+    /// `frame_height / 2` instead of the static `input_max_visual_lines`
+    /// constant (issue #26: input must scale to at most half the frame
+    /// height). Returns at least 1.
+    pub(crate) fn input_visual_line_count_for_frame(
+        &self,
+        width: usize,
+        frame_height: usize,
+    ) -> usize {
+        let cap = (frame_height / 2).max(1);
+
+        if self.input.text.is_empty() || width == 0 {
+            return 1;
+        }
+        let mut total_visual = 0usize;
+        for logical_line in self.input.text.split('\n') {
+            total_visual += Self::word_wrap_line_count(logical_line, width);
+        }
+        total_visual.max(1).min(cap)
+    }
+
     /// Compute the visual (row, col) position of the cursor in the input text,
     /// accounting for soft-wrapping at the given `width` (terminal columns).
     /// Uses ratatui-compatible word-wrapping (matching `Wrap { trim: false }`).

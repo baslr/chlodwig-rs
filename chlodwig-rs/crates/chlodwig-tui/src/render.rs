@@ -31,8 +31,11 @@ pub(crate) fn compute_scrollbar_state(
 pub(crate) fn ui(f: &mut Frame, app: &App) {
     // Dynamic input height: count visual lines (including soft-wrap) + 2 for borders.
     // The inner width is the frame width minus 2 border columns.
+    // Cap at half the frame height (issue #26): input must never take
+    // more than 50% of the window so the output stays readable.
     let inner_width = f.area().width.saturating_sub(2) as usize;
-    let input_lines = app.input_visual_line_count(inner_width);
+    let frame_height = f.area().height as usize;
+    let input_lines = app.input_visual_line_count_for_frame(inner_width, frame_height);
     let input_height = (input_lines as u16) + 2;
 
     let chunks = Layout::default()
@@ -165,8 +168,24 @@ pub(crate) fn input_title(input: &str) -> String {
 
 pub(crate) fn render_input(f: &mut Frame, app: &App, area: Rect) {
     let title = input_title(&app.input.text);
+    // Inner area for the input (excluding the 2-column border).
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let inner_height = area.height.saturating_sub(2) as usize;
+
+    // Compute the cursor's visual row so we can scroll the Paragraph
+    // when the input has more visual lines than fit in the cap (issue
+    // #26: input becomes internally scrollable above the half-frame
+    // cap).
+    let (cursor_row, cursor_col) = app.input_cursor_visual_pos(inner_width);
+    let scroll_row: u16 = if inner_height > 0 && cursor_row >= inner_height {
+        (cursor_row - inner_height + 1) as u16
+    } else {
+        0
+    };
+
     let input = Paragraph::new(app.input.text.as_str())
         .wrap(Wrap { trim: false })
+        .scroll((scroll_row, 0))
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -176,12 +195,11 @@ pub(crate) fn render_input(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(input, area);
 
     if !app.is_loading && !app.has_modal() {
-        // Compute cursor position accounting for soft-wrap
-        let inner_width = area.width.saturating_sub(2) as usize; // borders
-        let (row, col) = app.input_cursor_visual_pos(inner_width);
+        // Cursor row is relative to the visible (scrolled) area.
+        let visible_row = (cursor_row as u16).saturating_sub(scroll_row);
         f.set_cursor_position((
-            area.x + col as u16 + 1,
-            area.y + row as u16 + 1,
+            area.x + cursor_col as u16 + 1,
+            area.y + visible_row + 1,
         ));
     }
 }
