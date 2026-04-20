@@ -3,9 +3,9 @@
 //! Stage B (MULTIWINDOW_TABS.md): main.rs is now a thin coordinator that
 //! sets up the process (logging, fonts, GTK init, config), builds the
 //! window shell with its `adw::TabView`, attaches the initial tab via
-//! `tab::attach_new_tab`, wires the menu bar (which serves all tabs via
-//! `tab::active`), the window-level Esc-Esc/focus/title-follows-active
-//! handlers, and presents the window.
+//! `AiConversationTab::attach_new`, wires the menu bar (which serves all
+//! tabs via `tab::active` / `tab::active_ai`), the window-level
+//! focus/title-follows-active handlers, and presents the window.
 //!
 //! Per-tab state, per-tab background tasks, per-tab handlers and the
 //! `BackgroundCommand` enum all live in `tab.rs` — main.rs never touches
@@ -138,16 +138,12 @@ fn activate(
         registry: registry.clone(),
         config: tab_config,
     };
-    let initial_page = tab::attach_new_tab(&attach_ctx, initial_cwd);
+    let initial_page = tab::AiConversationTab::attach_new(&attach_ctx, initial_cwd);
 
     // ── Resume into the initial tab if --resume was passed ────────────
     if resume_flag {
-        let initial_tab = registry
-            .borrow()
-            .iter()
-            .find(|(p, _)| p == &initial_page)
-            .map(|(_, ctx)| ctx.clone())
-            .expect("initial tab just attached → must be in registry");
+        let initial_tab = tab::ai_conversation::lookup_by_page(&initial_page)
+            .expect("initial AI tab just attached → must be in AI registry");
         match chlodwig_core::load_latest_session() {
             Ok(Some(snapshot)) => {
                 tracing::info!(
@@ -197,15 +193,7 @@ fn activate(
             let Some(page) = tv.selected_page() else { return };
             let reg = registry_for_title.borrow();
             let Some((_, t)) = reg.iter().find(|(p, _)| p == &page) else { return };
-            let cwd_name = t.cwd
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned());
-            let session_name = t.app_state.borrow().session_name.clone();
-            let title = chlodwig_gtk::window::format_window_title(
-                cwd_name.as_deref(),
-                session_name.as_deref(),
-            );
-            window_for_title.set_title(Some(&title));
+            window_for_title.set_title(Some(&t.window_title()));
         });
     }
 
@@ -216,7 +204,7 @@ fn activate(
         window.connect_is_active_notify(move |w| {
             if !w.is_active() { return }
             if let Some(t) = tab::active(&tab_view_for_focus, &registry_for_focus) {
-                t.widgets.input_view.grab_focus();
+                t.focus_input();
             }
         });
     }

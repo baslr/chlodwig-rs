@@ -36,7 +36,7 @@ fn test_input_scroll_max_content_height_set_dynamically_from_window_height() {
     // because each tab has its own input_scroll). The window construction
     // in window.rs no longer touches max_content_height after the initial
     // ScrolledWindow::builder().max_content_height(350) seed.
-    let tab_src = include_str!("../tab.rs");
+    let tab_src = include_str!("../tab/ai_conversation.rs");
     assert!(
         tab_src.contains("set_max_content_height"),
         "tab.rs must call set_max_content_height on the per-tab input \

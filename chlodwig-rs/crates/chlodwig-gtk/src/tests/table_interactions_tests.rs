@@ -16,7 +16,7 @@ fn test_table_interactions_module_exists() {
 #[test]
 fn test_main_rs_calls_wire_table_interactions() {
     // Stage B: per-tab wiring lives in tab.rs.
-    let src = include_str!("../tab.rs");
+    let src = include_str!("../tab/ai_conversation.rs");
     assert!(
         src.contains("table_interactions::wire"),
         "tab.rs (per-tab wiring SSoT) must delegate to table_interactions::wire"

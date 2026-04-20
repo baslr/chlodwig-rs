@@ -25,7 +25,10 @@ use gtk4::{gio, ApplicationWindow};
 use chlodwig_gtk::{sessions_window, window};
 
 use crate::restore;
-use crate::tab::{self, BackgroundCommand, TabAttachContext, TabConfig, TabRegistry};
+use crate::tab::{
+    self, ai_conversation::AiConversationTab, BackgroundCommand, TabAttachContext,
+    TabConfig, TabRegistry,
+};
 
 /// Window-level references the menu actions need.
 ///
@@ -88,8 +91,11 @@ pub fn setup_menu(ctx: MenuContext) {
         let registry_for_new_tab = registry.clone();
         let config_for_new_tab = config.clone();
         action.connect_activate(move |_, _| {
+            // Cmd+T defaults to opening a new AI-conversation tab.
+            // Inherit cwd from the active tab (any kind), or fall back to
+            // the process cwd when there are no tabs.
             let new_cwd = tab::active(&tab_view_for_new_tab, &registry_for_new_tab)
-                .map(|t| t.cwd.clone())
+                .map(|t| t.cwd().to_path_buf())
                 .unwrap_or_else(|| {
                     std::env::current_dir().unwrap_or_else(|_| "/".into())
                 });
@@ -99,7 +105,7 @@ pub fn setup_menu(ctx: MenuContext) {
                 registry: registry_for_new_tab.clone(),
                 config: config_for_new_tab.clone(),
             };
-            tab::attach_new_tab(&attach_ctx, new_cwd);
+            AiConversationTab::attach_new(&attach_ctx, new_cwd);
         });
         app.add_action(&action);
         app.set_accels_for_action("app.new-tab", &["<Meta>t"]);
@@ -128,7 +134,7 @@ pub fn setup_menu(ctx: MenuContext) {
         let tab_view_for_clear = tab_view.clone();
         let registry_for_clear = registry.clone();
         action.connect_activate(move |_, _| {
-            let Some(t) = tab::active(&tab_view_for_clear, &registry_for_clear) else {
+            let Some(t) = tab::active_ai(&tab_view_for_clear, &registry_for_clear) else {
                 return;
             };
             t.app_state.borrow_mut().clear();
@@ -156,7 +162,7 @@ pub fn setup_menu(ctx: MenuContext) {
         let tab_view_for_compact = tab_view.clone();
         let registry_for_compact = registry.clone();
         action.connect_activate(move |_, _| {
-            if let Some(t) = tab::active(&tab_view_for_compact, &registry_for_compact)
+            if let Some(t) = tab::active_ai(&tab_view_for_compact, &registry_for_compact)
             {
                 let _ = t.prompt_tx.send(BackgroundCommand::Compact {
                     instructions: None,
@@ -172,7 +178,7 @@ pub fn setup_menu(ctx: MenuContext) {
         let tab_view_for_resume = tab_view.clone();
         let registry_for_resume = registry.clone();
         action.connect_activate(move |_, _| {
-            let Some(t) = tab::active(&tab_view_for_resume, &registry_for_resume)
+            let Some(t) = tab::active_ai(&tab_view_for_resume, &registry_for_resume)
             else {
                 return;
             };
@@ -194,7 +200,7 @@ pub fn setup_menu(ctx: MenuContext) {
         let window_for_sessions = window.clone();
         action.connect_activate(move |_, _| {
             let Some(t) =
-                tab::active(&tab_view_for_sessions, &registry_for_sessions)
+                tab::active_ai(&tab_view_for_sessions, &registry_for_sessions)
             else {
                 return;
             };

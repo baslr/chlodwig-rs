@@ -27,7 +27,7 @@ fn test_clear_does_not_reference_pending_user_question() {
 #[test]
 fn test_main_rs_injects_user_question_tool() {
     // Stage B: per-tab tool injection moved from main.rs to tab.rs.
-    let source = include_str!("../tab.rs");
+    let source = include_str!("../tab/ai_conversation.rs");
     assert!(
         source.contains("UserQuestionTool::new"),
         "tab.rs must inject UserQuestionTool into the per-tab conversation state"
@@ -37,7 +37,7 @@ fn test_main_rs_injects_user_question_tool() {
 #[test]
 fn test_main_rs_creates_user_question_channel() {
     // Stage B: per-tab channel creation moved from main.rs to tab.rs.
-    let source = include_str!("../tab.rs");
+    let source = include_str!("../tab/ai_conversation.rs");
     assert!(
         source.contains("UserQuestionRequest"),
         "tab.rs must create a per-tab unbounded channel for UserQuestionRequest"
@@ -47,7 +47,7 @@ fn test_main_rs_creates_user_question_channel() {
 #[test]
 fn test_main_rs_drains_user_question_requests() {
     // Stage B: tab.rs creates uq_rx and passes it to event_dispatch::wire(...).
-    let tab_src = include_str!("../tab.rs");
+    let tab_src = include_str!("../tab/ai_conversation.rs");
     let dispatch_src = include_str!("../event_dispatch.rs");
     assert!(
         tab_src.contains("uq_rx"),
@@ -277,7 +277,7 @@ fn test_dialog_uses_shared_macos_shortcuts() {
 #[test]
 fn test_main_uses_shared_macos_shortcuts() {
     // Stage B: per-tab `setup_macos_input_shortcuts` call moved to tab.rs.
-    let source = include_str!("../tab.rs");
+    let source = include_str!("../tab/ai_conversation.rs");
     assert!(
         source.contains("setup_macos_input_shortcuts"),
         "tab.rs must call setup_macos_input_shortcuts on each per-tab input view"

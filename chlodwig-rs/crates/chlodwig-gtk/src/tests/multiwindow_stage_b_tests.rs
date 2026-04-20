@@ -24,7 +24,18 @@
 //!      `build_window_shell` followed by `attach_new_tab`, so the same
 //!      call path serves both "open initial tab" and "Cmd+T new tab".
 
-const TAB_RS: &str = include_str!("../tab.rs");
+//! ── Note (post-Stage-B "Tab trait" refactor) ───────────────────────────
+//! After Stage B, `tab.rs` was split into a module directory:
+//!   - `tab/mod.rs` — generic trait (`Tab`), registry, close handler.
+//!   - `tab/ai_conversation.rs` — concrete AI-conversation tab kind.
+//! The old free function `tab::attach_new_tab` became
+//! `tab::AiConversationTab::attach_new`; the old `pub struct TabContext`
+//! became `pub struct AiConversationTab`. The Stage-B grep guards below
+//! were updated accordingly. Newer architectural invariants live in
+//! `tab_trait_tests.rs`.
+
+const TAB_RS: &str = include_str!("../tab/ai_conversation.rs");
+const TAB_MOD_RS: &str = include_str!("../tab/mod.rs");
 const MAIN_RS: &str = include_str!("../main.rs");
 const SUBMIT_RS: &str = include_str!("../submit.rs");
 const EVENT_DISPATCH_RS: &str = include_str!("../event_dispatch.rs");
@@ -46,18 +57,20 @@ fn test_tab_module_exists() {
 #[test]
 fn test_tab_module_defines_attach_new_tab() {
     assert!(
-        TAB_RS.contains("pub fn attach_new_tab"),
-        "tab.rs must expose `pub fn attach_new_tab(...)` — the SINGLE entry \
-         point for creating a tab (used both for the initial tab at startup \
-         and for Cmd+T new-tab actions)"
+        TAB_RS.contains("pub fn attach_new("),
+        "tab/ai_conversation.rs must expose `pub fn attach_new(...)` (was \
+         `attach_new_tab` in Stage B; renamed when the module was split \
+         into the Tab trait + AI submodule). The SINGLE entry point for \
+         creating an AI tab — used both for the initial tab at startup \
+         and for Cmd+T new-tab actions."
     );
 }
 
 #[test]
 fn test_tab_module_defines_active_helper() {
     assert!(
-        TAB_RS.contains("pub fn active("),
-        "tab.rs must expose `pub fn active(tab_view, registry) -> Option<Rc<TabContext>>` \
+        TAB_MOD_RS.contains("pub fn active("),
+        "tab/mod.rs must expose `pub fn active(tab_view, registry) -> Option<Rc<dyn Tab>>` \
          — the single accessor for 'the tab the user is currently looking at' \
          (used by menu actions: Compact, Resume, Sessions, New Conversation, …)"
     );
@@ -66,21 +79,23 @@ fn test_tab_module_defines_active_helper() {
 #[test]
 fn test_tab_context_struct_exists() {
     assert!(
-        TAB_RS.contains("pub struct TabContext"),
-        "tab.rs must define `pub struct TabContext` — bundles per-tab state \
-         (widgets, app_state, viewport_cols, session_started_at, prompt_tx, \
-         stop_flag, cwd) into one unit"
+        TAB_RS.contains("pub struct AiConversationTab"),
+        "tab/ai_conversation.rs must define `pub struct AiConversationTab` \
+         (was `TabContext` in Stage B; renamed when the AI tab kind became \
+         one concrete impl among potentially many). Bundles per-AI-tab \
+         state (widgets, app_state, viewport_cols, session_started_at, \
+         prompt_tx, stop_flag, cwd) into one unit."
     );
 }
 
 #[test]
 fn test_tab_registry_type_alias_exists() {
-    // Need a way to look up the TabContext for any TabPage — registry is the
+    // Need a way to look up the Tab for any TabPage — registry is the
     // canonical structure.
     assert!(
-        TAB_RS.contains("pub type TabRegistry") || TAB_RS.contains("pub struct TabRegistry"),
-        "tab.rs must define `pub type TabRegistry = ...` (or a struct) — the \
-         shared map from `adw::TabPage` to its `TabContext`"
+        TAB_MOD_RS.contains("pub type TabRegistry") || TAB_MOD_RS.contains("pub struct TabRegistry"),
+        "tab/mod.rs must define `pub type TabRegistry = ...` (or a struct) — the \
+         shared map from `adw::TabPage` to its `Rc<dyn Tab>`"
     );
 }
 
@@ -335,13 +350,13 @@ fn test_close_last_tab_closes_window() {
     // After close_page_finish(true), if n_pages() == 0 the window must
     // close itself. Otherwise the user has an empty headerbar window.
     assert!(
-        TAB_RS.contains("connect_close_page") || MAIN_RS.contains("connect_close_page"),
-        "either tab.rs or main.rs must subscribe to `connect_close_page` to \
+        TAB_MOD_RS.contains("connect_close_page") || MAIN_RS.contains("connect_close_page"),
+        "either tab/mod.rs or main.rs must subscribe to `connect_close_page` to \
          finalize close + auto-close-when-empty"
     );
     let needle = "n_pages";
     assert!(
-        TAB_RS.contains(needle) || MAIN_RS.contains(needle),
+        TAB_MOD_RS.contains(needle) || MAIN_RS.contains(needle),
         "must check `tab_view.n_pages() == 0` to decide whether to close \
          the window after a tab close"
     );

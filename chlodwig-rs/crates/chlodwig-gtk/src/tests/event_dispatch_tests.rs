@@ -29,7 +29,7 @@ fn test_event_dispatch_defines_context_struct() {
 fn test_main_rs_calls_event_dispatch_wire() {
     // Stage B: per-tab wiring moved from main.rs to tab.rs (called from
     // tab::attach_new_tab so every tab gets its own 16ms event loop).
-    let src = include_str!("../tab.rs");
+    let src = include_str!("../tab/ai_conversation.rs");
     assert!(
         src.contains("event_dispatch::wire"),
         "tab.rs (per-tab wiring SSoT) must delegate to event_dispatch::wire"

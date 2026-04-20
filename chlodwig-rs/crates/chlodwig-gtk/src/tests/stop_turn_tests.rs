@@ -49,7 +49,7 @@ fn test_main_rs_shares_stop_flag_with_background() {
     // shared between the per-tab background task and the per-tab
     // SubmitContext. The same SSoT invariant holds; only the location
     // changed from main.rs to tab.rs.
-    let src = include_str!("../tab.rs");
+    let src = include_str!("../tab/ai_conversation.rs");
     assert!(
         src.contains("let stop_flag") && src.contains("new_stop_flag()"),
         "tab.rs must create a per-tab stop_flag via chlodwig_core::new_stop_flag()"

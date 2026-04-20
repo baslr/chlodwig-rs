@@ -111,7 +111,7 @@ fn test_window_bottom_spacer_has_fixed_height() {
 #[test]
 fn test_main_uses_content_bottom_for_at_bottom_check() {
     // Stage B: per-tab value-changed handler lives in tab.rs.
-    let src = include_str!("../tab.rs");
+    let src = include_str!("../tab/ai_conversation.rs");
     assert!(
         src.contains("content_bottom"),
         "tab.rs's per-tab value-changed handler must compute at_bottom against \
@@ -220,7 +220,7 @@ fn test_bottom_follow_zone_is_20_px() {
     //   - tab.rs (Stage B; was main.rs in Stage A): at_bottom check in
     //     value-changed handler
     let ed = include_str!("../event_dispatch.rs");
-    let mn = include_str!("../tab.rs");
+    let mn = include_str!("../tab/ai_conversation.rs");
     // Use the LET-binding line as marker (avoids matching the variable
     // name in comments which can land near non-ASCII chars and cause
     // char-boundary panics in str slicing — see Gotcha #16).

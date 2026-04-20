@@ -108,7 +108,7 @@ fn test_same_snapshot_is_not_user_scroll() {
 /// (was in `main.rs::activate` in Stage A).
 #[test]
 fn test_main_rs_uses_is_user_scroll_classification() {
-    let src = include_str!("../tab.rs");
+    let src = include_str!("../tab/ai_conversation.rs");
     assert!(
         src.contains("is_user_scroll"),
         "tab.rs's per-tab value-changed handler must call is_user_scroll to \

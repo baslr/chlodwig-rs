@@ -25,15 +25,22 @@ fn test_main_rs_has_is_active_notify_handler() {
 
 #[test]
 fn test_main_rs_grabs_focus_for_input_view_on_activation() {
-    let src = include_str!("../main.rs");
-    // The handler installed above must call grab_focus on the input view.
-    // We check that "input_view" and "grab_focus" co-occur inside the same
-    // closure by requiring that grab_focus is called on something derived
-    // from input_view in the file.
+    // After the Tab-trait refactor (tab_trait_tests.rs), main.rs no
+    // longer touches `input_view` directly — it goes through the Tab
+    // trait's `focus_input()` method, and the AI tab's impl calls
+    // `input_view.grab_focus()`. Verify BOTH layers.
+    let main_src = include_str!("../main.rs");
     assert!(
-        src.contains("input_view.grab_focus()")
-            || src.contains("input_view_for_focus.grab_focus()"),
-        "main.rs must call grab_focus() on the input_view (or a clone of it) \
-         so the cursor lands in the prompt after Cmd+Tab"
+        main_src.contains(".focus_input()"),
+        "main.rs's is-active handler must dispatch via the generic \
+         `Tab::focus_input()` so non-AI tabs (Browser, Terminal, …) can \
+         provide their own focus target"
+    );
+    let ai_src = include_str!("../tab/ai_conversation.rs");
+    assert!(
+        ai_src.contains("input_view.grab_focus()")
+            || ai_src.contains("self.widgets.input_view.grab_focus()"),
+        "AiConversationTab::focus_input must call grab_focus() on its \
+         input_view so the cursor lands in the prompt after Cmd+Tab"
     );
 }

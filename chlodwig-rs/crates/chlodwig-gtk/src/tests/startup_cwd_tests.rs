@@ -56,7 +56,7 @@ fn test_startup_cwd_message_two_lines() {
 /// Cmd+T new tabs show their cwd, not just the initial one).
 #[test]
 fn test_main_rs_calls_startup_cwd_message() {
-    let src = include_str!("../tab.rs");
+    let src = include_str!("../tab/ai_conversation.rs");
     assert!(
         src.contains("startup_cwd_message"),
         "tab.rs must call startup_cwd_message() in attach_new_tab so every \
