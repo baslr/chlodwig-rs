@@ -277,6 +277,50 @@ fn test_apply_snapshot_applies_table_sorts() {
     assert!(td.sort_descending);
 }
 
+/// End-to-end regression: real on-disk session JSON with a name set must,
+/// after `load_session_from()` + `apply_session_snapshot()`, leave
+/// `state.session_name` equal to the name in the file.
+///
+/// This is the exact path used by:
+/// - GTK menu → Sessions Window → click "Resume" (`menu.rs:160`)
+/// - GTK `/resume <prefix>` (`submit.rs:188`)
+/// - GTK `--resume` flag (`main.rs:222`)
+///
+/// All three call `restore::apply_restored_session_to_ui()`, which calls
+/// `state.apply_session_snapshot(&snapshot)`. So this single test covers
+/// the central name-propagation invariant for ALL GTK resume paths.
+#[test]
+fn test_load_session_from_disk_then_apply_preserves_name() {
+    use chlodwig_core::SessionSnapshot;
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("session.json");
+
+    let snap = SessionSnapshot {
+        saved_at: "2026-04-20T03:00:00+02:00".into(),
+        started_at: "2026-04-18T22:49:33+02:00".into(),
+        model: "test".into(),
+        messages: vec![user_msg("hi")],
+        system_prompt: vec![],
+        name: Some("work on chlodwig".into()),
+        table_sorts: vec![],
+        constants: None,
+        stats: None,
+    };
+    let json = serde_json::to_string_pretty(&snap).unwrap();
+    std::fs::write(&path, json).unwrap();
+
+    // The exact same call the menu / submit / main resume paths make:
+    let loaded = chlodwig_core::load_session_from(&path).unwrap();
+    let mut state = AppState::new("other-model".into());
+    state.apply_session_snapshot(&loaded);
+
+    assert_eq!(
+        state.session_name.as_deref(),
+        Some("work on chlodwig"),
+        "session_name must be propagated from disk → loaded snapshot → AppState"
+    );
+}
+
 #[test]
 fn test_apply_snapshot_empty_messages() {
     let mut state = AppState::new("m".into());

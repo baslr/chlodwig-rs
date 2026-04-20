@@ -1119,14 +1119,16 @@ fn test_help_markdown_contains_commands_and_keys() {
 
 #[test]
 fn test_execute_shell_command_ls() {
-    let (output, is_error) = crate::app_state::execute_shell_pty("echo hello");
+    let cwd = std::env::current_dir().unwrap();
+    let (output, is_error) = crate::app_state::execute_shell_pty("echo hello", &cwd);
     assert!(!is_error);
     assert!(output.contains("hello"), "output should contain 'hello', got: {output}");
 }
 
 #[test]
 fn test_execute_shell_command_failing() {
-    let (output, is_error) = crate::app_state::execute_shell_pty("false");
+    let cwd = std::env::current_dir().unwrap();
+    let (output, is_error) = crate::app_state::execute_shell_pty("false", &cwd);
     // `false` exits with 1 — not an execution error, but exit code != 0
     // The output should contain the exit code
     let _ = (output, is_error); // just verify no panic
@@ -1134,7 +1136,8 @@ fn test_execute_shell_command_failing() {
 
 #[test]
 fn test_execute_shell_command_nonexistent() {
-    let (output, is_error) = crate::app_state::execute_shell_pty("nonexistent_command_xyz_12345");
+    let cwd = std::env::current_dir().unwrap();
+    let (output, is_error) = crate::app_state::execute_shell_pty("nonexistent_command_xyz_12345", &cwd);
     // Should not panic, should return some error output
     assert!(!output.is_empty(), "error output should not be empty");
     let _ = is_error;

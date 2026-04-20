@@ -1123,7 +1123,7 @@ pub async fn run_tui_with_permissions(
                             app.display_blocks
                                 .push(DisplayBlock::Timestamp(now));
 
-                            let (raw_output, _is_error) = chlodwig_core::execute_shell_pty(&cmd_str);
+                            let (raw_output, _is_error) = chlodwig_core::execute_shell_pty(&cmd_str, &app.cwd);
 
                             app.display_blocks.push(DisplayBlock::BashOutput {
                                 command: cmd_str,

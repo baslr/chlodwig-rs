@@ -196,7 +196,13 @@ pub fn help_markdown_keys_gtk() -> String {
 /// This is the **synchronous** version for `! <cmd>` in the TUI/GTK event
 /// loop. The async `BashTool` in `chlodwig-tools` uses `tokio::process`
 /// but the same PTY wrapping.
-pub fn execute_shell_pty(cmd: &str) -> (String, bool) {
+/// Run a shell command in `cwd` via a pseudo-TTY (PTY), so programs that
+/// `isatty(stdout)` produce ANSI-colored output.
+///
+/// Callers must pass an explicit cwd: GTK tabs and the TUI track their own
+/// working directory in `AppState.cwd` / `App.cwd` and never mutate the
+/// process cwd. See gotcha #12 for the PTY rationale.
+pub fn execute_shell_pty(cmd: &str, cwd: &std::path::Path) -> (String, bool) {
     let mut command = std::process::Command::new("script");
     if cfg!(target_os = "macos") {
         command
@@ -214,6 +220,7 @@ pub fn execute_shell_pty(cmd: &str) -> (String, bool) {
     }
     command.env("GIT_PAGER", "cat");
     command.env("PAGER", "cat");
+    command.current_dir(cwd);
 
     match command.output() {
         Ok(out) => {
@@ -482,20 +489,41 @@ mod tests {
 
     #[test]
     fn test_execute_shell_echo() {
-        let (output, is_error) = execute_shell_pty("echo hello");
+        let cwd = std::env::current_dir().unwrap();
+        let (output, is_error) = execute_shell_pty("echo hello", &cwd);
         assert!(!is_error);
         assert!(output.contains("hello"), "output should contain 'hello', got: {output}");
     }
 
     #[test]
     fn test_execute_shell_failing() {
-        let (_output, _is_error) = execute_shell_pty("false");
+        let cwd = std::env::current_dir().unwrap();
+        let (_output, _is_error) = execute_shell_pty("false", &cwd);
         // just verify no panic
     }
 
     #[test]
     fn test_execute_shell_nonexistent() {
-        let (output, _is_error) = execute_shell_pty("nonexistent_command_xyz_12345");
+        let cwd = std::env::current_dir().unwrap();
+        let (output, _is_error) = execute_shell_pty("nonexistent_command_xyz_12345", &cwd);
         assert!(!output.is_empty(), "error output should not be empty");
+    }
+
+    /// `! <cmd>` must run in the cwd the caller passed in (the GTK tab cwd
+    /// or the TUI app cwd), not the process cwd. Regression for:
+    /// "! git status" → "not a git repository" because GTK doesn't change
+    /// process cwd between tabs (Stage 0.x cwd refactor).
+    #[test]
+    fn test_execute_shell_pty_runs_in_given_cwd() {
+        let tmp = tempfile::tempdir().unwrap();
+        // canonicalize so /var → /private/var on macOS doesn't trip the assert
+        let cwd = std::fs::canonicalize(tmp.path()).unwrap();
+        let (output, is_error) = execute_shell_pty("pwd", &cwd);
+        assert!(!is_error, "pwd should succeed, got: {output}");
+        assert!(
+            output.contains(cwd.to_str().unwrap()),
+            "pwd should print the given cwd ({}), got: {output}",
+            cwd.display()
+        );
     }
 }

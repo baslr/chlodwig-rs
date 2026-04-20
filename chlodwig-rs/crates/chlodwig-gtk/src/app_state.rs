@@ -145,12 +145,21 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// Startup message that shows this tab's working directory, e.g.
-    /// `"cwd: /Users/me/projects/chlodwig-rs"`.
-    ///
-    /// Displayed as a `SystemMessage` in the output area when a tab opens.
+    /// Startup message that shows BOTH the process working directory and
+    /// this tab's working directory, e.g.
+    /// ```text
+    /// process cwd: /Users/me
+    /// tab cwd:     /Users/me/projects/chlodwig-rs
+    /// ```
+    /// The two often differ in GTK because the FinderSync extension passes
+    /// a project path via NSPasteboard and the app honors it WITHOUT
+    /// mutating the process cwd (Stage 0.x cwd refactor — see CLAUDE.md).
+    /// Showing both makes that transparent on every fresh tab.
     pub fn startup_cwd_message(&self) -> String {
-        format!("cwd: {}", self.cwd.display())
+        let proc_cwd = std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| "<unknown>".into());
+        format!("process cwd: {}\ntab cwd:     {}", proc_cwd, self.cwd.display())
     }
 
     /// Process a ConversationEvent and update state accordingly.
@@ -736,17 +745,6 @@ pub fn project_dir_name() -> String {
             p.file_name().map(|n| n.to_string_lossy().into_owned())
         })
         .unwrap_or_default()
-}
-
-/// Build the startup message that shows the current working directory.
-///
-/// Displayed as a `SystemMessage` in the output area when the GTK app
-/// launches, so the user immediately sees which project directory is active.
-pub fn startup_cwd_message() -> String {
-    let cwd = std::env::current_dir()
-        .map(|p| p.display().to_string())
-        .unwrap_or_else(|_| "unknown".to_string());
-    format!("cwd: {cwd}")
 }
 
 // ── Command parser ────────────────────────────────────────────────

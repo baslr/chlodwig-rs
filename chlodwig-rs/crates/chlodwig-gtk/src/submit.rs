@@ -118,8 +118,12 @@ pub fn wire(ctx: SubmitContext) {
                     // Show the command
                     window::append_styled(&final_view_for_submit, &format!("\n$ {cmd_str}\n"), "user");
 
-                    // Execute synchronously (blocking — fine for simple commands)
-                    let (output, _is_error) = chlodwig_gtk::app_state::execute_shell_pty(&cmd_str);
+                    // Execute synchronously in this tab's cwd. Process cwd
+                    // is NOT mutated between tabs (Stage 0.x cwd refactor),
+                    // so we must pass the tab cwd explicitly — otherwise
+                    // commands like `git status` run in the wrong dir.
+                    let tab_cwd = state_for_submit.borrow().cwd.clone();
+                    let (output, _is_error) = chlodwig_core::execute_shell_pty(&cmd_str, &tab_cwd);
 
                     // Render output with ANSI colors
                     render::render_ansi_output(&final_view_for_submit, &output);
