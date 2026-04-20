@@ -211,6 +211,7 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
                 let ctx = restore::RestoreContext {
                     state: &app_state,
                     output_view: &widgets.final_view,
+                    streaming_view: &widgets.streaming_view,
                     output_scroll: &widgets.output_scroll,
                     window: &window,
                     viewport_cols: &viewport_cols,
@@ -308,11 +309,59 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
     // When the user scrolls the output view manually (e.g. trackpad, scrollbar),
     // we disable auto-scroll so new content doesn't yank them back to bottom.
     // When they scroll back to the bottom, re-enable auto-scroll.
+    //
+    // CRITICAL: `value-changed` also fires when GTK itself clamps `value`
+    // after `upper` or `page_size` changed (e.g. streaming_view hidden on
+    // TextComplete → content shrinks → clamp → signal). Those are NOT
+    // user scrolls and must not alter auto_scroll state, otherwise a
+    // stream finishing snaps the viewport to the bottom even though the
+    // user had scrolled up. See `value_changed::is_user_scroll` and the
+    // regression tests in `tests/value_changed_classification_tests.rs`.
     {
         let adj = widgets.output_scroll.vadjustment();
         let state_for_scroll = app_state.clone();
+        let final_view_for_scroll = widgets.final_view.clone();
+        let streaming_view_for_scroll = widgets.streaming_view.clone();
+        let prev_snap = std::rc::Rc::new(std::cell::Cell::new(
+            chlodwig_gtk::value_changed::AdjSnapshot {
+                value: adj.value(),
+                upper: adj.upper(),
+                page_size: adj.page_size(),
+            },
+        ));
         adj.connect_value_changed(move |adj| {
-            let at_bottom = (adj.value() + adj.page_size()) >= adj.upper() - 1.0;
+            let curr = chlodwig_gtk::value_changed::AdjSnapshot {
+                value: adj.value(),
+                upper: adj.upper(),
+                page_size: adj.page_size(),
+            };
+            let prev = prev_snap.get();
+            prev_snap.set(curr);
+            if !chlodwig_gtk::value_changed::is_user_scroll(prev, curr) {
+                // Layout-induced clamp (content or viewport resized).
+                // Do NOT touch auto_scroll — keep whatever the user set.
+                return;
+            }
+            // "at_bottom" means at the bottom of the actual content
+            // (final + streaming), NOT at upper — upper is inflated by
+            // the bottom spacer to keep value un-clamped during the
+            // streaming→final transition. See window.rs / event_dispatch.rs.
+            use gtk4::prelude::*;
+            let final_h = final_view_for_scroll
+                .upcast_ref::<gtk4::TextView>()
+                .allocated_height() as f64;
+            let stream_h = if streaming_view_for_scroll.is_visible() {
+                streaming_view_for_scroll
+                    .upcast_ref::<gtk4::TextView>()
+                    .allocated_height() as f64
+            } else {
+                0.0
+            };
+            let content_bottom = final_h + stream_h;
+            // 20 px tolerance band — see event_dispatch.rs for rationale.
+            // Both call sites must agree; tested by
+            // test_bottom_follow_zone_is_20_px.
+            let at_bottom = (curr.value + curr.page_size) >= content_bottom - 20.0;
             let mut state = state_for_scroll.borrow_mut();
             if at_bottom {
                 state.auto_scroll.user_reached_bottom();
@@ -321,6 +370,13 @@ fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::
             }
         });
     }
+
+    // NOTE: auto-scroll-to-bottom is performed inside the 16ms event
+    // dispatch tick (see event_dispatch.rs). Reacting to notify::upper /
+    // notify::page-size races with GTK's layout cycle (the two
+    // properties settle in separate passes), and idle-scheduled
+    // scroll_to_bottom reads stale values. The 16ms tick converges in
+    // at most one frame because each tick re-pins to the current values.
 
     // --- 16ms GTK timeout that drives the UI from background events ---
     event_dispatch::wire(event_dispatch::EventDispatchContext {

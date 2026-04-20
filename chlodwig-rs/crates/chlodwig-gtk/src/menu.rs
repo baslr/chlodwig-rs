@@ -137,6 +137,7 @@ pub fn setup_menu(ctx: MenuContext) {
         let prompt_tx = prompt_tx.clone();
         let state = app_state.clone();
         let output_view = widgets.final_view.clone();
+        let streaming_view = widgets.streaming_view.clone();
         let output_scroll = widgets.output_scroll.clone();
         let viewport_cols = viewport_cols.clone();
         let status_left = widgets.status_left_label.clone();
@@ -147,6 +148,7 @@ pub fn setup_menu(ctx: MenuContext) {
             let prompt_tx = prompt_tx.clone();
             let state = state.clone();
             let output_view = output_view.clone();
+            let streaming_view = streaming_view.clone();
             let output_scroll = output_scroll.clone();
             let viewport_cols = viewport_cols.clone();
             let status_left = status_left.clone();
@@ -166,6 +168,7 @@ pub fn setup_menu(ctx: MenuContext) {
                         let ctx = restore::RestoreContext {
                             state: &state,
                             output_view: &output_view,
+                            streaming_view: &streaming_view,
                             output_scroll: &output_scroll,
                             window: &window_for_resume,
                             viewport_cols: &viewport_cols,

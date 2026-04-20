@@ -161,6 +161,11 @@ pub struct UiWidgets {
     /// The single `ScrolledWindow` containing the vertical box that stacks
     /// `final_view` above `streaming_view`. Scroll-to-bottom drives this.
     pub output_scroll: ScrolledWindow,
+    /// Bottom spacer: empty Box below final_view + streaming_view that
+    /// keeps `upper >= page_size + content_height` so GtkAdjustment
+    /// never clamps `value` during the streaming→final transition.
+    /// Height is updated dynamically on viewport resize.
+    pub output_bottom_spacer: GtkBox,
     pub input_view: TextView,
     pub input_buffer: gtk4::TextBuffer,
     pub send_button: Button,
@@ -216,6 +221,15 @@ pub fn build_window(
     let final_view = EmojiTextView::with_buffer(&final_buffer);
     final_view.set_editable(false);
     final_view.set_cursor_visible(false);
+    // CRITICAL (issue #27): the read-only output views must NOT be
+    // focusable. GtkTextView's internal click handler places the cursor
+    // at the click position and calls scroll_mark_onscreen(insert_mark)
+    // — on a read-only view this snaps the viewport away from where the
+    // user is reading. set_focus_on_click(false) is not enough; the
+    // click handler still runs. set_can_focus(false) blocks focus
+    // entirely. Selection via click-and-drag still works (GestureDrag
+    // does not require focus); right-click "Copy" still works.
+    final_view.set_can_focus(false);
     final_view.set_wrap_mode(WrapMode::WordChar);
     final_view.set_top_margin(8);
     final_view.set_bottom_margin(0); // streaming_view follows below
@@ -229,6 +243,8 @@ pub fn build_window(
     let streaming_view = EmojiTextView::with_buffer(&streaming_buffer_widget);
     streaming_view.set_editable(false);
     streaming_view.set_cursor_visible(false);
+    // Same can_focus guard as final_view (issue #27).
+    streaming_view.set_can_focus(false);
     streaming_view.set_wrap_mode(WrapMode::WordChar);
     streaming_view.set_top_margin(0);
     streaming_view.set_bottom_margin(8);
@@ -246,6 +262,23 @@ pub fn build_window(
         .build();
     output_inner_box.append(&final_view);
     output_inner_box.append(&streaming_view);
+
+    // Bottom spacer: an empty Box that always sits below final_view +
+    // streaming_view. FIXED height (4000 px). No dynamic resize, no
+    // vexpand. Purpose: keep `upper` so generously inflated that
+    // GtkAdjustment never clamps `value` downward when streaming_view
+    // shrinks to 0 on finalize. 4000 px covers any reasonable viewport
+    // (4K-tall window with room to spare).
+    //
+    // Trade-off: the scrollbar daumen reflects the spacer too, so the
+    // user can scroll a bit past the actual content into empty space.
+    // This is the explicit cost we pay for a stable, non-clamping
+    // adjustment — see Gotcha #46 (TBD).
+    let output_bottom_spacer = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .height_request(4000)
+        .build();
+    output_inner_box.append(&output_bottom_spacer);
 
     let output_scroll = ScrolledWindow::builder()
         .vexpand(true)
@@ -366,6 +399,7 @@ pub fn build_window(
         streaming_view,
         streaming_buffer_widget,
         output_scroll,
+        output_bottom_spacer,
         input_view,
         input_buffer,
         send_button,
@@ -799,7 +833,72 @@ pub fn update_status(left_label: &Label, right_label: &Label, state: &AppState) 
     right_label.set_label(&chlodwig_core::format_status_right(&d));
 }
 
-/// Scroll the output view to the bottom.
+/// Scroll to the bottom of the content (NOT the bottom of `upper`).
+///
+/// `upper` is inflated by the bottom spacer (see `output_bottom_spacer`)
+/// to prevent GtkAdjustment from clamping `value` when streaming_view
+/// shrinks. Scrolling to `upper - page_size` would land in the empty
+/// spacer area below the actual content. Compute the real content
+/// bottom from `final_view.allocated_height + streaming_view.allocated_height`.
+///
+/// **Deferred via `Widget::add_tick_callback`**: callers typically
+/// invoke this immediately after mutating the buffer (e.g. Cmd+Enter
+/// inserts the user message, then asks to scroll to the new bottom).
+/// At that synchronous moment, GTK has not yet run a layout pass, so
+/// `final_view.allocated_height()` still returns the PRE-mutation
+/// height — the scroll target is too short and the new content is
+/// not visible.
+///
+/// `idle_add_local_once` is NOT sufficient: GTK4 layout runs on the
+/// frame clock, not the GLib main loop, so an idle callback can fire
+/// before the next frame's layout completes. `add_tick_callback`
+/// runs in sync with the frame clock AFTER the layout pass — at that
+/// point `allocated_height()` is guaranteed current. We schedule TWO
+/// tick callbacks to handle the case where the first frame after the
+/// buffer mutation only invalidates the layout, and the actual
+/// measure happens on the second frame.
+pub fn scroll_to_content_bottom(
+    scroll: &ScrolledWindow,
+    final_view: &EmojiTextView,
+    streaming_view: &EmojiTextView,
+) {
+    use gtk4::glib::ControlFlow;
+    let scroll_clone = scroll.clone();
+    let final_view_clone = final_view.clone();
+    let streaming_view_clone = streaming_view.clone();
+    // Track frames: skip the first (layout-invalidate frame), measure
+    // and scroll on the second (layout-complete frame), then unregister.
+    let frames_left = std::rc::Rc::new(std::cell::Cell::new(2u8));
+    final_view.add_tick_callback(move |_widget, _clock| {
+        let n = frames_left.get();
+        if n > 1 {
+            frames_left.set(n - 1);
+            return ControlFlow::Continue;
+        }
+        let adj = scroll_clone.vadjustment();
+        let final_h = final_view_clone
+            .upcast_ref::<TextView>()
+            .allocated_height() as f64;
+        let stream_h = if streaming_view_clone.is_visible() {
+            streaming_view_clone
+                .upcast_ref::<TextView>()
+                .allocated_height() as f64
+        } else {
+            0.0
+        };
+        let content_bottom = final_h + stream_h;
+        let max = (adj.upper() - adj.page_size()).max(0.0);
+        // +10 px overscroll for breathing room under the last line.
+        // Must match the auto-scroll tick in event_dispatch.rs.
+        let target = (content_bottom - adj.page_size() + 10.0).max(0.0).min(max);
+        adj.set_value(target);
+        ControlFlow::Break
+    });
+}
+
+/// DEPRECATED: scrolls to `upper - page_size`, which now lands in the
+/// bottom spacer (empty area). Use `scroll_to_content_bottom` instead.
+/// Kept temporarily for callers that still need migration.
 pub fn scroll_to_bottom(scroll: &ScrolledWindow) {
     let adj = scroll.vadjustment();
     adj.set_value(adj.upper() - adj.page_size());
@@ -852,9 +951,20 @@ fn disable_text_view_drag(view: &TextView) {
     gesture.connect_drag_begin(move |_gesture, _x, _y| {
         // Clear selection so GTK's internal handler won't trigger DND.
         // It will start a fresh selection from the click position instead.
-        let cursor = buf.cursor_position();
-        let iter = buf.iter_at_offset(cursor);
-        buf.select_range(&iter, &iter);
+        //
+        // CRITICAL (issue #27): only touch the selection when one actually
+        // exists. Moving the insert mark unconditionally (via select_-
+        // range with collapsed iter) sends it to offset 0 on a read-only
+        // output view whose cursor was never moved. GTK's TextView then
+        // auto-scrolls the insert mark on-screen → snap to the first line
+        // on every click. Guarding on `has_selection()` means: if there is
+        // no selection, GTK's internal handler can't trigger DND anyway,
+        // so we do nothing.
+        if buf.has_selection() {
+            let cursor = buf.cursor_position();
+            let iter = buf.iter_at_offset(cursor);
+            buf.select_range(&iter, &iter);
+        }
     });
     view.add_controller(gesture);
 }

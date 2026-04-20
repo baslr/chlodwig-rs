@@ -27,6 +27,7 @@ use crate::{render, BackgroundCommand};
 pub struct RestoreContext<'a> {
     pub state: &'a Rc<RefCell<AppState>>,
     pub output_view: &'a EmojiTextView,
+    pub streaming_view: &'a EmojiTextView,
     pub output_scroll: &'a gtk4::ScrolledWindow,
     pub window: &'a gtk4::ApplicationWindow,
     pub viewport_cols: &'a Rc<Cell<usize>>,
@@ -82,5 +83,5 @@ pub fn apply_restored_session_to_ui(snapshot: SessionSnapshot, ctx: &RestoreCont
 
     // 8. Status + scroll.
     window::update_status(ctx.status_left, ctx.status_right, &ctx.state.borrow());
-    window::scroll_to_bottom(ctx.output_scroll);
+    window::scroll_to_content_bottom(ctx.output_scroll, ctx.output_view, ctx.streaming_view);
 }

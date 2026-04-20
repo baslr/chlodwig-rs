@@ -4,6 +4,7 @@ pub mod ansi;
 pub mod app_state;
 pub mod emoji;
 pub mod md_renderer;
+pub mod value_changed;
 pub mod viewport;
 
 /// Native macOS notifications via UNUserNotificationCenter.

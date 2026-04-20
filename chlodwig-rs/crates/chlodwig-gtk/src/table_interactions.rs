@@ -54,6 +54,7 @@ fn wire_header_click_sort(
 ) {
     let state_for_sort = app_state.clone();
     let final_view_for_sort = widgets.final_view.clone();
+    let streaming_view_for_sort = widgets.streaming_view.clone();
     let viewport_cols_for_sort = viewport_cols.clone();
     let scroll_for_sort = widgets.output_scroll.clone();
     let prompt_tx_for_sort = prompt_tx.clone();
@@ -101,8 +102,10 @@ fn wire_header_click_sort(
                 });
                 if state.auto_scroll.is_active() {
                     let sc = scroll_for_sort.clone();
+                    let fv = final_view_for_sort.clone();
+                    let sv = streaming_view_for_sort.clone();
                     glib::idle_add_local_once(move || {
-                        window::scroll_to_bottom(&sc);
+                        window::scroll_to_content_bottom(&sc, &fv, &sv);
                     });
                 }
             }

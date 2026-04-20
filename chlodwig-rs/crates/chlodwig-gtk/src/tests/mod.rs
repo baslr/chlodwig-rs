@@ -29,3 +29,7 @@ mod setup_tests;
 mod md_renderer_tests;
 mod emoji_unit_tests;
 mod window_focus_tests;
+mod click_no_scroll_top_tests;
+mod scroll_simplification_tests;
+mod scroll_anchor_tests;
+mod value_changed_classification_tests;

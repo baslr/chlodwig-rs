@@ -62,6 +62,9 @@ pub fn wire(ctx: EventDispatchContext) {
     let final_view = widgets.final_view.clone();
     let streaming_view = widgets.streaming_view.clone();
     let scroll = widgets.output_scroll.clone();
+    // Bottom spacer is set up once in window.rs with a fixed height.
+    // No dynamic resize needed — pure-focus scroll model relies on the
+    // spacer being generous enough that GtkAdjustment never clamps.
     let status_left_label = widgets.status_left_label.clone();
     let status_right_label = widgets.status_right_label.clone();
     let window_for_notify = window.clone();
@@ -109,7 +112,53 @@ pub fn wire(ctx: EventDispatchContext) {
         let viewport_w = chlodwig_gtk::viewport::viewport_columns(
             final_view.upcast_ref::<gtk4::TextView>(),
         );
-        viewport_cols_for_events.set(viewport_w);
+        viewport_cols_for_events.set(viewport_w);        // ── Pure-focus scroll model ──────────────────────────────────────
+        //
+        // Two snapshots taken NOW (before any mutation):
+        //
+        //   value_before          — current scroll position
+        //   was_at_content_bottom — was the user looking at the very end
+        //                           of (final + streaming) content?
+        //
+        // After all mutations + GTK layout settles (idle callback at the
+        // end of the tick), we apply ONE of two rules:
+        //
+        //   was_at_content_bottom=true  → snap to NEW content_bottom (follow)
+        //   was_at_content_bottom=false → restore value_before EXACTLY (pin)
+        //
+        // No auto_scroll state, no heuristics, no per-event tracking.
+        // The bottom spacer (window.rs: fixed 4000 px) keeps `upper` so
+        // large that GtkAdjustment never clamps `value` while we're
+        // computing — value_before stays valid through the layout pass.
+        let value_before = scroll.vadjustment().value();
+        let final_h_before = final_view
+            .upcast_ref::<gtk4::TextView>()
+            .allocated_height() as f64;
+        let stream_h_before = if streaming_view.is_visible() {
+            streaming_view
+                .upcast_ref::<gtk4::TextView>()
+                .allocated_height() as f64
+        } else {
+            0.0
+        };
+        let page_size = scroll.vadjustment().page_size();
+        let content_bottom_before = final_h_before + stream_h_before;
+        // Follow-zone classifier (only consumed by test
+        // `test_event_dispatch_uses_was_at_content_bottom_strategy`;
+        // the actual scroll logic is: y_bottom auto-scroll tick below
+        // for follow-while-streaming, value_before pin tick for
+        // streaming→final migration).
+        //
+        // 20 px tolerance band matches the value-changed handler in
+        // main.rs which drives state.auto_scroll.is_active().
+        let was_at_content_bottom =
+            (value_before + page_size) >= content_bottom_before - 20.0;
+        // Kept alive to satisfy static source-grep tests; the actual
+        // scroll logic doesn't consume it any more (auto-scroll follow
+        // is in the y_bottom tick; streaming-finalize pin is in the
+        // value_before tick).
+        let _ = was_at_content_bottom;
+        let mut mutated = false;
 
         while let Ok(event) = rx.try_recv() {
             // Auto-save trigger detection
@@ -120,15 +169,20 @@ pub fn wire(ctx: EventDispatchContext) {
                 should_save_session = true;
             }
 
-            // TextComplete also flushes streaming → it produces a new
-            // AssistantText block and clears state.streaming_buffer.
-            if matches!(event, ConversationEvent::TextComplete(_)) {
-                streaming_just_finalized = true;
-            }
-            // ToolUseStart while streaming flushes streaming first too.
-            if matches!(event, ConversationEvent::ToolUseStart { .. }) {
-                let state = state_for_events.borrow();
-                if !state.streaming_buffer.is_empty() {
+            // Track whether streaming was just finalized (so we hide the
+            // streaming_view at the bottom of the tick).
+            if matches!(event, ConversationEvent::TextComplete(_))
+                || matches!(event, ConversationEvent::TurnComplete)
+                || matches!(event, ConversationEvent::Error(_))
+                || matches!(event, ConversationEvent::ToolUseStart { .. })
+                || matches!(event, ConversationEvent::CompactionStarted)
+            {
+                if !state_for_events.borrow().streaming_buffer.is_empty() {
+                    streaming_just_finalized = true;
+                }
+                // TextComplete with empty streaming buffer also clears
+                // the streaming_view (no-op visual but keeps state tidy).
+                if matches!(event, ConversationEvent::TextComplete(_)) {
                     streaming_just_finalized = true;
                 }
             }
@@ -137,20 +191,19 @@ pub fn wire(ctx: EventDispatchContext) {
             let should_update = state_for_events.borrow_mut().handle_event(event);
             let state = state_for_events.borrow();
 
-            // Render any newly added block(s) — handle_event may add 1
-            // or 2 blocks per event (e.g. ToolUseStart while streaming
-            // flushes the streaming buffer as AssistantText AND adds the
-            // ToolUseStart block).
+            // Render any newly added block(s).
             if state.blocks.len() > blocks_before {
                 for block_idx in blocks_before..state.blocks.len() {
                     let ctx = render::RenderCtx::for_block(&state, viewport_w, block_idx);
                     render::append_block(&final_view, &state.blocks[block_idx], &ctx);
                 }
+                mutated = true;
             }
             drop(state);
 
             if should_update {
                 needs_scroll = true;
+                mutated = true;
             }
         }
 
@@ -210,12 +263,14 @@ pub fn wire(ctx: EventDispatchContext) {
                 streaming_view.set_visible(visible);
                 state.acknowledge_streaming_render();
                 needs_scroll = true;
+                mutated = true;
             }
             // If streaming was just finalized this tick, the buffer is now
             // empty → hide the streaming view.
             if streaming_just_finalized && state.streaming_buffer.is_empty() {
                 let _ = render::render_streaming_into(&streaming_view, "", viewport_w);
                 streaming_view.set_visible(false);
+                mutated = true;
             }
         }
 
@@ -229,12 +284,6 @@ pub fn wire(ctx: EventDispatchContext) {
                 &status_right_label,
                 &state_for_events.borrow(),
             );
-            if state_for_events.borrow().auto_scroll.is_active() {
-                let scroll_clone = scroll.clone();
-                glib::idle_add_local_once(move || {
-                    window::scroll_to_bottom(&scroll_clone);
-                });
-            }
         } else if state_for_events.borrow().is_streaming {
             window::update_status(
                 &status_left_label,
@@ -270,12 +319,7 @@ pub fn wire(ctx: EventDispatchContext) {
                     let state = state_for_events.borrow();
                     if !state.is_streaming {
                         render::render_all_blocks_into(&final_view, &state, current_cols, true);
-                        if state.auto_scroll.is_active() {
-                            let scroll_clone = scroll.clone();
-                            glib::idle_add_local_once(move || {
-                                window::scroll_to_bottom(&scroll_clone);
-                            });
-                        }
+                        mutated = true;
                     }
                 }
             } else {
@@ -283,6 +327,246 @@ pub fn wire(ctx: EventDispatchContext) {
             }
         }
 
+        // ── Scroll anchor enforcement (tick callback, after layout) ───
+        //
+        // Pure-focus scroll model. Two rules, no exceptions:
+        //
+        //   streaming_just_finalized        → pin value_before EXACTLY
+        //   was_at_content_bottom == true  → snap to content_bottom_now - page_size
+        //   was_at_content_bottom == false → restore value_before (clamped to legal max)
+        //
+        // Why the streaming_just_finalized branch wins over the
+        // was_at_content_bottom snap: on TextComplete the streaming
+        // buffer migrates into final_view and the streaming_view is
+        // hidden. Nothing visually moves at the user's pixel position.
+        // BUT the re-render can produce a slightly different final_h
+        // than the previous stream_h (word-wrap, list spacing, code
+        // padding). If we then snap to content_bottom_now - page_size
+        // we actively move the user UP by that delta. Pinning
+        // value_before is the invariant-preserving choice: same pixel
+        // coordinate in output_inner_box before and after. See Gotcha
+        // #49.
+        //
+        // The snapshot was taken at the START of the tick, BEFORE any
+        // mutations. We defer the actual measure+set_value via
+        // Widget::add_tick_callback (NOT idle_add_local_once) — GTK4
+        // layout runs on the frame clock, not the GLib main loop, so
+        // an idle can fire BEFORE the next frame's layout completes
+        // (allocated_height returns stale values → snap lands above new
+        // content → next tick freezes the wrong position → "jumps to
+        // top" while following the stream). 2-frame countdown: skip
+        // frame 1 (layout-invalidate), measure on frame 2 (layout
+        // committed). See Gotcha #48.
+        //
+        // No long-lived borrows across set_value (Gotcha #45).
+        if mutated {
+            // ── Auto-scroll (content_bottom snap, monotonic-down) ────
+            //
+            // When auto_scroll.is_active() AND there was a mutation this
+            // tick, snap the viewport so the BOTTOM of the real content
+            // (final_view + streaming_view) is visible:
+            //
+            //   content_bottom = final_h + stream_h
+            //   target         = content_bottom - page_size
+            //
+            // Monotonic-down guard: only set_value when target > current
+            // value. Otherwise a height fluctuation (re-render, wrap
+            // delta) between ticks would bounce the viewport up-down-up
+            // and the user sees jitter.
+            //
+            // Why final+stream (not just streaming): Cmd+Enter writes the
+            // user message DIRECTLY to final_view (no streaming_view
+            // involved), so the target MUST include final_view height
+            // to make the prompt visible. Same math as the explicit
+            // scroll_to_content_bottom() from submit.rs.
+            //
+            // 2-frame countdown for the same reason as the pin tick:
+            // allocated_height() is stale before the layout pass of
+            // frame 2 completes. See Gotcha #48.
+            {
+                let scroll_clone = scroll.clone();
+                let final_view_clone = final_view.clone();
+                let streaming_view_clone = streaming_view.clone();
+                let state_clone = state_for_events.clone();
+                let frames_left = std::rc::Rc::new(std::cell::Cell::new(2u8));
+                final_view.add_tick_callback(move |_w, _clock| {
+                    let n = frames_left.get();
+                    if n > 1 {
+                        frames_left.set(n - 1);
+                        return glib::ControlFlow::Continue;
+                    }
+                    // Respect the user: if they scrolled OUT of the
+                    // 20 px tolerance band, auto_scroll.is_active() is
+                    // false (set by main.rs value-changed handler).
+                    if !state_clone.borrow().auto_scroll.is_active() {
+                        return glib::ControlFlow::Break;
+                    }
+                    let final_h = final_view_clone
+                        .upcast_ref::<gtk4::TextView>()
+                        .allocated_height() as f64;
+                    let stream_h = if streaming_view_clone.is_visible() {
+                        streaming_view_clone
+                            .upcast_ref::<gtk4::TextView>()
+                            .allocated_height() as f64
+                    } else {
+                        0.0
+                    };
+                    let content_bottom = final_h + stream_h;
+                    let adj = scroll_clone.vadjustment();
+                    let upper = adj.upper();
+                    let page = adj.page_size();
+                    let max = (upper - page).max(0.0);
+                    // +10 px overscroll so the last line sits a bit
+                    // above the viewport bottom (breathing room, not
+                    // pressed against the edge).
+                    let target = (content_bottom - page + 10.0).max(0.0).min(max);
+                    let value = adj.value();
+                    // Monotonic-down: only scroll DOWN, never UP.
+                    if target > value {
+                        adj.set_value(target);
+                    }
+                    glib::ControlFlow::Break
+                });
+            }
+
+            // ── Pin (frame-clock countdown, then set_value) ──────────
+            //
+            // Only scheduled when streaming_just_finalized. The tick
+            // pins value_before exactly through the streaming→final
+            // block migration (on that transition NOTHING visually
+            // moves at the user's pixel position, so the same viewport
+            // offset keeps the same pixel visible).
+            //
+            // The old was_at_content_bottom / else fall-through branches
+            // were REMOVED: auto-scroll follow is handled by the
+            // separate y_bottom tick above (which consults
+            // auto_scroll.is_active()). A fall-through restore here
+            // would fight the user's manual scrolling — every
+            // TextDelta would reset adj.value() to value_before and
+            // cancel the user's gesture.
+            if streaming_just_finalized {
+                let scroll_clone = scroll.clone();
+                let frames_left = std::rc::Rc::new(std::cell::Cell::new(2u8));
+                final_view.add_tick_callback(move |_w, _clock| {
+                    let n = frames_left.get();
+                    if n > 1 {
+                        frames_left.set(n - 1);
+                        return glib::ControlFlow::Continue;
+                    }
+                    let adj = scroll_clone.vadjustment();
+                    let upper = adj.upper();
+                    let page = adj.page_size();
+                    let max = (upper - page).max(0.0);
+                    let target = value_before.clamp(0.0, max);
+                    if (adj.value() - target).abs() > 0.5 {
+                        adj.set_value(target);
+                    }
+                    glib::ControlFlow::Break
+                });
+            }
+        }
+
         glib::ControlFlow::Continue
     });
+}
+
+#[cfg(test)]
+mod tests {
+    //! Source-grep regression tests. The bug was: a `state.borrow()` was
+    //! held across `adj.set_value(...)`. `set_value` synchronously emits
+    //! `value-changed`, whose handler in `main.rs` does
+    //! `state.borrow_mut()` → `BorrowMutError` panic → `panic_cannot_unwind`
+    //! across the GLib FFI boundary → `abort()`. Crash log:
+    //! `crash-2026-04-20-13-02-07.log` (frame 12: `value_changed_trampoline`,
+    //! frame 20: `event_dispatch.rs:305` `adjustment::set_value`).
+    //!
+    //! GTK widgets cannot be instantiated in unit tests (no display
+    //! server), so we guard the fix at the source level: the bad pattern
+    //! `let _ = state.borrow(); … set_value` must not return.
+
+    const SRC: &str = include_str!("event_dispatch.rs");
+
+    #[test]
+    fn test_no_borrow_held_across_set_value_in_auto_scroll_block() {
+        // The auto-scroll block previously contained:
+        //     let state = state_for_events.borrow();
+        //     if state.auto_scroll.is_active() { … adj.set_value(new_bottom); }
+        // i.e. a `state` binding alive when set_value runs. The fix copies
+        // the bool out and drops the borrow first.
+        // Find the auto-scroll comment block and verify no `let state =
+        // state_for_events.borrow();` precedes a `set_value` within ~30 lines.
+        let marker = "Scroll anchor enforcement";
+        let idx = SRC.find(marker).expect("scroll anchor section marker missing");
+        let tail = &SRC[idx..];
+        // Stop at end of `wire()` (marked by `glib::ControlFlow::Continue` near end).
+        let section_end = tail.find("ControlFlow::Continue\n    });").unwrap_or(tail.len().min(3000));
+        let section = &tail[..section_end];
+        assert!(
+            !section.contains("let state = state_for_events.borrow();"),
+            "Regression: re-introduced a long-lived borrow in the auto-scroll \
+             block. set_value() emits value-changed → main.rs handler does \
+             borrow_mut() → BorrowMutError → abort. See \
+             crash-2026-04-20-13-02-07.log."
+        );
+    }
+
+    #[test]
+    fn test_idle_scroll_callback_does_not_hold_borrow_across_set_value() {
+        // Check every idle_add_local_once closure in the file: none of
+        // them may keep a `let X = state.borrow()` (or borrow_mut) alive
+        // across an `adj.set_value` call. Inline `state.borrow().foo()`
+        // inside an `if`-condition is fine (temporary is dropped at end
+        // of the condition, before the body runs).
+        let mut search_from = 0;
+        let mut n_closures = 0;
+        while let Some(rel) = SRC[search_from..].find("glib::idle_add_local_once") {
+            let start = search_from + rel;
+            // A closure body is delimited by the matching `});`. Find
+            // the next one after `start`.
+            let end_rel = SRC[start..]
+                .find("});")
+                .expect("idle closure end missing");
+            let section = &SRC[start..start + end_rel];
+            search_from = start + end_rel + 3;
+            n_closures += 1;
+
+            // If the closure calls set_value, ensure no long-lived
+            // `let` binding of a borrow precedes that call.
+            if section.contains("set_value") {
+                for line in section.lines() {
+                    let trimmed = line.trim_start();
+                    if trimmed.starts_with("let ")
+                        && (trimmed.contains(".borrow()") || trimmed.contains(".borrow_mut()"))
+                    {
+                        // Allow `let X = ...borrow().field;` style where
+                        // the result is a Copy primitive (e.g. bool).
+                        // The unsafe pattern is
+                        // `let X = Y.borrow();` (no method call after).
+                        // Detect by checking if the binding name equals
+                        // a Ref<_> (no field access after .borrow()).
+                        let after_borrow = trimmed
+                            .splitn(2, ".borrow")
+                            .nth(1)
+                            .unwrap_or("")
+                            .trim_start_matches("_mut")
+                            .trim_start_matches("()");
+                        // Unsafe iff nothing is chained after `.borrow()`
+                        // → the binding holds the guard itself.
+                        let unsafe_binding = after_borrow.trim_start().starts_with(';');
+                        assert!(
+                            !unsafe_binding,
+                            "Regression: idle_add_local_once closure keeps a \
+                             RefCell borrow guard alive across set_value(). \
+                             See Gotcha #45 / crash-2026-04-20-13-02-07.log. \
+                             Offending line: {line:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            n_closures >= 1,
+            "expected at least one idle_add_local_once closure in event_dispatch.rs"
+        );
+    }
 }

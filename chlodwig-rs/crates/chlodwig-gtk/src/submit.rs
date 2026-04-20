@@ -62,6 +62,7 @@ pub fn wire(ctx: SubmitContext) {
     let session_started_at_for_submit = session_started_at.clone();
     let viewport_cols_for_submit = viewport_cols.clone();
     let final_view_for_submit = widgets.final_view.clone();
+    let streaming_view_for_submit = widgets.streaming_view.clone();
     let window_for_submit = window.clone();
     let stop_flag_for_submit = stop_flag.clone();
     let cwd_name_for_submit: Option<String> = {
@@ -111,7 +112,7 @@ pub fn wire(ctx: SubmitContext) {
                     }
                     let state = state_for_submit.borrow();
                     render::render_all_blocks_into(&final_view_for_submit, &state, viewport_cols_for_submit.get(), true);
-                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
                 Command::Shell(cmd_str) => {
@@ -128,7 +129,7 @@ pub fn wire(ctx: SubmitContext) {
                     // Render output with ANSI colors
                     render::render_ansi_output(&final_view_for_submit, &output);
 
-                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
                 Command::Quit => {
@@ -145,7 +146,7 @@ pub fn wire(ctx: SubmitContext) {
                         "\n⏳ Compacting conversation…\n",
                         "system",
                     );
-                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
                 Command::Sessions => {
@@ -186,7 +187,7 @@ pub fn wire(ctx: SubmitContext) {
                             );
                         }
                     }
-                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
                 Command::Resume(prefix) => {
@@ -207,6 +208,7 @@ pub fn wire(ctx: SubmitContext) {
                             let ctx = restore::RestoreContext {
                                 state: &state_for_submit,
                                 output_view: &final_view_for_submit,
+                                streaming_view: &streaming_view_for_submit,
                                 output_scroll: &scroll_for_submit,
                                 window: &window_for_submit,
                                 viewport_cols: &viewport_cols_for_submit,
@@ -229,7 +231,7 @@ pub fn wire(ctx: SubmitContext) {
                                 &format!("\n{msg}\n"),
                                 "system",
                             );
-                            window::scroll_to_bottom(&scroll_for_submit);
+                            window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                         }
                         Err(e) => {
                             window::append_styled(
@@ -237,7 +239,7 @@ pub fn wire(ctx: SubmitContext) {
                                 &format!("\n✗ Failed to load session: {e}\n"),
                                 "error",
                             );
-                            window::scroll_to_bottom(&scroll_for_submit);
+                            window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                         }
                     }
                     return;
@@ -253,7 +255,7 @@ pub fn wire(ctx: SubmitContext) {
                                     &format!("\n✗ A session with the name \"{n}\" already exists. Choose a different name.\n"),
                                     "error",
                                 );
-                                window::scroll_to_bottom(&scroll_for_submit);
+                                window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                                 return;
                             }
                             Err(e) => {
@@ -262,7 +264,7 @@ pub fn wire(ctx: SubmitContext) {
                                     &format!("\n✗ Could not check session names: {e}\n"),
                                     "error",
                                 );
-                                window::scroll_to_bottom(&scroll_for_submit);
+                                window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                                 return;
                             }
                             Ok(false) => {} // unique → proceed
@@ -290,7 +292,7 @@ pub fn wire(ctx: SubmitContext) {
                         None => "\n✓ Session name cleared.\n".to_string(),
                     };
                     window::append_styled(&final_view_for_submit, &msg, "system");
-                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
                 Command::Save => {
@@ -305,7 +307,7 @@ pub fn wire(ctx: SubmitContext) {
                         "\n✓ Session saved.\n",
                         "system",
                     );
-                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
                 Command::Stop => {
@@ -318,7 +320,7 @@ pub fn wire(ctx: SubmitContext) {
                         "\n⏸ Stop requested — will interrupt after the current message.\n",
                         "system",
                     );
-                    window::scroll_to_bottom(&scroll_for_submit);
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
             }
@@ -335,7 +337,7 @@ pub fn wire(ctx: SubmitContext) {
 
         // Render user message in output
         window::append_styled(&final_view_for_submit, &format!("\n▶ {text}\n"), "user");
-        window::scroll_to_bottom(&scroll_for_submit);
+        window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
         window::update_status(&status_left_for_submit, &status_right_for_submit, &state_for_submit.borrow());
 
         // Send to background conversation loop (include turn_usage for auto-compact check)
@@ -378,6 +380,7 @@ pub fn wire(ctx: SubmitContext) {
         let last_esc: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
         let stop_flag_for_esc = stop_flag.clone();
         let final_view_for_esc = widgets.final_view.clone();
+        let streaming_view_for_esc = widgets.streaming_view.clone();
         let scroll_for_esc = widgets.output_scroll.clone();
         let esc_ctrl = gtk4::EventControllerKey::new();
         esc_ctrl.connect_key_pressed(move |_, key, _keycode, _modifiers| {
@@ -396,7 +399,7 @@ pub fn wire(ctx: SubmitContext) {
                     "\n⏸ Stop requested (Esc Esc) — will interrupt after the current message.\n",
                     "system",
                 );
-                window::scroll_to_bottom(&scroll_for_esc);
+                window::scroll_to_content_bottom(&scroll_for_esc, &final_view_for_esc, &streaming_view_for_esc);
                 last_esc.set(None);
             } else {
                 last_esc.set(Some(now));
