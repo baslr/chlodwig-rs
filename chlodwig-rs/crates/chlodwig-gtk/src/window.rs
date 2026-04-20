@@ -221,10 +221,32 @@ pub struct UiWidgets {
     pub output_bottom_spacer: GtkBox,
     pub input_view: TextView,
     pub input_buffer: gtk4::TextBuffer,
+    /// `ScrolledWindow` wrapping `input_view`. Lifted out of `build_tab_content`
+    /// (where the widget is constructed) so the **window-level** input-height
+    /// cap (issue #26: cap = window_height / 2) can be wired by `build_window`
+    /// without a bespoke accessor — the cap is per-window state, not per-tab.
+    pub input_scroll: ScrolledWindow,
     pub send_button: Button,
     pub toggle_tool_button: Button,
     pub status_left_label: Label,
     pub status_right_label: Label,
+}
+
+/// One tab's worth of widgets — the per-tab unit that Stage B
+/// (`adw::TabView`) will multiplex inside a single window.
+///
+/// Holds the vertical `GtkBox` (`root`) that stacks output, input, and
+/// status bar; the per-tab `UiWidgets` references; and the tab's working
+/// directory. Created by [`build_tab_content`]. Today (Stage A) exactly
+/// one `TabContent` is placed directly inside an `ApplicationWindow`;
+/// from Stage B onwards, multiple tabs will live in a `TabView`.
+pub struct TabContent {
+    /// Top-level widget for this tab (vertical box). Goes either directly
+    /// into `ApplicationWindow.set_child` (Stage A) or into a tab page
+    /// inside `adw::TabView` (Stage B+).
+    pub root: GtkBox,
+    pub widgets: UiWidgets,
+    pub cwd: std::path::PathBuf,
 }
 
 /// Format the window title.
@@ -249,18 +271,52 @@ pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
     parts.join(" \u{30FB} ")
 }
 
-/// Build the main application window and return widget references.
+/// Build the empty window shell (Stage A of MULTIWINDOW_TABS.md).
 ///
-/// `cwd` is the working directory of the (initial) tab; used to derive
-/// the window title (`"chlodwig — <project-dir>"`). Per Stage 0.3 of
-/// MULTIWINDOW_TABS.md the title no longer reads `env::current_dir()`.
-pub fn build_window(
+/// Creates a fresh `ApplicationWindow` with the given title and loads the
+/// application CSS. **Does not construct any per-tab widgets** — those are
+/// the job of [`build_tab_content`]. The shell is reused unchanged across
+/// Stages A → B → C: in Stage A the caller calls `window.set_child(&tab.root)`
+/// to drop a single tab in directly; in Stage B the caller will set an
+/// `adw::TabView` as the child instead.
+///
+/// `load_app_css` registers a `CssProvider` with the default `Display`,
+/// which is process-global and idempotent — calling this once per window
+/// is harmless because GTK deduplicates the provider registration.
+pub fn build_window_shell(
     app: &libadwaita::Application,
-    cwd: &std::path::Path,
-) -> (ApplicationWindow, UiWidgets) {
-    // --- Load application CSS ---
+    title: &str,
+) -> ApplicationWindow {
     load_app_css();
 
+    ApplicationWindow::builder()
+        .application(app)
+        .title(title)
+        .default_width(900)
+        .default_height(700)
+        .build()
+}
+
+/// Build the per-tab widget tree (Stage A of MULTIWINDOW_TABS.md).
+///
+/// Returns a [`TabContent`] containing:
+/// - `root`: vertical `GtkBox` (output ScrolledWindow / Separator / input row /
+///   Separator / status bar) ready to be placed inside an `ApplicationWindow`
+///   (Stage A) or an `adw::TabPage` (Stage B+).
+/// - `widgets`: handles to every interactive child (output views, input view,
+///   send button, status labels, …) for use by `submit`, `event_dispatch`,
+///   `menu`, `table_interactions`.
+/// - `cwd`: the tab's working directory (used today for the window title;
+///   from Stage 0 onwards each tab carries its own cwd, no process-global
+///   `current_dir` reads).
+///
+/// **Single source of truth** (Gotchas #37/#39/#40/#43): every per-tab
+/// widget is constructed exactly here. `build_window` is a composer that
+/// glues a shell + a tab together; `build_window_shell` only creates the
+/// `ApplicationWindow`. Tests in `tests/multiwindow_stage_a_tests.rs`
+/// enforce this statically (e.g. the EmojiTextView constructor call must
+/// appear exactly twice in `window.rs`, both inside `build_tab_content`).
+pub fn build_tab_content(cwd: &std::path::Path) -> TabContent {
     // --- Output: TWO read-only TextViews stacked in a vertical Box ---
     //
     // `final_view`     — append-only history of completed DisplayBlocks.
@@ -356,7 +412,10 @@ pub fn build_window(
     // Input ScrolledWindow with dynamic max-content-height: capped at
     // half the window height (issue #26). The cap is set initially
     // from the default-height (700 → 350), then updated whenever the
-    // window's `default-height` property changes (resize events).
+    // window's `default-height` property changes (resize events). That
+    // wiring lives in `build_window` because it spans the per-tab and
+    // per-window layers; we expose `input_scroll` through `UiWidgets`
+    // so `build_window` can grab the handle without a bespoke accessor.
     // When the input content exceeds the cap the internal vertical
     // scrollbar appears (PolicyType::Automatic).
     let input_scroll = ScrolledWindow::builder()
@@ -428,28 +487,67 @@ pub fn build_window(
     status_bar.append(&status_left_label);
     status_bar.append(&status_right_label);
 
-    // --- Main layout ---
-    let main_box = GtkBox::builder()
+    // --- Per-tab root: stack output / input / status bar vertically ---
+    let root = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .build();
-    main_box.append(&output_scroll);
-    main_box.append(&Separator::new(Orientation::Horizontal));
-    main_box.append(&input_row);
-    main_box.append(&Separator::new(Orientation::Horizontal));
-    main_box.append(&status_bar);
+    root.append(&output_scroll);
+    root.append(&Separator::new(Orientation::Horizontal));
+    root.append(&input_row);
+    root.append(&Separator::new(Orientation::Horizontal));
+    root.append(&status_bar);
 
+    let widgets = UiWidgets {
+        final_view,
+        final_buffer,
+        streaming_view,
+        streaming_buffer_widget,
+        output_scroll,
+        output_bottom_spacer,
+        input_view,
+        input_buffer,
+        input_scroll,
+        send_button,
+        toggle_tool_button,
+        status_left_label,
+        status_right_label,
+    };
+
+    // Read the actual text font size from the output TextView's Pango context
+    // so emoji bitmaps match the surrounding text height. Per-tab because the
+    // font size is stored in a thread-local; the value is the same for every
+    // tab on the same display, so re-initialising on each tab is a no-op.
+    init_emoji_font_size(&widgets.final_view);
+
+    TabContent {
+        root,
+        widgets,
+        cwd: cwd.to_path_buf(),
+    }
+}
+
+/// Build a window with exactly one tab inside it (Stage A composition).
+///
+/// Composes [`build_window_shell`] + [`build_tab_content`]. From Stage B
+/// onwards this same composition will create the shell, then mount an
+/// `adw::TabView` instead of a single `TabContent.root`.
+///
+/// The window-level resize cap that couples `window.default-height` to
+/// `tab.widgets.input_scroll.max_content_height` is wired here because it
+/// genuinely spans the two layers — extracting it into a one-shot helper
+/// would be a wrapper for its own sake.
+pub fn build_window(
+    app: &libadwaita::Application,
+    cwd: &std::path::Path,
+) -> (ApplicationWindow, TabContent) {
     let cwd_name = cwd
         .file_name()
         .map(|n| n.to_string_lossy().into_owned());
     let title = format_window_title(cwd_name.as_deref(), None);
 
-    let window = ApplicationWindow::builder()
-        .application(app)
-        .title(&title)
-        .default_width(900)
-        .default_height(700)
-        .build();
-    window.set_child(Some(&main_box));
+    let window = build_window_shell(app, &title);
+    let tab = build_tab_content(cwd);
+    window.set_child(Some(&tab.root));
 
     // Issue #26: dynamically cap the input ScrolledWindow's max-content
     // height at half the window height. React to window resizes via
@@ -457,7 +555,7 @@ pub fn build_window(
     // or shrinks. We also set it once now so the initial layout is
     // correct even before the first notify fires.
     {
-        let input_scroll_for_resize = input_scroll.clone();
+        let input_scroll_for_resize = tab.widgets.input_scroll.clone();
         let apply_cap = move |height: i32| {
             let cap = (height / 2).max(40);
             input_scroll_for_resize.set_max_content_height(cap);
@@ -469,26 +567,7 @@ pub fn build_window(
         });
     }
 
-    let widgets = UiWidgets {
-        final_view,
-        final_buffer,
-        streaming_view,
-        streaming_buffer_widget,
-        output_scroll,
-        output_bottom_spacer,
-        input_view,
-        input_buffer,
-        send_button,
-        toggle_tool_button,
-        status_left_label,
-        status_right_label,
-    };
-
-    // Read the actual text font size from the output TextView's Pango context
-    // so emoji bitmaps match the surrounding text height.
-    init_emoji_font_size(&widgets.final_view);
-
-    (window, widgets)
+    (window, tab)
 }
 
 /// Append `text` to the end of `view`'s buffer, optionally applying one or

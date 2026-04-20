@@ -120,7 +120,8 @@ fn main() -> glib::ExitCode {
 }
 
 fn activate(app: &libadwaita::Application, resume_flag: bool, initial_cwd: std::path::PathBuf) {
-    let (window, widgets) = window::build_window(app, &initial_cwd);
+    let (window, tab) = window::build_window(app, &initial_cwd);
+    let widgets = tab.widgets;
 
     // --- Viewport width tracking for Markdown table rendering ---
     // Tables use monospace font, so we need to know how many monospace
