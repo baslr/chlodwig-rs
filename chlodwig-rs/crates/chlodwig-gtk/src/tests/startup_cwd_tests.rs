@@ -49,12 +49,17 @@ fn test_startup_cwd_message_two_lines() {
     );
 }
 
-/// Verify that the GTK main.rs calls startup_cwd_message() at startup.
+/// Verify that the per-tab attach path calls startup_cwd_message() so the
+/// CWD banner appears in every newly-opened tab.
+///
+/// Stage B: per-tab startup banner moved from main.rs to tab.rs (so that
+/// Cmd+T new tabs show their cwd, not just the initial one).
 #[test]
 fn test_main_rs_calls_startup_cwd_message() {
-    let src = include_str!("../main.rs");
+    let src = include_str!("../tab.rs");
     assert!(
         src.contains("startup_cwd_message"),
-        "main.rs must call startup_cwd_message() at startup to show the project directory"
+        "tab.rs must call startup_cwd_message() in attach_new_tab so every \
+         tab (initial AND Cmd+T) shows its working directory"
     );
 }

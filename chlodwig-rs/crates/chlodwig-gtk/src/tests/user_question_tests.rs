@@ -26,31 +26,32 @@ fn test_clear_does_not_reference_pending_user_question() {
 
 #[test]
 fn test_main_rs_injects_user_question_tool() {
-    let source = include_str!("../main.rs");
+    // Stage B: per-tab tool injection moved from main.rs to tab.rs.
+    let source = include_str!("../tab.rs");
     assert!(
         source.contains("UserQuestionTool::new"),
-        "main.rs must inject UserQuestionTool into conversation state"
+        "tab.rs must inject UserQuestionTool into the per-tab conversation state"
     );
 }
 
 #[test]
 fn test_main_rs_creates_user_question_channel() {
-    let source = include_str!("../main.rs");
+    // Stage B: per-tab channel creation moved from main.rs to tab.rs.
+    let source = include_str!("../tab.rs");
     assert!(
         source.contains("UserQuestionRequest"),
-        "main.rs must create an unbounded channel for UserQuestionRequest"
+        "tab.rs must create a per-tab unbounded channel for UserQuestionRequest"
     );
 }
 
 #[test]
 fn test_main_rs_drains_user_question_requests() {
-    // After Stage 4 refactor, main.rs creates the uq_rx channel and passes it
-    // to event_dispatch::wire(...), which drains it and shows the dialog.
-    let main_src = include_str!("../main.rs");
+    // Stage B: tab.rs creates uq_rx and passes it to event_dispatch::wire(...).
+    let tab_src = include_str!("../tab.rs");
     let dispatch_src = include_str!("../event_dispatch.rs");
     assert!(
-        main_src.contains("uq_rx"),
-        "main.rs must hold a handle to the UserQuestion receiver"
+        tab_src.contains("uq_rx"),
+        "tab.rs must hold a handle to the per-tab UserQuestion receiver"
     );
     assert!(
         dispatch_src.contains("uq_rx"),
@@ -275,10 +276,11 @@ fn test_dialog_uses_shared_macos_shortcuts() {
 
 #[test]
 fn test_main_uses_shared_macos_shortcuts() {
-    let source = include_str!("../main.rs");
+    // Stage B: per-tab `setup_macos_input_shortcuts` call moved to tab.rs.
+    let source = include_str!("../tab.rs");
     assert!(
         source.contains("setup_macos_input_shortcuts"),
-        "Main prompt input must use the shared setup_macos_input_shortcuts function"
+        "tab.rs must call setup_macos_input_shortcuts on each per-tab input view"
     );
 }
 

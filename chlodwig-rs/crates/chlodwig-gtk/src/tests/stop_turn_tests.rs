@@ -45,25 +45,22 @@ fn test_submit_wires_double_esc() {
 
 #[test]
 fn test_main_rs_shares_stop_flag_with_background() {
-    let src = include_str!("../main.rs");
-    // The SAME Arc<AtomicBool> must be:
-    //   (1) placed into conv_state.stop_requested (so run_turn observes it), and
-    //   (2) passed into the SubmitContext (so UI code can set it).
+    // Stage B: stop_flag is created PER TAB in `tab::attach_new_tab` and
+    // shared between the per-tab background task and the per-tab
+    // SubmitContext. The same SSoT invariant holds; only the location
+    // changed from main.rs to tab.rs.
+    let src = include_str!("../tab.rs");
     assert!(
         src.contains("let stop_flag") && src.contains("new_stop_flag()"),
-        "main.rs must create a stop_flag via chlodwig_core::new_stop_flag()"
+        "tab.rs must create a per-tab stop_flag via chlodwig_core::new_stop_flag()"
     );
     assert!(
-        src.contains("stop_flag_bg"),
-        "main.rs must clone stop_flag into the background thread"
-    );
-    assert!(
-        src.contains("stop_requested: stop_flag_bg.clone()"),
-        "conv_state.stop_requested must be the shared flag (not a fresh one)"
+        src.contains("stop_requested: stop_flag.clone()"),
+        "conv_state.stop_requested must be the shared per-tab flag (not a fresh one)"
     );
     assert!(
         src.contains("stop_flag: stop_flag.clone()"),
-        "SubmitContext must receive the shared flag"
+        "SubmitContext must receive the shared per-tab flag"
     );
 }
 

@@ -271,14 +271,25 @@ pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
     parts.join(" \u{30FB} ")
 }
 
-/// Build the empty window shell (Stage A of MULTIWINDOW_TABS.md).
+/// Build the empty window shell with its `adw::TabView` host
+/// (Stage B of MULTIWINDOW_TABS.md).
 ///
-/// Creates a fresh `ApplicationWindow` with the given title and loads the
-/// application CSS. **Does not construct any per-tab widgets** — those are
-/// the job of [`build_tab_content`]. The shell is reused unchanged across
-/// Stages A → B → C: in Stage A the caller calls `window.set_child(&tab.root)`
-/// to drop a single tab in directly; in Stage B the caller will set an
-/// `adw::TabView` as the child instead.
+/// Creates a fresh `ApplicationWindow` with the given title, loads the
+/// application CSS, and assembles the multi-tab host:
+///
+/// ```text
+///   ApplicationWindow
+///   └── GtkBox (vertical)
+///       ├── adw::TabBar     (set_view = the TabView below)
+///       └── adw::TabView    (empty, returned for tabs to .append() into)
+/// ```
+///
+/// Returns `(window, tab_view)`. Per-tab widget construction belongs to
+/// [`build_tab_content`] (Gotchas #37/#39/#40/#43 — single-source-of-truth).
+/// Per-tab wiring (submit handler, event-dispatch tick, table interactions,
+/// background conversation task) belongs to `tab::attach_new_tab` in the
+/// binary, which appends each `tab.root` as a new `adw::TabPage` into the
+/// returned `TabView`.
 ///
 /// `load_app_css` registers a `CssProvider` with the default `Display`,
 /// which is process-global and idempotent — calling this once per window
@@ -286,15 +297,31 @@ pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
 pub fn build_window_shell(
     app: &libadwaita::Application,
     title: &str,
-) -> ApplicationWindow {
+) -> (ApplicationWindow, libadwaita::TabView) {
     load_app_css();
 
-    ApplicationWindow::builder()
+    let window = ApplicationWindow::builder()
         .application(app)
         .title(title)
         .default_width(900)
         .default_height(700)
-        .build()
+        .build();
+
+    let tab_view = libadwaita::TabView::new();
+    let tab_bar = libadwaita::TabBar::new();
+    tab_bar.set_view(Some(&tab_view));
+    // Always show the tab bar even with one tab — predictable affordance
+    // for "click here to open another tab", and avoids the layout shift
+    // that would otherwise happen when the second tab is opened.
+    tab_bar.set_autohide(false);
+    tab_bar.set_expand_tabs(true);
+
+    let host = GtkBox::builder().orientation(Orientation::Vertical).build();
+    host.append(&tab_bar);
+    host.append(&tab_view);
+    window.set_child(Some(&host));
+
+    (window, tab_view)
 }
 
 /// Build the per-tab widget tree (Stage A of MULTIWINDOW_TABS.md).
@@ -526,49 +553,18 @@ pub fn build_tab_content(cwd: &std::path::Path) -> TabContent {
     }
 }
 
-/// Build a window with exactly one tab inside it (Stage A composition).
-///
-/// Composes [`build_window_shell`] + [`build_tab_content`]. From Stage B
-/// onwards this same composition will create the shell, then mount an
-/// `adw::TabView` instead of a single `TabContent.root`.
-///
-/// The window-level resize cap that couples `window.default-height` to
-/// `tab.widgets.input_scroll.max_content_height` is wired here because it
-/// genuinely spans the two layers — extracting it into a one-shot helper
-/// would be a wrapper for its own sake.
-pub fn build_window(
-    app: &libadwaita::Application,
-    cwd: &std::path::Path,
-) -> (ApplicationWindow, TabContent) {
-    let cwd_name = cwd
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned());
-    let title = format_window_title(cwd_name.as_deref(), None);
-
-    let window = build_window_shell(app, &title);
-    let tab = build_tab_content(cwd);
-    window.set_child(Some(&tab.root));
-
-    // Issue #26: dynamically cap the input ScrolledWindow's max-content
-    // height at half the window height. React to window resizes via
-    // `notify::default-height` so the cap updates as the window grows
-    // or shrinks. We also set it once now so the initial layout is
-    // correct even before the first notify fires.
-    {
-        let input_scroll_for_resize = tab.widgets.input_scroll.clone();
-        let apply_cap = move |height: i32| {
-            let cap = (height / 2).max(40);
-            input_scroll_for_resize.set_max_content_height(cap);
-        };
-        apply_cap(window.default_height());
-        let apply_cap_clone = apply_cap.clone();
-        window.connect_default_height_notify(move |w| {
-            apply_cap_clone(w.default_height());
-        });
-    }
-
-    (window, tab)
-}
+// NOTE: the Stage A `build_window(app, cwd) -> (ApplicationWindow,
+// TabContent)` composer is gone. Stage B (MULTIWINDOW_TABS.md) replaces it
+// with explicit composition by the caller — `build_window_shell` (returns
+// window + empty TabView) followed by `tab::attach_new_tab` (builds the
+// per-tab tree, wires it, appends a TabPage). The same call path serves
+// both "open initial tab at startup" and "Cmd+T new tab", so there is NO
+// "first tab special" code path that could drift from "Nth tab" wiring.
+//
+// The window-level input-height cap (issue #26: cap = window_height / 2)
+// previously lived in `build_window`; in Stage B it lives in
+// `tab::attach_new_tab` because the cap is per-tab (each tab has its own
+// `input_scroll`) but parameterised by the window the tab belongs to.
 
 /// Append `text` to the end of `view`'s buffer, optionally applying one or
 /// more named tags to every inserted character.

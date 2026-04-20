@@ -31,18 +31,21 @@ fn test_input_scroll_max_content_height_set_dynamically_from_window_height() {
     // The fix wires the window's default-height (or allocated height) to
     // the input ScrolledWindow's max_content_height. Look for the
     // canonical signal hookup pattern.
+    //
+    // Stage B: this wiring lives in tab.rs::attach_new_tab (per-tab,
+    // because each tab has its own input_scroll). The window construction
+    // in window.rs no longer touches max_content_height after the initial
+    // ScrolledWindow::builder().max_content_height(350) seed.
+    let tab_src = include_str!("../tab.rs");
     assert!(
-        SRC.contains("set_max_content_height"),
-        "window.rs must call set_max_content_height on the input \
+        tab_src.contains("set_max_content_height"),
+        "tab.rs must call set_max_content_height on the per-tab input \
          ScrolledWindow at runtime (issue #26)."
     );
     assert!(
-        SRC.contains("notify_default_height")
-            || SRC.contains("connect_default_height_notify")
-            || SRC.contains("\"notify::default-height\"")
-            || SRC.contains("connect_notify_local"),
-        "window.rs must react to the window's height changes (e.g. via \
-         connect_default_height_notify) so the input cap stays at \
+        tab_src.contains("connect_default_height_notify"),
+        "tab.rs must react to the window's height changes via \
+         connect_default_height_notify so the input cap stays at \
          half the window height (issue #26)."
     );
 }

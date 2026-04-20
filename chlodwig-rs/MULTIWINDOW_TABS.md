@@ -124,8 +124,8 @@ Planungsdokument für den Umbau der GTK-Variante auf:
 
 ## Reihenfolge der Umsetzung
 
-1. ✅ **Stage 0** — CWD-Refactor (jetzt)
-2. Stage A — `build_tab_content()` extrahieren
-3. Stage B — `adw::TabView` einziehen, Multi-Tab pro Fenster
+1. ✅ **Stage 0** — CWD-Refactor
+2. ✅ **Stage A** — `build_tab_content()` extrahieren
+3. ✅ **Stage B** — `adw::TabView` einziehen, Multi-Tab pro Fenster
 4. Stage C — Multi-Window + Drag-Out
 5. Stage D — Session-Persistenz pro Tab

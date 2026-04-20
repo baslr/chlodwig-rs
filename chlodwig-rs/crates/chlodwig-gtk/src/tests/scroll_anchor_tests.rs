@@ -110,10 +110,11 @@ fn test_window_bottom_spacer_has_fixed_height() {
 
 #[test]
 fn test_main_uses_content_bottom_for_at_bottom_check() {
-    let src = include_str!("../main.rs");
+    // Stage B: per-tab value-changed handler lives in tab.rs.
+    let src = include_str!("../tab.rs");
     assert!(
         src.contains("content_bottom"),
-        "main.rs value-changed handler must compute at_bottom against \
+        "tab.rs's per-tab value-changed handler must compute at_bottom against \
          content_bottom (final_height + streaming_height), not upper, \
          because upper is inflated by the bottom spacer"
     );
@@ -216,9 +217,10 @@ fn test_bottom_follow_zone_is_20_px() {
     //
     // Two places must agree:
     //   - event_dispatch.rs: was_at_content_bottom snapshot at tick start
-    //   - main.rs: at_bottom check in value-changed handler
+    //   - tab.rs (Stage B; was main.rs in Stage A): at_bottom check in
+    //     value-changed handler
     let ed = include_str!("../event_dispatch.rs");
-    let mn = include_str!("../main.rs");
+    let mn = include_str!("../tab.rs");
     // Use the LET-binding line as marker (avoids matching the variable
     // name in comments which can land near non-ASCII chars and cause
     // char-boundary panics in str slicing — see Gotcha #16).
@@ -247,7 +249,7 @@ fn test_bottom_follow_zone_is_20_px() {
     let snippet = &mn[mn_idx..hi];
     assert!(
         snippet.contains("20.0"),
-        "main.rs at_bottom check must use a 20.0 px tolerance band, \
+        "tab.rs at_bottom check must use a 20.0 px tolerance band, \
          not 1.0. Snippet:\n{snippet}"
     );
 }

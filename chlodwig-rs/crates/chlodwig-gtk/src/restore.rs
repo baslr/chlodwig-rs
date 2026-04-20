@@ -21,7 +21,8 @@ use chlodwig_gtk::window;
 use gtk4::prelude::*;
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::{render, BackgroundCommand};
+use crate::tab::BackgroundCommand;
+use crate::render;
 
 /// Bag of widgets and channels needed to restore a session into the live UI.
 pub struct RestoreContext<'a> {

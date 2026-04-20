@@ -26,10 +26,12 @@ fn test_submit_module_defines_context_struct() {
 
 #[test]
 fn test_main_rs_calls_submit_wire() {
-    let src = include_str!("../main.rs");
+    // Stage B: per-tab wiring moved from main.rs to tab.rs (called from
+    // tab::attach_new_tab so every tab gets its own send button).
+    let src = include_str!("../tab.rs");
     assert!(
         src.contains("submit::wire"),
-        "main.rs must delegate to submit::wire"
+        "tab.rs (per-tab wiring SSoT) must delegate to submit::wire"
     );
 }
 

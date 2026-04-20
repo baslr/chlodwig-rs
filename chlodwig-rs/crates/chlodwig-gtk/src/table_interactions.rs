@@ -26,7 +26,8 @@ use gtk4::prelude::*;
 use chlodwig_gtk::app_state::AppState;
 use chlodwig_gtk::window;
 
-use crate::{render, BackgroundCommand};
+use crate::tab::BackgroundCommand;
+use crate::render;
 
 /// Wire both table interactions onto the output view.
 ///

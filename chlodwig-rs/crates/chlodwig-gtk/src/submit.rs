@@ -23,7 +23,8 @@ use tokio::sync::mpsc::UnboundedSender;
 use chlodwig_gtk::app_state::AppState;
 use chlodwig_gtk::window;
 
-use crate::{render, restore, BackgroundCommand};
+use crate::tab::BackgroundCommand;
+use crate::{render, restore};
 
 /// Bundles every value the submit closure captures.
 ///
@@ -371,10 +372,12 @@ pub fn wire(ctx: SubmitContext) {
 
     // Double-Escape to request stop of the current turn loop.
     //
-    // Esc is handled at the window level so it fires regardless of focus.
-    // The first press records `Instant::now()`; a second press within
-    // DOUBLE_ESC_WINDOW sets the cooperative stop flag (same effect as
-    // typing `/stop`). A lone Esc is a no-op (doesn't cancel input, etc.).
+    // Stage B: attached to the per-tab `input_view` (NOT the window) so
+    // every tab gets its own independent Esc-Esc detector. Attaching to
+    // the window would multiply the handler per tab and fire them all at
+    // once. Esc in the prompt input is the natural place anyway: the
+    // user presses Esc-Esc to interrupt while their cursor is in the
+    // input field.
     {
         const DOUBLE_ESC_WINDOW: std::time::Duration = std::time::Duration::from_millis(500);
         let last_esc: Rc<Cell<Option<std::time::Instant>>> = Rc::new(Cell::new(None));
@@ -406,6 +409,7 @@ pub fn wire(ctx: SubmitContext) {
             }
             glib::Propagation::Proceed
         });
-        window.add_controller(esc_ctrl);
+        widgets.input_view.add_controller(esc_ctrl);
+        let _ = window; // window kept in SubmitContext for future use (e.g. transient dialogs)
     }
 }

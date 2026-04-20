@@ -66,9 +66,15 @@ fn test_build_window_shell_returns_application_window() {
         .find('{')
         .expect("function signature must end with `{`");
     let sig = &SRC[sig_start..sig_start + sig_end];
+    // Stage A: signature returned just `ApplicationWindow`. Stage B
+    // returns a tuple `(ApplicationWindow, adw::TabView)` so the
+    // window-level container can host multiple tabs. Either form is
+    // acceptable here; the Stage B test
+    // `test_build_window_shell_returns_tab_view` enforces the tuple's
+    // TabView component.
     assert!(
-        sig.contains("-> ApplicationWindow"),
-        "build_window_shell must return `ApplicationWindow` — got:\n{sig}"
+        sig.contains("ApplicationWindow"),
+        "build_window_shell must return (a tuple containing) `ApplicationWindow` — got:\n{sig}"
     );
 }
 
@@ -129,26 +135,15 @@ fn test_ui_widgets_exposes_input_scroll() {
 
 // ── Composition: build_window calls the two extracted functions ────────
 
-#[test]
-fn test_build_window_calls_build_tab_content() {
-    let start = SRC.find("pub fn build_window(").expect("build_window must exist");
-    // Body extends from the opening `{` of build_window to the next
-    // top-level `\n}\n`. Conservatively scan a generous window.
-    let body_start = start + SRC[start..].find('{').unwrap();
-    let body_end = body_start
-        + SRC[body_start..]
-            .find("\n}\n")
-            .expect("build_window body must close");
-    let body = &SRC[body_start..body_end];
-    assert!(
-        body.contains("build_tab_content("),
-        "build_window must compose via `build_tab_content(cwd)` — got body:\n{body}"
-    );
-    assert!(
-        body.contains("build_window_shell("),
-        "build_window must compose via `build_window_shell(app, …)` — got body:\n{body}"
-    );
-}
+// ── Composition: Stage A's `build_window` was a 1-shell+1-tab composer
+//    bundled into one call. Stage B (multiwindow_stage_b_tests.rs) replaces
+//    it with explicit `build_window_shell` + `tab::attach_new_tab` so the
+//    same call path serves "open initial tab" AND "Cmd+T new tab". The
+//    Stage-A `test_build_window_calls_build_tab_content` and
+//    `test_main_rs_consumes_tab_content_from_build_window` tests have been
+//    removed because they assert the old composer shape; their successors
+//    live in `multiwindow_stage_b_tests::{test_build_window_function_is_gone,
+//    test_attach_new_tab_calls_all_per_tab_wirings, …}`.
 
 // ── Single-source-of-truth: widget construction lives only in build_tab_content
 
@@ -209,18 +204,12 @@ fn test_build_window_shell_does_not_construct_per_tab_widgets() {
     }
 }
 
-// ── main.rs migration: callers consume tab.widgets ─────────────────────
-
-#[test]
-fn test_main_rs_consumes_tab_content_from_build_window() {
-    let main_src = include_str!("../main.rs");
-    // After Stage A, build_window returns (ApplicationWindow, TabContent).
-    // main.rs must pull `widgets` out of the tab — either via destructure
-    // or field access — to feed the existing context structs (MenuContext,
-    // SubmitContext, EventDispatchContext) that still take UiWidgets.
-    assert!(
-        main_src.contains("tab.widgets") || main_src.contains("let TabContent"),
-        "main.rs must extract `widgets` from the returned TabContent \
-         (either `tab.widgets` field access or destructure `let TabContent {{ widgets, .. }}`)"
-    );
-}
+// ── main.rs migration moved to Stage B ─────────────────────────────────
+//
+// The Stage-A `test_main_rs_consumes_tab_content_from_build_window` test
+// asserted that main.rs destructures a `TabContent` returned by
+// `build_window`. Stage B (multiwindow_stage_b_tests.rs) eliminates
+// `build_window` entirely; main.rs now calls `tab::attach_new_tab` which
+// returns its own per-tab handle. The replacement assertions live in
+// `multiwindow_stage_b_tests::test_main_does_not_wire_*` and
+// `test_attach_new_tab_calls_all_per_tab_wirings`.

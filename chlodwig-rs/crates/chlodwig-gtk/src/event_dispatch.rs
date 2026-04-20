@@ -27,7 +27,8 @@ use chlodwig_core::ConversationEvent;
 use chlodwig_gtk::app_state::AppState;
 use chlodwig_gtk::window;
 
-use crate::{render, BackgroundCommand};
+use crate::tab::BackgroundCommand;
+use crate::render;
 
 /// Bundles every value the 16ms poll-loop closure captures.
 ///

@@ -101,14 +101,17 @@ fn test_same_snapshot_is_not_user_scroll() {
     assert!(!is_user_scroll(snap, snap));
 }
 
-/// Source-grep guard: main.rs's value-changed handler must funnel
-/// through `is_user_scroll` and must update the previous snapshot.
+/// Source-grep guard: the value-changed handler must funnel through
+/// `is_user_scroll` and must update the previous snapshot.
+///
+/// Stage B: this handler is registered per tab in `tab::attach_new_tab`
+/// (was in `main.rs::activate` in Stage A).
 #[test]
 fn test_main_rs_uses_is_user_scroll_classification() {
-    let src = include_str!("../main.rs");
+    let src = include_str!("../tab.rs");
     assert!(
         src.contains("is_user_scroll"),
-        "main.rs value-changed handler must call is_user_scroll to \
+        "tab.rs's per-tab value-changed handler must call is_user_scroll to \
          distinguish user input from GTK layout-induced clamps. \
          Without this, hiding streaming_view at TextComplete snaps the \
          viewport back to the bottom even when the user scrolled up."
