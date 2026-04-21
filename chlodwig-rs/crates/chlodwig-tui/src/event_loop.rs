@@ -1069,6 +1069,40 @@ pub async fn run_tui_with_permissions(
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
                                 }
+                                Command::Unwind(count) => {
+                            // Roll back the last `count` text-bearing messages
+                            // from ConversationState.messages, then rebuild the
+                            // display from the remaining messages so the UI
+                            // stays in sync with the model history.
+                            //
+                            // IMPORTANT: this is NOT /clear. Session counters
+                            // (tx/rx tokens, turn count, session_name, timer,
+                            // compaction count) MUST stay intact — the session
+                            // continues, only the tail of the history is cut.
+                            let (removed, remaining_msgs) = {
+                                let mut guard = state.lock().await;
+                                let removed = chlodwig_core::reducers::unwind_messages(
+                                    &mut guard.messages,
+                                    count,
+                                );
+                                (removed, guard.messages.clone())
+                            };
+                            app.unwind_to_messages(&remaining_msgs);
+                            app.display_blocks.push(DisplayBlock::SystemMessage(
+                                if removed == 0 {
+                                    "Nothing to unwind — no messages in history.".to_string()
+                                } else {
+                                    format!(
+                                        "↩ Unwound {removed} message{} ({} remaining).",
+                                        if removed == 1 { "" } else { "s" },
+                                        remaining_msgs.len(),
+                                    )
+                                },
+                            ));
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
+                            break; // exit inner drain loop
+                                }
                                 Command::Stop => {
                             // Set the cooperative stop flag. The running
                             // turn (if any) will notice after the current

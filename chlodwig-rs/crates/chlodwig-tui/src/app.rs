@@ -1997,6 +1997,29 @@ impl App {
         self.mark_dirty();
     }
 
+    /// Re-render the display from a truncated message tail after `/unwind`.
+    ///
+    /// This must NOT touch session counters (tx/rx tokens, turn_count,
+    /// request_count, session timer, session_name, compaction_count). The
+    /// session continues — only the visible/API history is shortened.
+    /// Compare with [`Self::clear_conversation`] which resets everything.
+    pub(crate) fn unwind_to_messages(&mut self, messages: &[Message]) {
+        // Wipe only the rendered/streaming view — nothing accounting-related.
+        self.display_blocks.clear();
+        self.streaming_buffer.clear();
+        self.streaming_timestamp = None;
+        self.is_loading = false;
+        self.scroll = 0;
+        self.auto_scroll.scroll_to_bottom();
+        self.rendered_lines.clear();
+        self.lines_dirty = false;
+        // Rebuild the display from the new tail.
+        self.restore_messages_to_display(messages);
+        // restore_messages_to_display() already calls mark_dirty(); rebuild
+        // immediately so the next render has fresh wrapped lines.
+        self.rebuild_lines();
+    }
+
     /// Truncate a string at a safe UTF-8 char boundary.
     /// Gotcha #16: never slice at a hardcoded byte offset — always use `is_char_boundary()`.
     fn truncate_preview(s: &str, max_bytes: usize) -> String {

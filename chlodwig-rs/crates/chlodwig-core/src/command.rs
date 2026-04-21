@@ -29,6 +29,12 @@ pub enum Command {
     /// `/name <name>` — set a human-readable name for this session.
     /// Empty name (`/name` with no argument) clears the name.
     Name(Option<String>),
+    /// `/unwind` or `/unwind <N>` — roll back the last N text-bearing
+    /// messages (default 1). Pure tool-result/tool-use messages are
+    /// stripped together with their text-bearing partners. See
+    /// `chlodwig_core::reducers::unwind::unwind_messages` for full
+    /// semantics.
+    Unwind(usize),
 }
 
 impl Command {
@@ -97,6 +103,23 @@ impl Command {
             return Some(Command::Name(Some(collapsed)));
         }
 
+        // /unwind with optional positive integer count (default 1)
+        if lower == "/unwind" {
+            return Some(Command::Unwind(1));
+        }
+        if lower.starts_with("/unwind ") {
+            let arg = trimmed["/unwind ".len()..].trim();
+            if arg.is_empty() {
+                return Some(Command::Unwind(1));
+            }
+            // Parse positive integer; non-numeric or zero → fall back to 1.
+            match arg.parse::<usize>() {
+                Ok(0) => return Some(Command::Unwind(1)),
+                Ok(n) => return Some(Command::Unwind(n)),
+                Err(_) => return Some(Command::Unwind(1)),
+            }
+        }
+
         match lower.as_str() {
             "/clear" | "/reset" | "/new" => Some(Command::Clear),
             "/help" | "/h" | "/?" | "help" => Some(Command::Help),
@@ -122,6 +145,7 @@ pub const COMMANDS_HELP: &str = "\
   /name <name>          Set a human-readable name for this session
   /compact [instr]      Compact conversation history
   /clear, /reset, /new  Clear conversation, start fresh
+  /unwind [N]           Roll back last N text messages (default 1)
   /stop, stop           Interrupt the agentic turn loop (or press Esc twice)
   ! <cmd>               Execute shell command
   exit, quit            Exit";
@@ -141,6 +165,7 @@ pub fn help_markdown_commands() -> String {
 | `/name <name>` | Set a human-readable name for this session |
 | `/compact [instr]` | Compact conversation history |
 | `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
+| `/unwind [N]` | Roll back the last N text messages (default 1) |
 | `/stop`, `stop` | Interrupt the agentic turn loop (or press Esc twice) |
 | `! <cmd>` | Execute shell command |
 | `exit`, `quit` | Exit |"
@@ -315,6 +340,41 @@ mod tests {
         assert_eq!(Command::parse("/save"), Some(Command::Save));
     }
 
+    // ── /unwind tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_unwind_no_arg_defaults_to_one() {
+        assert_eq!(Command::parse("/unwind"), Some(Command::Unwind(1)));
+        assert_eq!(Command::parse("  /unwind  "), Some(Command::Unwind(1)));
+        assert_eq!(Command::parse("/unwind   "), Some(Command::Unwind(1)));
+    }
+
+    #[test]
+    fn test_parse_unwind_with_count() {
+        assert_eq!(Command::parse("/unwind 1"), Some(Command::Unwind(1)));
+        assert_eq!(Command::parse("/unwind 2"), Some(Command::Unwind(2)));
+        assert_eq!(Command::parse("/unwind 42"), Some(Command::Unwind(42)));
+    }
+
+    #[test]
+    fn test_parse_unwind_zero_falls_back_to_one() {
+        // /unwind 0 makes no sense — interpret as default.
+        assert_eq!(Command::parse("/unwind 0"), Some(Command::Unwind(1)));
+    }
+
+    #[test]
+    fn test_parse_unwind_non_numeric_falls_back_to_one() {
+        // Garbage args don't error — we just default to 1.
+        assert_eq!(Command::parse("/unwind abc"), Some(Command::Unwind(1)));
+        assert_eq!(Command::parse("/unwind -3"), Some(Command::Unwind(1)));
+    }
+
+    #[test]
+    fn test_parse_unwind_case_insensitive() {
+        assert_eq!(Command::parse("/UNWIND"), Some(Command::Unwind(1)));
+        assert_eq!(Command::parse("/Unwind 5"), Some(Command::Unwind(5)));
+    }
+
     #[test]
     fn test_parse_stop_slash_form() {
         assert_eq!(Command::parse("/stop"), Some(Command::Stop));
@@ -439,6 +499,7 @@ mod tests {
         assert!(COMMANDS_HELP.contains("/resume"), "must mention /resume");
         assert!(COMMANDS_HELP.contains("/save"), "must mention /save");
         assert!(COMMANDS_HELP.contains("/name"), "must mention /name");
+        assert!(COMMANDS_HELP.contains("/unwind"), "must mention /unwind");
     }
 
     // ── help_markdown tests ─────────────────────────────────────
@@ -481,6 +542,7 @@ mod tests {
         assert!(md.contains("/save"));
         assert!(md.contains("/compact"));
         assert!(md.contains("/clear"));
+        assert!(md.contains("/unwind"));
         assert!(md.contains("! <cmd>"));
         assert!(md.contains("exit"));
     }

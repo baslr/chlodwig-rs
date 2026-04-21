@@ -72,6 +72,14 @@ pub enum BackgroundCommand {
     RestoreMessages { messages: Vec<Message> },
     /// Compact the conversation history.
     Compact { instructions: Option<String> },
+    /// Roll back the last `count` text-bearing messages from
+    /// `ConversationState.messages`. Replies on `ack` with the new
+    /// (removed_count, remaining_messages) so the UI can rebuild its
+    /// display from a consistent snapshot.
+    Unwind {
+        count: usize,
+        ack: tokio::sync::oneshot::Sender<(usize, Vec<Message>)>,
+    },
 }
 
 /// Per-AI-tab state bundle.
@@ -561,6 +569,13 @@ fn spawn_conversation_task(args: SpawnArgs) {
                 match bg_cmd {
                     BackgroundCommand::ClearMessages => {
                         conv_state.messages.clear();
+                    }
+                    BackgroundCommand::Unwind { count, ack } => {
+                        let removed = chlodwig_core::reducers::unwind_messages(
+                            &mut conv_state.messages,
+                            count,
+                        );
+                        let _ = ack.send((removed, conv_state.messages.clone()));
                     }
                     BackgroundCommand::SaveSession {
                         started_at,

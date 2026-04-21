@@ -524,6 +524,27 @@ impl AppState {
         }
     }
 
+    /// Re-render the display from a truncated message tail after `/unwind`.
+    ///
+    /// This must NOT touch session counters (tx/rx tokens, turn_count,
+    /// request_count, session_name) or table sort state. The session
+    /// continues — only the visible/API history is shortened. Compare
+    /// with [`Self::clear`] which resets everything.
+    pub fn unwind_to_messages(&mut self, messages: &[chlodwig_core::Message]) {
+        // Wipe only the rendered/streaming view + tool-id map (it is
+        // keyed by tool_use ids that may now be gone). Keep all
+        // accounting / session-identity fields.
+        self.blocks.clear();
+        self.tables.clear();
+        self.streaming_buffer.clear();
+        self.streaming_dirty = false;
+        self.is_streaming = false;
+        self.tool_id_to_info.clear();
+        self.auto_scroll.scroll_to_bottom();
+        // Rebuild blocks from the new tail.
+        self.restore_messages(messages);
+    }
+
     /// Set a transient copy-feedback message (e.g. "Copied!").
     pub fn set_copy_feedback(&mut self, msg: &str) {
         self.copy_feedback = Some(msg.to_string());

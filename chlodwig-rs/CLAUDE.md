@@ -189,6 +189,7 @@ The aliases are defined in `.cargo/config.toml`.
 |---------|--------|
 | `/help`, `/?` | Show available commands and keybindings |
 | `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
+| `/unwind [N]` | Roll back the last N text messages (default 1; tool round-trips removed together) |
 | `/compact [instructions]` | Compact conversation history |
 | `/sessions` | List all saved sessions |
 | `/resume` | Load the most recent saved session |

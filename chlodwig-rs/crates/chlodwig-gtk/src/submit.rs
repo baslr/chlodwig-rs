@@ -343,6 +343,85 @@ pub fn wire(ctx: SubmitContext) {
                     window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
                     return;
                 }
+                Command::Unwind(count) => {
+                    // /unwind round-trips through the background task because
+                    // the background owns ConversationState.messages.
+                    //
+                    // IMPORTANT: this is NOT /clear. Session counters,
+                    // session_name, and tab title all stay. Only `blocks`,
+                    // `tables`, `tool_id_to_info`, and the streaming buffer
+                    // get rebuilt from the new tail.
+                    let (ack_tx, ack_rx) = tokio::sync::oneshot::channel();
+                    if prompt_tx_clone
+                        .send(BackgroundCommand::Unwind { count, ack: ack_tx })
+                        .is_err()
+                    {
+                        window::append_styled(
+                            &final_view_for_submit,
+                            "\n✗ Background task is gone — cannot unwind.\n",
+                            "error",
+                        );
+                        window::scroll_to_content_bottom(
+                            &scroll_for_submit,
+                            &final_view_for_submit,
+                            &streaming_view_for_submit,
+                        );
+                        return;
+                    }
+                    let state_for_unwind = state_for_submit.clone();
+                    let final_view_for_unwind = final_view_for_submit.clone();
+                    let streaming_view_for_unwind = streaming_view_for_submit.clone();
+                    let scroll_for_unwind = scroll_for_submit.clone();
+                    let viewport_cols_for_unwind = viewport_cols_for_submit.clone();
+                    let status_left_for_unwind = status_left_for_submit.clone();
+                    let status_right_for_unwind = status_right_for_submit.clone();
+
+                    glib::spawn_future_local(async move {
+                        let Ok((removed, remaining_msgs)) = ack_rx.await else {
+                            window::append_styled(
+                                &final_view_for_unwind,
+                                "\n✗ Unwind acknowledgement lost.\n",
+                                "error",
+                            );
+                            return;
+                        };
+                        // Pure mutation: rebuild blocks from the new tail
+                        // without touching counters / session_name.
+                        state_for_unwind
+                            .borrow_mut()
+                            .unwind_to_messages(&remaining_msgs);
+                        // render_all_blocks_into wipes the view entirely
+                        // before re-rendering, so we must re-emit the CWD
+                        // header to match the original startup layout.
+                        render::render_all_blocks_into(
+                            &final_view_for_unwind,
+                            &state_for_unwind.borrow(),
+                            viewport_cols_for_unwind.get(),
+                            true,
+                        );
+                        let confirm = if removed == 0 {
+                            "\nNothing to unwind — no messages in history.\n".to_string()
+                        } else {
+                            format!(
+                                "\n↩ Unwound {removed} message{} ({} remaining).\n",
+                                if removed == 1 { "" } else { "s" },
+                                remaining_msgs.len(),
+                            )
+                        };
+                        window::append_styled(&final_view_for_unwind, &confirm, "system");
+                        window::update_status(
+                            &status_left_for_unwind,
+                            &status_right_for_unwind,
+                            &state_for_unwind.borrow(),
+                        );
+                        window::scroll_to_content_bottom(
+                            &scroll_for_unwind,
+                            &final_view_for_unwind,
+                            &streaming_view_for_unwind,
+                        );
+                    });
+                    return;
+                }
             }
         }
 

@@ -72,6 +72,7 @@ fn test_submit_handles_all_commands() {
         "Command::Resume",
         "Command::Name",
         "Command::Save",
+        "Command::Unwind",
     ] {
         assert!(
             src.contains(cmd),
@@ -115,3 +116,9 @@ fn test_submit_forces_auto_scroll_on_user_action() {
         "submit.rs must force auto-scroll on (explicit user action) when sending a prompt"
     );
 }
+
+// ── /unwind regression tests ────────────────────────────────────────
+//
+// All /unwind-specific behavior tests live in `unwind_tests.rs`. The
+// only guard kept here is the all-commands check above (which already
+// asserts `Command::Unwind` is handled).
