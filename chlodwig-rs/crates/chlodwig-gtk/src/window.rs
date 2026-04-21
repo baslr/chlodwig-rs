@@ -24,9 +24,22 @@ const BUILD_TIME: &str = env!("BUILD_TIME");
 /// Cmd+Up/Down (document start/end), Option+Left/Right (word left/right),
 /// Option+Backspace (delete word back).
 ///
+/// `copy_priority` is the ordered list of *additional* `TextView`s to
+/// consult for an active selection BEFORE falling back to `view` for
+/// Cmd+C / Cmd+X. The first view in the list with `has_selection() == true`
+/// wins. This is the workaround for Gotcha #45: the read-only output
+/// views set `can_focus(false)` (so they cannot receive key events), but
+/// the user still expects Cmd+C to copy a selection they made there.
+/// The AI conversation tab passes `[final_view, streaming_view]`; the
+/// user-question dialog (which has no separate output view) passes `&[]`.
+///
+/// This is the **single** Cmd+C / Cmd+X / Cmd+V handler — no parallel
+/// implementation may live elsewhere.
+///
 /// This is used for both the main prompt input and the UserQuestion dialog input.
-pub fn setup_macos_input_shortcuts(view: &TextView) {
+pub fn setup_macos_input_shortcuts(view: &TextView, copy_priority: &[TextView]) {
     let view_for_key = view.clone();
+    let copy_priority: Vec<TextView> = copy_priority.to_vec();
     let key_ctrl = gtk4::EventControllerKey::new();
     key_ctrl.connect_key_pressed(move |_, key, _keycode, modifiers| {
         // Helper: snapshot the parent ScrolledWindow's vadjustment value
@@ -73,15 +86,59 @@ pub fn setup_macos_input_shortcuts(view: &TextView) {
         if is_cmd {
             match key {
                 k if k == gtk4::gdk::Key::v || k == gtk4::gdk::Key::V => {
-                    view_for_key.emit_paste_clipboard();
+                    // Bridge: GTK4 on macOS uses GdkClipboard which is NOT
+                    // synced with NSPasteboard. Read the system clipboard
+                    // first; on macOS this catches text copied from native
+                    // apps (Safari, TextEdit, …). On Linux read_string()
+                    // is a no-op and we fall through to GdkClipboard.
+                    if let Some(text) = crate::macos_clipboard::read_string() {
+                        let buf = view_for_key.buffer();
+                        if buf.has_selection() {
+                            if let Some((mut s, mut e)) = buf.selection_bounds() {
+                                buf.delete(&mut s, &mut e);
+                            }
+                        }
+                        buf.insert_at_cursor(&text);
+                    } else {
+                        view_for_key.emit_paste_clipboard();
+                    }
                     return gtk4::glib::Propagation::Stop;
                 }
                 k if k == gtk4::gdk::Key::c || k == gtk4::gdk::Key::C => {
-                    view_for_key.emit_copy_clipboard();
+                    // Pick the first view in `copy_priority` that has a
+                    // selection (output views, in user-visible top-down
+                    // order); fall back to the focused input view. This
+                    // makes Cmd+C work on the read-only output views
+                    // even though they are non-focusable (Gotcha #45).
+                    //
+                    // ORDER MATTERS: emit GTK's copy-clipboard signal
+                    // FIRST so its default handler (GdkMacosClipboard)
+                    // writes its provider-backed item to NSPasteboard,
+                    // THEN overwrite with our clean plain-text entry
+                    // via the single bridge `write_selection_to_macos_clipboard`.
+                    // Reversing this order lets GTK's default handler
+                    // wipe our entry and external apps (Spotlight,
+                    // TextEdit, Safari) paste nothing. See Gotcha #53.
+                    let source = copy_priority
+                        .iter()
+                        .find(|v| v.buffer().has_selection())
+                        .cloned()
+                        .unwrap_or_else(|| view_for_key.clone());
+                    source.emit_copy_clipboard();
+                    write_selection_to_macos_clipboard(&source);
                     return gtk4::glib::Propagation::Stop;
                 }
                 k if k == gtk4::gdk::Key::x || k == gtk4::gdk::Key::X => {
-                    view_for_key.emit_cut_clipboard();
+                    // Same priority + ordering logic as Cmd+C. Cut on a
+                    // read-only output view degrades to Copy (emit_cut
+                    // on a non-editable buffer is a copy).
+                    let source = copy_priority
+                        .iter()
+                        .find(|v| v.buffer().has_selection())
+                        .cloned()
+                        .unwrap_or_else(|| view_for_key.clone());
+                    source.emit_cut_clipboard();
+                    write_selection_to_macos_clipboard(&source);
                     return gtk4::glib::Propagation::Stop;
                 }
                 k if k == gtk4::gdk::Key::a || k == gtk4::gdk::Key::A => {
@@ -1183,16 +1240,20 @@ fn setup_output_context_menu(view: &TextView) {
     view.add_controller(gesture);
 }
 
-/// Copy the current selection from the output view to the system clipboard.
-/// Returns `true` if text was copied, `false` if no selection.
-pub fn copy_output_selection(view: &TextView) -> bool {
-    let buffer = view.buffer();
-    if !buffer.has_selection() {
-        return false;
+/// Mirror the current TextView selection to the macOS system pasteboard.
+///
+/// This is the **single bridge** between GTK's selection state and
+/// `NSPasteboard`. Every Cmd+C / Cmd+X / right-click-Copy code path
+/// goes through here so native macOS apps see Chlodwig's copies.
+///
+/// On non-macOS targets `macos_clipboard::write_string` is a no-op,
+/// so callers can invoke this unconditionally.
+pub fn write_selection_to_macos_clipboard(view: &TextView) {
+    let buf = view.buffer();
+    if let Some((start, end)) = buf.selection_bounds() {
+        let text = buf.text(&start, &end, false).to_string();
+        let _ = crate::macos_clipboard::write_string(&text);
     }
-    // GTK4 built-in: emit the copy-clipboard action
-    view.emit_copy_clipboard();
-    true
 }
 
 /// Load the application CSS (emoji font fallback, etc.) into the default display.
@@ -1298,7 +1359,7 @@ pub fn show_user_question_dialog(
         .left_margin(8)
         .right_margin(8)
         .build();
-    setup_macos_input_shortcuts(&text_view);
+    setup_macos_input_shortcuts(&text_view, &[]);
 
     let text_scroll = ScrolledWindow::builder()
         .hexpand(true)

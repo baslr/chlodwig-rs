@@ -13,6 +13,7 @@ pub mod notification;
 
 /// First-launch setup (Finder Quick Action, project directory).
 pub mod setup;
+pub mod macos_clipboard;
 
 // The window module depends on GTK4 at link-time. Only compile it when
 // building the binary (not during `cargo test --lib` on machines without

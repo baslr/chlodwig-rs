@@ -322,7 +322,18 @@ impl AiConversationTab {
         }
 
         // ── 5. Per-tab handlers (input shortcuts, copy feedback, scroll)
-        chlodwig_gtk::window::setup_macos_input_shortcuts(&widgets.input_view);
+        // Cmd+C/Cmd+X on the focused input view first consult the output
+        // views for an active selection — see Gotcha #45 + window.rs docs
+        // on `setup_macos_input_shortcuts`. The output views are non-
+        // focusable, so without this priority list Cmd+C would silently
+        // copy the (usually empty) input selection.
+        chlodwig_gtk::window::setup_macos_input_shortcuts(
+            &widgets.input_view,
+            &[
+                widgets.final_view.clone().upcast::<gtk4::TextView>(),
+                widgets.streaming_view.clone().upcast::<gtk4::TextView>(),
+            ],
+        );
 
         {
             // Issue #26: per-window cap on input height (half the window's
@@ -339,12 +350,28 @@ impl AiConversationTab {
             });
         }
 
-        // Copy feedback: show "✓ Copied!" in this tab's status bar.
+        // Copy feedback: show "✓ Copied!" in this tab's status bar +
+        // mirror selection to NSPasteboard so native macOS apps see the
+        // copied text. Wired to BOTH output views — every Cmd+C /
+        // right-click-Copy on either view goes through here.
         {
             let state_for_copy = app_state.clone();
             let status_left_for_copy = widgets.status_left_label.clone();
             let status_right_for_copy = widgets.status_right_label.clone();
-            widgets.final_view.connect_copy_clipboard(move |_view| {
+            let on_copy = std::rc::Rc::new(move |view: &gtk4::TextView| {
+                // Defer the NSPasteboard write to the next idle tick so
+                // it lands AFTER GTK's default copy-clipboard handler
+                // (GdkMacosClipboard::set_content) has finished mutating
+                // NSPasteboard. Writing synchronously here lets the
+                // default handler wipe our plain-text entry a
+                // microsecond later — Spotlight then sees nothing.
+                // See Gotcha #53. The Cmd+C key handler in window.rs
+                // does not need this because it calls
+                // emit_copy_clipboard() itself and can order the writes.
+                let view_for_idle = view.clone();
+                glib::idle_add_local_once(move || {
+                    window::write_selection_to_macos_clipboard(&view_for_idle);
+                });
                 state_for_copy.borrow_mut().set_copy_feedback("✓ Copied!");
                 status_left_for_copy.set_label("✓ Copied!");
                 let state_for_clear = state_for_copy.clone();
@@ -359,6 +386,14 @@ impl AiConversationTab {
                     },
                 );
             });
+            let on_copy_final = on_copy.clone();
+            widgets
+                .final_view
+                .connect_copy_clipboard(move |view| on_copy_final(view.upcast_ref::<gtk4::TextView>()));
+            let on_copy_streaming = on_copy.clone();
+            widgets
+                .streaming_view
+                .connect_copy_clipboard(move |view| on_copy_streaming(view.upcast_ref::<gtk4::TextView>()));
         }
 
         // Per-tab user-scroll detection → drives auto_scroll state machine.

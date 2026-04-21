@@ -269,7 +269,7 @@ fn test_dialog_uses_textview_not_entry() {
 fn test_dialog_uses_shared_macos_shortcuts() {
     let source = include_str!("../window.rs");
     assert!(
-        source.contains("setup_macos_input_shortcuts(&text_view)"),
+        source.contains("setup_macos_input_shortcuts(&text_view, &[])"),
         "UserQuestion dialog must call setup_macos_input_shortcuts on its TextView"
     );
 }

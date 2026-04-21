@@ -43,3 +43,6 @@ mod sessions_browser_opens_new_tab_tests;
 mod window_state_persistence_tests;
 mod multiwindow_stage_c_tests;
 mod unwind_tests;
+mod macos_clipboard_tests;
+mod cmd_c_output_copy_tests;
+mod clipboard_ordering_tests;
