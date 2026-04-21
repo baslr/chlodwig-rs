@@ -46,3 +46,4 @@ mod unwind_tests;
 mod macos_clipboard_tests;
 mod cmd_c_output_copy_tests;
 mod clipboard_ordering_tests;
+mod global_ui_font_tests;

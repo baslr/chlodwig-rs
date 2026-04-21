@@ -247,6 +247,158 @@ pub const SARASA_MONO_J_BYTES: &[u8] =
 /// re-introduce the column-alignment problems we had with mixed fonts).
 pub const MONO_FONT_FAMILY: &str = "Sarasa Mono J";
 
+// ── Bundled Sarasa UI J font ──────────────────────────────────────
+//
+// Proportional UI font for the global GTK chrome — input view,
+// buttons, popovers, headerbar, libadwaita TabBar, status bar, the
+// lot. Same Iosevka Latin + Source Han Sans CJK glyph base as
+// Sarasa Mono J, but proportional and with the UI-tuned line-height
+// (Sarasa Gothic J's line-height is tuned for body text and would
+// make GTK chrome visibly taller).
+//
+// Bundled as `SarasaUiJ-Regular.ttf` (~24 MB, TrueType outlines).
+// Installed into the user font directory at process start the same
+// way `SarasaMonoJ-Regular.ttf` is, so CoreText (macOS) /
+// fontconfig (Linux) pick it up before the first window opens.
+
+/// Raw bytes of the bundled Sarasa UI J font (TrueType).
+pub const SARASA_UI_J_BYTES: &[u8] =
+    include_bytes!("../resources/SarasaUiJ-Regular.ttf");
+
+/// Raw bytes of the bundled Sarasa UI J **Bold** font (TrueType).
+///
+/// Bundled separately from the Regular weight because TTF files
+/// contain a single weight per file. Without this, CoreText /
+/// fontconfig cannot resolve "Sarasa UI J Bold" → bold TextTags
+/// (User prompt, headers, error labels, …) silently fall back to
+/// Regular when our global `gtk-font-name` override is in effect.
+pub const SARASA_UI_J_BOLD_BYTES: &[u8] =
+    include_bytes!("../resources/SarasaUiJ-Bold.ttf");
+
+/// Pango family name used for the global UI font.
+///
+/// Single family (no fallback chain) for the same reason as
+/// [`MONO_FONT_FAMILY`]: when a `family()` call goes straight onto a
+/// TextTag / FontDescription (bypassing CSS), Pango accepts only ONE
+/// family name. Comma chains here would be silently treated as a
+/// literal family name including the comma. The CSS fallback (emoji)
+/// lives in [`APP_CSS`], not in this constant.
+pub const UI_FONT_FAMILY: &str = "Sarasa UI J";
+
+/// Install the bundled Sarasa UI J font into `dir`. Same atomic-write
+/// + idempotency semantics as [`install_bundled_cjk_font_to`].
+pub fn install_bundled_ui_font_to(
+    dir: &std::path::Path,
+) -> std::io::Result<std::path::PathBuf> {
+    let path = dir.join("SarasaUiJ-Regular.ttf");
+    let needs_write = match std::fs::metadata(&path) {
+        Ok(m) => m.len() != SARASA_UI_J_BYTES.len() as u64,
+        Err(_) => true,
+    };
+    if needs_write {
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join("SarasaUiJ-Regular.ttf.tmp");
+        std::fs::write(&tmp, SARASA_UI_J_BYTES)?;
+        std::fs::rename(&tmp, &path)?;
+    }
+    Ok(path)
+}
+
+/// Install the bundled Sarasa UI J font into the user's standard
+/// font directory (see [`user_font_dir`]).
+pub fn install_bundled_ui_font() -> Option<std::io::Result<std::path::PathBuf>> {
+    let dir = user_font_dir()?;
+    Some(install_bundled_ui_font_to(&dir))
+}
+
+/// Install the bundled Sarasa UI J **Bold** font into `dir`. Same
+/// atomic-write + idempotency semantics as [`install_bundled_ui_font_to`].
+pub fn install_bundled_ui_bold_font_to(
+    dir: &std::path::Path,
+) -> std::io::Result<std::path::PathBuf> {
+    let path = dir.join("SarasaUiJ-Bold.ttf");
+    let needs_write = match std::fs::metadata(&path) {
+        Ok(m) => m.len() != SARASA_UI_J_BOLD_BYTES.len() as u64,
+        Err(_) => true,
+    };
+    if needs_write {
+        std::fs::create_dir_all(dir)?;
+        let tmp = dir.join("SarasaUiJ-Bold.ttf.tmp");
+        std::fs::write(&tmp, SARASA_UI_J_BOLD_BYTES)?;
+        std::fs::rename(&tmp, &path)?;
+    }
+    Ok(path)
+}
+
+/// Install the bundled Sarasa UI J Bold font into the user's standard
+/// font directory (see [`user_font_dir`]).
+pub fn install_bundled_ui_bold_font() -> Option<std::io::Result<std::path::PathBuf>> {
+    let dir = user_font_dir()?;
+    Some(install_bundled_ui_bold_font_to(&dir))
+}
+
+/// Set the GTK default UI font to [`UI_FONT_FAMILY`] via
+/// `GtkSettings:gtk-font-name`.
+///
+/// **Why this exists in addition to [`APP_CSS`]**: libadwaita renders
+/// TabBar tab titles via an internal Pango FontDescription on a custom
+/// widget that is NOT reachable by CSS selectors — verified empirically
+/// via the GTK Inspector (live-CSS override with `tabbar tab .title
+/// !important` had no effect). Setting `gtk-font-name` on the global
+/// `GtkSettings` is the canonical GTK4 way to set the default UI font
+/// and reaches every widget that asks for "the system font", including
+/// libadwaita internals that bypass CSS.
+///
+/// **Size handling**: `gtk-font-name` is a Pango FontDescription
+/// ("Family Style Size"). If we set just the family without a
+/// numeric size token, Pango treats size as unspecified and GTK falls
+/// back to its hardcoded 10pt default — which is way too small on
+/// macOS (system default ~13pt) and wrong on most Linux DEs too.
+/// We therefore read the existing `gtk-font-name`, parse it as a
+/// Pango FontDescription, extract the size, and emit
+/// `"<UI_FONT_FAMILY> <size>"` so we override ONLY the family.
+///
+/// Must be called AFTER GTK is initialized (`Settings::default()`
+/// returns `None` before `gtk::init()` / `Application::activate`).
+///
+/// Idempotent — safe to call from multiple per-window setup paths.
+pub fn ensure_ui_font_setting() {
+    let Some(settings) = gtk4::Settings::default() else { return };
+
+    // Recover the platform default size from the previous gtk-font-name.
+    // Pango uses 1024-units per point internally (PANGO_SCALE = 1024).
+    let prev = settings.gtk_font_name();
+    let size_pt: f64 = prev
+        .as_ref()
+        .map(|s| {
+            let desc = gtk4::pango::FontDescription::from_string(s.as_str());
+            // size_is_absolute() → pixels (rare); otherwise points*PANGO_SCALE.
+            let raw = desc.size();
+            if raw <= 0 {
+                0.0
+            } else if desc.is_size_absolute() {
+                // Convert pixel size to points (assume 96 DPI baseline; GTK
+                // does its own scaling on top of this).
+                raw as f64 / gtk4::pango::SCALE as f64 * 72.0 / 96.0
+            } else {
+                raw as f64 / gtk4::pango::SCALE as f64
+            }
+        })
+        .unwrap_or(0.0);
+
+    // Sensible platform defaults if the previous string had no size.
+    let size_pt = if size_pt > 0.0 {
+        size_pt
+    } else if cfg!(target_os = "macos") {
+        13.0
+    } else {
+        11.0
+    };
+
+    let new_name = format!("{UI_FONT_FAMILY} {size_pt}");
+    settings.set_gtk_font_name(Some(&new_name));
+}
+
 /// Extract the bundled Sarasa Mono J font to `dir/SarasaMonoJ-Regular.ttf`
 /// and return the path. Idempotent — skips writing if the file already
 /// exists with the correct size.
@@ -347,22 +499,55 @@ pub fn install_bundled_cjk_font() -> Option<std::io::Result<std::path::PathBuf>>
 
 /// Global CSS applied to the Chlodwig GTK application.
 ///
-/// Key purpose: Add emoji font families to the font fallback chain.
-/// Without this, Pango/fontconfig on macOS does **not** include
-/// "Apple Color Emoji" in the default "sans" fallback list, so all
-/// emoji characters render as empty boxes (tofu).
+/// Built at runtime from the [`UI_FONT_FAMILY`] and [`MONO_FONT_FAMILY`]
+/// constants — neither family literal is hard-coded in the CSS string.
+/// SSoT enforced by `tests/global_ui_font_tests.rs`.
 ///
-/// On Linux, "Noto Color Emoji" is the standard emoji font.
-/// On Windows, "Segoe UI Emoji" is the standard.
-pub const APP_CSS: &str = r#"
-textview text {
-    font-family: -apple-system, "Cantarell", "Noto Sans", "Segoe UI",
-                 "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji",
-                 sans-serif;
-}
-
-.monospace, textview text.monospace {
-    font-family: "Sarasa Mono J", monospace,
-                 "Apple Color Emoji", "Noto Color Emoji", "Segoe UI Emoji";
-}
-"#;
+/// Two rules:
+///
+/// 1. **Global `*` rule** — paints every widget (input view, buttons,
+///    popovers, headerbar, libadwaita TabBar, status bar, …) with
+///    Sarasa UI J + the platform color-emoji font as fallback.
+///    `!important` is required so libadwaita's per-widget rules
+///    (e.g. `button { font-family: -gtk-system-font; }`, specificity
+///    0,0,1) don't beat our universal selector (0,0,0).
+///
+/// 2. **`.monospace` rule** — for any GTK widget that adds the
+///    `.monospace` style class itself. The Output's code blocks and
+///    tables use TextTags with `.family(MONO_FONT_FAMILY)` directly,
+///    which already overrides CSS, so this rule is purely defensive.
+///
+/// Emoji rendering: Sarasa UI J / Sarasa Mono J have no color emoji
+/// glyphs. Pango walks the font-family list left-to-right and falls
+/// through to "Apple Color Emoji" (macOS) / "Noto Color Emoji"
+/// (Linux) / "Segoe UI Emoji" (Windows) for emoji codepoints. Emojis
+/// rendered via the [`emoji::EmojiTextView`] bitmap-overlay path
+/// bypass Pango entirely.
+pub static APP_CSS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "* {{\n    \
+            font-family: \"{ui}\",\n                 \
+                         \"Apple Color Emoji\", \"Noto Color Emoji\", \"Segoe UI Emoji\" !important;\n\
+        }}\n\
+        \n\
+        /* libadwaita TabBar override.\n         \
+         *\n         \
+         * libadwaita ships its own per-widget rule for the TabBar node\n         \
+         * tree (specificity 0,0,2). When both that rule AND our `*` rule\n         \
+         * carry !important, CSS specificity decides the winner — and\n         \
+         * 0,0,2 beats 0,0,0. Without this explicit selector chain, tab\n         \
+         * titles render with .AppleSystemUIFont and U+30FB (・) tofus.\n         \
+         */\n\
+        tabbar, tabbar tab, tabbar tabbox, tabbar tab .title, tabbar tab label {{\n    \
+            font-family: \"{ui}\",\n                 \
+                         \"Apple Color Emoji\", \"Noto Color Emoji\", \"Segoe UI Emoji\" !important;\n\
+        }}\n\
+        \n\
+        .monospace, textview text.monospace {{\n    \
+            font-family: \"{mono}\",\n                 \
+                         \"Apple Color Emoji\", \"Noto Color Emoji\", \"Segoe UI Emoji\";\n\
+        }}\n",
+        ui = UI_FONT_FAMILY,
+        mono = MONO_FONT_FAMILY,
+    )
+});

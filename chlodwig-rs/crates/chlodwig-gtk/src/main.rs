@@ -31,6 +31,16 @@ fn main() -> glib::ExitCode {
     chlodwig_gtk::ensure_cairo_renderer();
     chlodwig_gtk::ensure_coretext_backend();
 
+    // Force-enable the GTK Inspector (Ctrl+Shift+D / "interactive" debug).
+    // This also makes the widget-dimmer / highlight overlays available.
+    // SAFETY: set_var is unsafe in edition 2024; we run it before GTK init,
+    // single-threaded, so no other thread can observe a torn read.
+    unsafe {
+        std::env::set_var("GTK_DEBUG", "interactive");
+        // Required since GTK 4.10: the inspector is gated by this key.
+        std::env::set_var("GTK_ENABLE_INSPECTOR_KEYBINDING", "1");
+    }
+
     let debug_log_path = chlodwig_core::timestamped_log_path("debug_gtk");
     if let Ok(log_file) = std::fs::File::create(&debug_log_path) {
         tracing_subscriber::fmt()
@@ -57,6 +67,22 @@ fn main() -> glib::ExitCode {
             "CJK font install failed: {} (CJK in tables may misalign)", e
         ),
         None => tracing::info!("CJK font install skipped (no user font dir on this platform)"),
+    }
+
+    match chlodwig_gtk::install_bundled_ui_font() {
+        Some(Ok(p)) => tracing::info!("UI font installed: {}", p.display()),
+        Some(Err(e)) => tracing::warn!(
+            "UI font install failed: {} (chrome will use platform default font)", e
+        ),
+        None => tracing::info!("UI font install skipped (no user font dir on this platform)"),
+    }
+
+    match chlodwig_gtk::install_bundled_ui_bold_font() {
+        Some(Ok(p)) => tracing::info!("UI bold font installed: {}", p.display()),
+        Some(Err(e)) => tracing::warn!(
+            "UI bold font install failed: {} (bold tags will fall back to Regular)", e
+        ),
+        None => tracing::info!("UI bold font install skipped (no user font dir on this platform)"),
     }
 
     let resume_flag = std::env::args().any(|a| a == "--resume" || a == "-r");
@@ -87,6 +113,14 @@ fn activate(
     });
     app.add_action(&quit_action);
     app.set_accels_for_action("app.quit", &["<Meta>q"]);
+
+    // Set the global GTK UI font BEFORE any window/TabBar is built.
+    // CSS-only override does not reach libadwaita's TabBar internals
+    // (verified via Inspector live-CSS smoke test); GtkSettings is
+    // the canonical GTK4 way and reaches every widget asking for the
+    // system font. Must run after GTK init (i.e. inside `activate`),
+    // otherwise `Settings::default()` returns None.
+    chlodwig_gtk::ensure_ui_font_setting();
 
     #[cfg(target_os = "macos")]
     chlodwig_gtk::notification::request_notification_permission();

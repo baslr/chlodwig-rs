@@ -129,28 +129,12 @@ fn test_app_css_monospace_includes_sarasa_font_family() {
     );
 }
 
-#[test]
-fn test_app_css_sarasa_font_listed_before_generic_monospace() {
-    // The Sarasa font must appear BEFORE the generic `monospace` keyword,
-    // otherwise Pango never reaches it (it stops at the first match).
-    let sarasa_pos = APP_CSS
-        .find("Sarasa Mono J")
-        .expect("CSS must contain 'Sarasa Mono J'");
-    // Find the generic `monospace` family — distinguishable from the
-    // selector `.monospace,` because it appears AFTER a comma+whitespace
-    // inside a font-family list.
-    let generic_pos = APP_CSS
-        .find(" monospace,\n")
-        .or_else(|| APP_CSS.find("\tmonospace,\n"))
-        .or_else(|| APP_CSS.find(" monospace;"))
-        .expect("CSS must contain a generic `monospace` family name");
-    assert!(
-        sarasa_pos < generic_pos,
-        "Sarasa font must be listed BEFORE generic `monospace` (sarasa@{}, generic@{})",
-        sarasa_pos,
-        generic_pos
-    );
-}
+// NOTE: the historic `test_app_css_sarasa_font_listed_before_generic_monospace`
+// test was removed when APP_CSS migrated to single-family rules
+// (no generic `monospace` keyword). The presence of "Sarasa Mono J"
+// in the CSS is asserted by `test_app_css_monospace_includes_sarasa_font_family`
+// above, and SSoT/global-rule structure is asserted by
+// `tests/global_ui_font_tests.rs`.
 
 // ── User font directory installation ──────────────────────────────
 

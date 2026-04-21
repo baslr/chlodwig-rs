@@ -15,18 +15,23 @@ fn test_app_css_contains_emoji_font_family() {
 }
 
 #[test]
-fn test_app_css_applies_to_textview() {
+fn test_app_css_applies_globally() {
+    // After the global UI font migration, the historic per-widget
+    // `textview text` selector is gone — the universal `*` rule
+    // covers TextViews along with every other widget.
     assert!(
-        APP_CSS.contains("textview text"),
-        "APP_CSS must target 'textview text' selector for TextBuffer content"
+        APP_CSS.contains("* {") || APP_CSS.contains("*{"),
+        "APP_CSS must contain a universal `*` rule so the font \
+         (and emoji fallback) applies to every widget"
     );
 }
 
 #[test]
-fn test_app_css_contains_monospace_emoji_fallback() {
+fn test_app_css_contains_monospace_class_rule() {
     assert!(
-        APP_CSS.contains("monospace"),
-        "APP_CSS should reference monospace for code font fallback"
+        APP_CSS.contains(".monospace"),
+        "APP_CSS must keep a `.monospace` rule for the (rare) GTK \
+         widgets that add the .monospace style class themselves"
     );
 }
 

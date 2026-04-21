@@ -6,40 +6,43 @@
 //! and includes the session name when one is set.
 //!
 //! Format:
-//!   - With session name:  `🤖 {session_name} ・ {cwd_basename}`
-//!   - Without name:       `🤖 {cwd_basename}`
+//!   - With session name:  `🤖  {session_name} ・ {cwd_basename}`
+//!   - Without name:       `🤖  {cwd_basename}`
 //!
-//! Separator: U+30FB KATAKANA MIDDLE DOT (full-width middle dot — same as
-//! the window-title separator in `format_window_title`).
+//! ── Two intentional details ────────────────────────────────────────────
 //!
-//! ── SSoT ───────────────────────────────────────────────────────────────
+//! 1. **Two spaces after 🤖**: emoji glyphs in libadwaita's TabBar have
+//!    a tight visual right edge; one space looks crammed into the next
+//!    word. Two spaces (one for the emoji's own trailing breathing-room,
+//!    one for the actual word separator) gives the right rhythm.
 //!
-//! - `format_tab_title(session_name, cwd_basename) -> String` lives in
-//!   `window.rs` (alongside `format_window_title`). One pure function, no
-//!   widget dependency, fully unit-testable here.
-//! - `AiConversationTab::refresh_tab_title()` calls
-//!   `page.set_title(&format_tab_title(...))`. Called from every site that
-//!   mutates `session_name` or `cwd`.
+//! 2. **Separator U+30FB KATAKANA MIDDLE DOT** — same as the window
+//!    title. The TabBar can render this correctly because `APP_CSS`
+//!    explicitly extends the tab-title font-family fallback chain with
+//!    platform CJK fonts (Hiragino Sans on macOS, Noto Sans CJK JP on
+//!    Linux, Microsoft YaHei on Windows). Without those CSS overrides
+//!    the default Pango fallback chain has no CJK font on macOS and
+//!    U+30FB tofus — see `tabbar_cjk_font_tests.rs`.
 
 use crate::window::format_tab_title;
 
 #[test]
 fn test_format_tab_title_with_session_name() {
     let s = format_tab_title(Some("my-session"), Some("chlodwig-rs"));
-    assert_eq!(s, "🤖 my-session \u{30FB} chlodwig-rs");
+    assert_eq!(s, "🤖  my-session \u{30FB} chlodwig-rs");
 }
 
 #[test]
 fn test_format_tab_title_without_session_name() {
     let s = format_tab_title(None, Some("chlodwig-rs"));
-    assert_eq!(s, "🤖 chlodwig-rs");
+    assert_eq!(s, "🤖  chlodwig-rs");
 }
 
 #[test]
 fn test_format_tab_title_empty_session_name_treated_as_none() {
     let s = format_tab_title(Some(""), Some("chlodwig-rs"));
     assert_eq!(
-        s, "🤖 chlodwig-rs",
+        s, "🤖  chlodwig-rs",
         "empty string session_name must be treated like None — no \
          leading separator, no trailing separator"
     );
@@ -48,7 +51,7 @@ fn test_format_tab_title_empty_session_name_treated_as_none() {
 #[test]
 fn test_format_tab_title_no_cwd_basename() {
     let s = format_tab_title(Some("my-session"), None);
-    assert_eq!(s, "🤖 my-session");
+    assert_eq!(s, "🤖  my-session");
 }
 
 #[test]
@@ -62,31 +65,32 @@ fn test_format_tab_title_no_cwd_no_name() {
 }
 
 #[test]
-fn test_format_tab_title_uses_katakana_middle_dot_not_ascii_dot() {
+fn test_format_tab_title_uses_katakana_middle_dot() {
     let s = format_tab_title(Some("a"), Some("b"));
     assert!(
         s.contains('\u{30FB}'),
-        "must use U+30FB KATAKANA MIDDLE DOT (full width), not ASCII '.', \
-         '·', or '•' — got: {s:?}"
+        "tab title must use U+30FB KATAKANA MIDDLE DOT `・` — same as \
+         the window title. APP_CSS extends the TabBar font-family with \
+         CJK fonts so this renders correctly. Got: {s:?}"
     );
     assert!(!s.contains(" . "), "must not use ASCII dot");
 }
 
 #[test]
-fn test_format_tab_title_robot_emoji_first() {
+fn test_format_tab_title_robot_emoji_followed_by_two_spaces() {
     let s = format_tab_title(Some("name"), Some("cwd"));
     assert!(
-        s.starts_with("🤖 "),
-        "tab title must start with '🤖 ' so it's visually distinct from \
-         future Browser / Terminal / File tabs (each kind gets its own \
-         emoji prefix). Got: {s:?}"
+        s.starts_with("🤖  "),
+        "tab title must start with the robot emoji followed by TWO \
+         spaces — emoji glyphs in the TabBar have a tight right edge, \
+         one space looks crammed. Got: {s:?}"
     );
 }
 
 #[test]
 fn test_format_tab_title_utf8_session_name() {
     let s = format_tab_title(Some("日本語"), Some("chlodwig-rs"));
-    assert_eq!(s, "🤖 日本語 \u{30FB} chlodwig-rs");
+    assert_eq!(s, "🤖  日本語 \u{30FB} chlodwig-rs");
 }
 
 // ── Wiring: AiConversationTab uses format_tab_title ───────────────────

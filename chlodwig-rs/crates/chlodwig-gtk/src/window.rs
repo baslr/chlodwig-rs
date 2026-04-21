@@ -331,9 +331,9 @@ pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
 /// Format the `adw::TabPage` title for an AI-conversation tab.
 ///
 /// Layout:
-///   - With session name:  `🤖 {session_name} ・ {cwd_basename}`
-///   - Without name:       `🤖 {cwd_basename}`
-///   - Without cwd:        `🤖 {session_name}`
+///   - With session name:  `🤖  {session_name} ・ {cwd_basename}`
+///   - Without name:       `🤖  {cwd_basename}`
+///   - Without cwd:        `🤖  {session_name}`
 ///   - Neither:            `🤖`
 ///
 /// The robot emoji is the visual marker for the AI tab kind. Future tab
@@ -341,14 +341,22 @@ pub fn format_window_title(cwd: Option<&str>, name: Option<&str>) -> String {
 /// emoji prefix from their own format helper. Empty strings are treated
 /// as `None` so callers don't need to filter.
 ///
-/// Uses the same `・` (U+30FB) separator as `format_window_title`.
+/// **Two spaces after `🤖`**: emoji glyphs in libadwaita's TabBar have
+/// a tight visual right edge; one space looks crammed into the next
+/// word. Two spaces give the right rhythm.
+///
+/// Uses the same `・` (U+30FB KATAKANA MIDDLE DOT) separator as
+/// `format_window_title`. The TabBar can render this correctly because
+/// `APP_CSS` includes platform CJK fonts (Hiragino Sans on macOS, Noto
+/// Sans CJK JP on Linux, Microsoft YaHei on Windows) in the TabBar
+/// font-family fallback chain.
 pub fn format_tab_title(session_name: Option<&str>, cwd_basename: Option<&str>) -> String {
     let name = session_name.filter(|s| !s.is_empty());
     let cwd = cwd_basename.filter(|s| !s.is_empty());
     match (name, cwd) {
-        (Some(n), Some(c)) => format!("🤖 {n} \u{30FB} {c}"),
-        (Some(n), None) => format!("🤖 {n}"),
-        (None, Some(c)) => format!("🤖 {c}"),
+        (Some(n), Some(c)) => format!("🤖  {n} \u{30FB} {c}"),
+        (Some(n), None) => format!("🤖  {n}"),
+        (None, Some(c)) => format!("🤖  {c}"),
         (None, None) => "🤖".to_string(),
     }
 }
@@ -1264,7 +1272,7 @@ pub fn write_selection_to_macos_clipboard(view: &TextView) {
 /// fontconfig's "sans" fallback chain doesn't include the system emoji font.
 fn load_app_css() {
     let provider = gtk4::CssProvider::new();
-    provider.load_from_data(crate::APP_CSS);
+    provider.load_from_data(crate::APP_CSS.as_str());
 
     if let Some(display) = gtk4::gdk::Display::default() {
         gtk4::style_context_add_provider_for_display(
