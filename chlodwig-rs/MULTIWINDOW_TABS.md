@@ -127,5 +127,11 @@ Planungsdokument für den Umbau der GTK-Variante auf:
 1. ✅ **Stage 0** — CWD-Refactor
 2. ✅ **Stage A** — `build_tab_content()` extrahieren
 3. ✅ **Stage B** — `adw::TabView` einziehen, Multi-Tab pro Fenster
-4. Stage C — Multi-Window + Drag-Out
+4. ✅ **Stage C** — Multi-Window + Drag-Out + Multi-Window-Persistenz
+   - `tab::build_window` ist die SSoT für „ein Fenster bauen" — wird vom Initial-Start, von `app.new-window` (Cmd+N) UND vom `connect_create_window`-Drag-Out aufgerufen.
+   - App-level `AppWindowRegistry` sammelt alle Fenster; `snapshot_app_window_set` erzeugt `AppWindowSet { version: 2, windows: Vec<WindowState> }`.
+   - `window_state.json` Schema-Bump v1 → v2 mit transparenter Migration (v1 = ein Fenster inline → wird in `windows: [single]` gewrapped).
+   - Cmd+N ist jetzt **New Window** (vorher New Conversation, jetzt ohne Shortcut).
 5. Stage D — Session-Persistenz pro Tab
+   - ✅ **D.1** — Sessions-Browser öffnet Session in NEUEM Tab (statt aktiven zu überschreiben)
+   - ✅ **D.2** — Tab-Set-Persistenz: `~/.chlodwig-rs/window_state.json` listet alle offenen Tabs (per `session_started_at` + `cwd`); beim Start werden alle Tabs wiederhergestellt; bei jeder Tab-Änderung neu gespeichert. Fehlt eine referenzierte Session-Datei → frischer Tab im gespeicherten cwd.

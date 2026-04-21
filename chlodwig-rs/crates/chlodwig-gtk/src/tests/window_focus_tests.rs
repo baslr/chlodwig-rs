@@ -14,27 +14,27 @@
 
 #[test]
 fn test_main_rs_has_is_active_notify_handler() {
-    let src = include_str!("../main.rs");
+    // Stage C: per-window wiring moved into tab::build_window. The
+    // is-active handler now lives in tab/mod.rs.
+    let src = include_str!("../tab/mod.rs");
     assert!(
         src.contains("connect_is_active_notify")
             || src.contains("connect_notify_local(Some(\"is-active\")"),
-        "main.rs must subscribe to window's is-active notification so the input \
-         can be re-focused when the user Cmd+Tabs back to Chlodwig"
+        "tab/mod.rs (build_window) must subscribe to window's is-active notification \
+         so the input can be re-focused when the user Cmd+Tabs back to Chlodwig"
     );
 }
 
 #[test]
 fn test_main_rs_grabs_focus_for_input_view_on_activation() {
-    // After the Tab-trait refactor (tab_trait_tests.rs), main.rs no
-    // longer touches `input_view` directly — it goes through the Tab
-    // trait's `focus_input()` method, and the AI tab's impl calls
-    // `input_view.grab_focus()`. Verify BOTH layers.
-    let main_src = include_str!("../main.rs");
+    // Stage C: the focus-on-active dispatch lives in build_window
+    // (tab/mod.rs), not main.rs. The dispatch goes through Tab::focus_input()
+    // so non-AI tabs (Browser, Terminal, …) can provide their own focus target.
+    let build_src = include_str!("../tab/mod.rs");
     assert!(
-        main_src.contains(".focus_input()"),
-        "main.rs's is-active handler must dispatch via the generic \
-         `Tab::focus_input()` so non-AI tabs (Browser, Terminal, …) can \
-         provide their own focus target"
+        build_src.contains(".focus_input()"),
+        "build_window's is-active handler must dispatch via the generic \
+         `Tab::focus_input()` so non-AI tabs can provide their own focus target"
     );
     let ai_src = include_str!("../tab/ai_conversation.rs");
     assert!(

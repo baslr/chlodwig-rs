@@ -1,63 +1,67 @@
 //! Native macOS / Linux menu bar setup.
 //!
-//! Stage B (MULTIWINDOW_TABS.md): all per-tab actions resolve "the active
-//! tab" via `tab::active(tab_view, registry)` at activation time, instead
-//! of capturing per-tab widgets/state at menu-build time. This is what
-//! makes a single menu bar correctly route Cmd+N / Cmd+T / Cmd+W /
-//! Compact / Resume / Sessions to whatever tab the user is currently
-//! looking at.
+//! Stage C (MULTIWINDOW_TABS.md): the menu is wired ONCE per app. Per-tab
+//! and per-window actions resolve the active `WindowEntry` at activation
+//! time via [`active_entry`]. Each `WindowEntry` carries the per-window
+//! `tab_view`, `registry`, `config`, and `window` — sufficient input for
+//! every menu action without any per-action capturing of widgets.
 //!
-//! `MenuContext` therefore carries only window-/app-/tab-view-level
-//! references. The `widgets`/`app_state`/`prompt_tx`/`viewport_cols`/
-//! `session_started_at` fields it had in Stage A are gone — those
-//! become per-action lookups via the registry.
-//!
-//! New actions vs. Stage A:
-//!   - `app.new-tab` (Cmd+T)
-//!   - `app.close-tab` (Cmd+W)
-//!
-//! This module lives inside the **binary** (not the lib), so it can refer to
-//! `crate::tab::BackgroundCommand` directly — same pattern as `restore.rs`.
+//! Cmd+N is now bound to **New Window** (Stage C). The previous
+//! "New Conversation" Cmd+N binding is removed; New Conversation is still
+//! reachable from the File menu (and via `/clear` in the prompt).
 
 use gtk4::prelude::*;
-use gtk4::{gio, ApplicationWindow};
+use gtk4::{gio, Window};
 
 use chlodwig_gtk::{sessions_window, window};
 
-use crate::restore;
 use crate::tab::{
-    self, ai_conversation::AiConversationTab, BackgroundCommand, TabAttachContext,
-    TabConfig, TabRegistry,
+    self, ai_conversation::AiConversationTab, AppWindowRegistry, BackgroundCommand,
+    BuildWindowContext, Tab, TabAttachContext, WindowEntry,
 };
 
-/// Window-level references the menu actions need.
+/// App-level references the menu actions need.
 ///
-/// Per-tab data is NOT captured here (that would force one menu bar per
-/// tab); actions look up the active tab on demand via `tab::active`.
+/// No per-window references are captured here — the menu is wired ONCE per
+/// app and dispatches per action via [`active_entry`].
 pub struct MenuContext {
     pub app: libadwaita::Application,
-    pub window: ApplicationWindow,
-    pub tab_view: libadwaita::TabView,
-    pub registry: TabRegistry,
-    /// Resolved configuration cloned into every new tab spawned via
-    /// `app.new-tab`. Mirrors `TabAttachContext.config`.
-    pub config: TabConfig,
+    pub app_registry: AppWindowRegistry,
+    /// Template for `app.new-window`: cloned (cheap Rc) into the action
+    /// closure so Cmd+N reproduces the same wiring as the initial window.
+    pub build_ctx_template: BuildWindowContext,
+    /// Default cwd for fresh windows when no active window is available.
+    pub fallback_cwd: std::path::PathBuf,
+}
+
+/// Find the [`WindowEntry`] whose `window` matches the app's currently-active
+/// `gtk4::Window`. Returns `None` when no window is active.
+fn active_entry(
+    app: &libadwaita::Application,
+    app_registry: &AppWindowRegistry,
+) -> Option<WindowEntry> {
+    let active_window: Window = app.active_window()?;
+    app_registry
+        .borrow()
+        .iter()
+        .find(|e| e.window.clone().upcast::<Window>() == active_window)
+        .cloned()
 }
 
 /// Build and install the native menu bar with all actions and accelerators.
 pub fn setup_menu(ctx: MenuContext) {
     let MenuContext {
         app,
-        window,
-        tab_view,
-        registry,
-        config,
+        app_registry,
+        build_ctx_template,
+        fallback_cwd,
     } = ctx;
 
     let menubar = gio::Menu::new();
 
     // File menu
     let file_menu = gio::Menu::new();
+    file_menu.append(Some("New Window"), Some("app.new-window"));
     file_menu.append(Some("New Tab"), Some("app.new-tab"));
     file_menu.append(Some("New Conversation"), Some("app.new-conversation"));
     file_menu.append(Some("Close Tab"), Some("app.close-tab"));
@@ -80,30 +84,56 @@ pub fn setup_menu(ctx: MenuContext) {
 
     app.set_menubar(Some(&menubar));
 
+    // ── Window actions ───────────────────────────────────────────────
+
+    // "New Window" (Cmd+N) — build a fresh window via the SSoT.
+    {
+        let action = gio::SimpleAction::new("new-window", None);
+        let app_for_new = app.clone();
+        let app_registry_for_new = app_registry.clone();
+        let template = build_ctx_template;
+        let fallback_for_new = fallback_cwd.clone();
+        action.connect_activate(move |_, _| {
+            // Inherit cwd from the active tab when possible.
+            let cwd = active_entry(&app_for_new, &app_registry_for_new)
+                .and_then(|e| tab::active(&e.tab_view, &e.registry))
+                .map(|t| t.cwd().to_path_buf())
+                .unwrap_or_else(|| fallback_for_new.clone());
+            tab::build_window(
+                &BuildWindowContext {
+                    app: template.app.clone(),
+                    config: template.config.clone(),
+                    app_registry: template.app_registry.clone(),
+                },
+                None,
+                cwd,
+            );
+        });
+        app.add_action(&action);
+        app.set_accels_for_action("app.new-window", &["<Meta>n"]);
+    }
+
     // ── Tab actions ───────────────────────────────────────────────────
 
-    // "New Tab" (Cmd+T) — opens a fresh tab in the current window with
-    // the same cwd as the currently-active tab (or process cwd if none).
+    // "New Tab" (Cmd+T) — opens a fresh tab in the active window.
     {
         let action = gio::SimpleAction::new("new-tab", None);
-        let window_for_new_tab = window.clone();
-        let tab_view_for_new_tab = tab_view.clone();
-        let registry_for_new_tab = registry.clone();
-        let config_for_new_tab = config.clone();
+        let app_for_new_tab = app.clone();
+        let app_registry_for_new_tab = app_registry.clone();
+        let fallback_for_new_tab = fallback_cwd.clone();
         action.connect_activate(move |_, _| {
-            // Cmd+T defaults to opening a new AI-conversation tab.
-            // Inherit cwd from the active tab (any kind), or fall back to
-            // the process cwd when there are no tabs.
-            let new_cwd = tab::active(&tab_view_for_new_tab, &registry_for_new_tab)
+            let Some(entry) = active_entry(&app_for_new_tab, &app_registry_for_new_tab)
+            else {
+                return;
+            };
+            let new_cwd = tab::active(&entry.tab_view, &entry.registry)
                 .map(|t| t.cwd().to_path_buf())
-                .unwrap_or_else(|| {
-                    std::env::current_dir().unwrap_or_else(|_| "/".into())
-                });
+                .unwrap_or_else(|| fallback_for_new_tab.clone());
             let attach_ctx = TabAttachContext {
-                window: window_for_new_tab.clone(),
-                tab_view: tab_view_for_new_tab.clone(),
-                registry: registry_for_new_tab.clone(),
-                config: config_for_new_tab.clone(),
+                window: entry.window.clone(),
+                tab_view: entry.tab_view.clone(),
+                registry: entry.registry.clone(),
+                config: entry.config.clone(),
             };
             AiConversationTab::attach_new(&attach_ctx, new_cwd);
         });
@@ -111,15 +141,16 @@ pub fn setup_menu(ctx: MenuContext) {
         app.set_accels_for_action("app.new-tab", &["<Meta>t"]);
     }
 
-    // "Close Tab" (Cmd+W) — sends a close request to the TabView; the
-    // close handler installed by `tab::wire_tab_view_close_handler`
-    // does the registry cleanup and window-empty check.
+    // "Close Tab" (Cmd+W) — closes the active tab in the active window.
     {
         let action = gio::SimpleAction::new("close-tab", None);
-        let tab_view_for_close = tab_view.clone();
+        let app_for_close = app.clone();
+        let app_registry_for_close = app_registry.clone();
         action.connect_activate(move |_, _| {
-            if let Some(page) = tab_view_for_close.selected_page() {
-                tab_view_for_close.close_page(&page);
+            if let Some(entry) = active_entry(&app_for_close, &app_registry_for_close) {
+                if let Some(page) = entry.tab_view.selected_page() {
+                    entry.tab_view.close_page(&page);
+                }
             }
         });
         app.add_action(&action);
@@ -128,13 +159,18 @@ pub fn setup_menu(ctx: MenuContext) {
 
     // ── Conversation actions (resolve active tab on activation) ───────
 
-    // "New Conversation" (Cmd+N) — clears the *active* tab.
+    // "New Conversation" — clears the active tab. No accelerator (Cmd+N
+    // is now New Window).
     {
         let action = gio::SimpleAction::new("new-conversation", None);
-        let tab_view_for_clear = tab_view.clone();
-        let registry_for_clear = registry.clone();
+        let app_for_clear = app.clone();
+        let app_registry_for_clear = app_registry.clone();
         action.connect_activate(move |_, _| {
-            let Some(t) = tab::active_ai(&tab_view_for_clear, &registry_for_clear) else {
+            let Some(entry) = active_entry(&app_for_clear, &app_registry_for_clear)
+            else {
+                return;
+            };
+            let Some(t) = tab::active_ai(&entry.tab_view, &entry.registry) else {
                 return;
             };
             t.app_state.borrow_mut().clear();
@@ -151,21 +187,23 @@ pub fn setup_menu(ctx: MenuContext) {
                 &t.widgets.status_right_label,
                 &t.app_state.borrow(),
             );
-            // Refresh tab title — clear() reset session_name to None.
             t.refresh_tab_title();
         });
         app.add_action(&action);
-        app.set_accels_for_action("app.new-conversation", &["<Meta>n"]);
     }
 
     // "Compact" — compacts the active tab.
     {
         let action = gio::SimpleAction::new("compact", None);
-        let tab_view_for_compact = tab_view.clone();
-        let registry_for_compact = registry.clone();
+        let app_for_compact = app.clone();
+        let app_registry_for_compact = app_registry.clone();
         action.connect_activate(move |_, _| {
-            if let Some(t) = tab::active_ai(&tab_view_for_compact, &registry_for_compact)
-            {
+            let Some(entry) =
+                active_entry(&app_for_compact, &app_registry_for_compact)
+            else {
+                return;
+            };
+            if let Some(t) = tab::active_ai(&entry.tab_view, &entry.registry) {
                 let _ = t.prompt_tx.send(BackgroundCommand::Compact {
                     instructions: None,
                 });
@@ -177,11 +215,15 @@ pub fn setup_menu(ctx: MenuContext) {
     // "Resume" — load latest saved session into the active tab.
     {
         let action = gio::SimpleAction::new("resume", None);
-        let tab_view_for_resume = tab_view.clone();
-        let registry_for_resume = registry.clone();
+        let app_for_resume = app.clone();
+        let app_registry_for_resume = app_registry.clone();
         action.connect_activate(move |_, _| {
-            let Some(t) = tab::active_ai(&tab_view_for_resume, &registry_for_resume)
+            let Some(entry) =
+                active_entry(&app_for_resume, &app_registry_for_resume)
             else {
+                return;
+            };
+            let Some(t) = tab::active_ai(&entry.tab_view, &entry.registry) else {
                 return;
             };
             if let Ok(Some(snapshot)) = chlodwig_core::load_latest_session() {
@@ -193,59 +235,57 @@ pub fn setup_menu(ctx: MenuContext) {
         app.add_action(&action);
     }
 
-    // "Sessions…" — opens the sessions browser; on selection, restores
-    // into the active tab.
+    // "Sessions…" — opens chosen session in a NEW tab in the active window.
     {
         let action = gio::SimpleAction::new("sessions-browser", None);
-        let tab_view_for_sessions = tab_view.clone();
-        let registry_for_sessions = registry.clone();
-        let window_for_sessions = window.clone();
+        let app_for_sessions = app.clone();
+        let app_registry_for_sessions = app_registry.clone();
+        let fallback_for_sessions = fallback_cwd.clone();
         action.connect_activate(move |_, _| {
-            let Some(t) =
-                tab::active_ai(&tab_view_for_sessions, &registry_for_sessions)
+            let Some(entry) =
+                active_entry(&app_for_sessions, &app_registry_for_sessions)
             else {
                 return;
             };
-            let current_file =
-                Some(chlodwig_core::session_filename_for(&t.session_started_at));
-            let t_for_browser = t.clone();
-            let window_for_resume = window_for_sessions.clone();
+
+            let active = tab::active_ai(&entry.tab_view, &entry.registry);
+            let current_file = active
+                .as_ref()
+                .map(|t| chlodwig_core::session_filename_for(&t.session_started_at));
+            let new_tab_cwd = active
+                .as_ref()
+                .map(|t| t.cwd().to_path_buf())
+                .unwrap_or_else(|| fallback_for_sessions.clone());
+
+            let entry_for_resume = entry.clone();
             sessions_window::show_sessions_window(
-                &window_for_sessions,
+                &entry.window,
                 current_file,
                 Box::new(move |path| match chlodwig_core::load_session_from(&path) {
                     Ok(snapshot) => {
-                        let cwd_name: Option<String> = {
-                            let n = t_for_browser.app_state.borrow().project_dir_name();
-                            if n.is_empty() {
-                                None
-                            } else {
-                                Some(n)
-                            }
+                        let attach_ctx = TabAttachContext {
+                            window: entry_for_resume.window.clone(),
+                            tab_view: entry_for_resume.tab_view.clone(),
+                            registry: entry_for_resume.registry.clone(),
+                            config: entry_for_resume.config.clone(),
                         };
-                        let ctx = restore::RestoreContext {
-                            state: &t_for_browser.app_state,
-                            output_view: &t_for_browser.widgets.final_view,
-                            streaming_view: &t_for_browser.widgets.streaming_view,
-                            output_scroll: &t_for_browser.widgets.output_scroll,
-                            window: &window_for_resume,
-                            viewport_cols: &t_for_browser.viewport_cols,
-                            status_left: &t_for_browser.widgets.status_left_label,
-                            status_right: &t_for_browser.widgets.status_right_label,
-                            prompt_tx: &t_for_browser.prompt_tx,
-                            cwd_name: cwd_name.as_deref(),
-                        };
-                        restore::apply_restored_session_to_ui(snapshot, &ctx);
-                        // Refresh tab title — restore may have set a
-                        // session_name (or cleared it).
-                        t_for_browser.refresh_tab_title();
+                        AiConversationTab::attach_with_session(
+                            &attach_ctx,
+                            new_tab_cwd.clone(),
+                            snapshot,
+                        );
                     }
                     Err(e) => {
-                        window::append_styled(
-                            &t_for_browser.widgets.final_view,
-                            &format!("\n✗ Failed to load session: {e}\n"),
-                            "error",
-                        );
+                        if let Some(t) = tab::active_ai(
+                            &entry_for_resume.tab_view,
+                            &entry_for_resume.registry,
+                        ) {
+                            window::append_styled(
+                                &t.widgets.final_view,
+                                &format!("\n✗ Failed to load session: {e}\n"),
+                                "error",
+                            );
+                        }
                     }
                 }),
             );
@@ -257,9 +297,11 @@ pub fn setup_menu(ctx: MenuContext) {
 
     {
         let action = gio::SimpleAction::new("minimize", None);
-        let window_for_minimize = window.clone();
+        let app_for_minimize = app.clone();
         action.connect_activate(move |_, _| {
-            window_for_minimize.minimize();
+            if let Some(w) = app_for_minimize.active_window() {
+                w.minimize();
+            }
         });
         app.add_action(&action);
         app.set_accels_for_action("app.minimize", &["<Meta>m"]);
@@ -267,9 +309,11 @@ pub fn setup_menu(ctx: MenuContext) {
 
     {
         let action = gio::SimpleAction::new("hide", None);
-        let window_for_hide = window.clone();
+        let app_for_hide = app.clone();
         action.connect_activate(move |_, _| {
-            window_for_hide.set_visible(false);
+            if let Some(w) = app_for_hide.active_window() {
+                w.set_visible(false);
+            }
         });
         app.add_action(&action);
         app.set_accels_for_action("app.hide", &["<Meta>h"]);
@@ -277,10 +321,12 @@ pub fn setup_menu(ctx: MenuContext) {
 
     {
         let action = gio::SimpleAction::new("show", None);
-        let window_for_show = window.clone();
+        let app_for_show = app.clone();
         action.connect_activate(move |_, _| {
-            window_for_show.set_visible(true);
-            window_for_show.present();
+            if let Some(w) = app_for_show.active_window() {
+                w.set_visible(true);
+                w.present();
+            }
         });
         app.add_action(&action);
         app.set_accels_for_action("app.show", &["<Shift><Meta>h"]);

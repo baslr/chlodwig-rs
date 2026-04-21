@@ -265,21 +265,25 @@ fn test_new_tab_action_calls_ai_conversation_attach() {
 
 #[test]
 fn test_main_initial_tab_is_ai_conversation() {
-    // The initial tab opened on app startup is also AI conversation.
+    // Stage C: main.rs creates windows via tab::build_window. The initial
+    // tab inside each window is opened by build_window itself via
+    // AiConversationTab::attach_new — so the assertion lives in tab/mod.rs
+    // now, not main.rs.
+    let tab_mod = include_str!("../tab/mod.rs");
     assert!(
-        MAIN_RS.contains("AiConversationTab::attach_new")
-            || MAIN_RS.contains("ai_conversation::attach_new"),
-        "main.rs must call `AiConversationTab::attach_new(...)` to open \
-         the initial tab — the default tab kind is AI conversation, and \
-         the initial tab must use the SAME factory as Cmd+T (no 'first \
-         tab special' code path)"
+        tab_mod.contains("AiConversationTab::attach_new"),
+        "build_window must use `AiConversationTab::attach_new` for the \
+         initial / fresh-window tab — the default tab kind is AI conversation, \
+         and the same factory is used by Cmd+T (no 'first tab special' path)"
     );
-    // And main.rs must NOT call the old `tab::attach_new_tab` any more.
+    // And NOTHING must call the old `tab::attach_new_tab` (Stage B name).
     assert!(
         !MAIN_RS.contains("tab::attach_new_tab"),
-        "main.rs must NOT call the old `tab::attach_new_tab` — that was \
-         the Stage B name. Use `tab::ai_conversation::AiConversationTab::\
-         attach_new(...)` instead."
+        "main.rs must NOT call the old `tab::attach_new_tab` — Stage B name."
+    );
+    assert!(
+        !tab_mod.contains("attach_new_tab"),
+        "tab/mod.rs must NOT reference the old `attach_new_tab` — Stage B name."
     );
 }
 

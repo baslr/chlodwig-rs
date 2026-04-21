@@ -323,6 +323,10 @@ fn test_menu_context_drops_per_tab_captures() {
 
 #[test]
 fn test_menu_context_has_tab_view_and_registry() {
+    // Stage C update: per-window references in MenuContext are gone.
+    // The menu is wired ONCE per app and dispatches via `active_entry`
+    // which resolves the active window's tab_view + registry at action
+    // time. MenuContext now carries the app-level `app_registry` instead.
     let ctx_start = MENU_RS
         .find("pub struct MenuContext")
         .expect("MenuContext must exist");
@@ -331,14 +335,9 @@ fn test_menu_context_has_tab_view_and_registry() {
         .expect("MenuContext body must close");
     let ctx_body = &MENU_RS[ctx_start..ctx_start + ctx_end];
     assert!(
-        ctx_body.contains("tab_view:") && ctx_body.contains("TabView"),
-        "MenuContext must capture `tab_view: adw::TabView` so actions can \
-         resolve the active tab. Got:\n{ctx_body}"
-    );
-    assert!(
-        ctx_body.contains("registry:") || ctx_body.contains("tab_registry:"),
-        "MenuContext must capture the tab `registry` so actions can look up \
-         the active tab's TabContext. Got:\n{ctx_body}"
+        ctx_body.contains("app_registry") || ctx_body.contains("AppWindowRegistry"),
+        "MenuContext (Stage C) must carry `app_registry: AppWindowRegistry` \
+         so actions can find the active window's WindowEntry. Got:\n{ctx_body}"
     );
 }
 

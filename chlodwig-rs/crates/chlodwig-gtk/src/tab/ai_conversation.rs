@@ -241,6 +241,39 @@ impl AiConversationTab {
         ctx: &TabAttachContext,
         cwd: std::path::PathBuf,
     ) -> libadwaita::TabPage {
+        Self::attach_inner(ctx, cwd, None)
+    }
+
+    /// Attach a new AI-conversation tab and immediately restore a saved
+    /// session into it. Used by the Sessions browser (Stage D.1) so that
+    /// picking a session opens it as a NEW tab beside the current one,
+    /// rather than overwriting the active tab's conversation.
+    ///
+    /// Goes through the same single construction path
+    /// ([`Self::attach_inner`]) as [`Self::attach_new`] — only difference
+    /// is that the snapshot is restored before this function returns.
+    ///
+    /// Returns the newly-created `adw::TabPage`.
+    pub fn attach_with_session(
+        ctx: &TabAttachContext,
+        cwd: std::path::PathBuf,
+        snapshot: chlodwig_core::SessionSnapshot,
+    ) -> libadwaita::TabPage {
+        Self::attach_inner(ctx, cwd, Some(snapshot))
+    }
+
+    /// Single source of truth for AI-tab construction.
+    ///
+    /// Both [`Self::attach_new`] (fresh tab) and
+    /// [`Self::attach_with_session`] (Sessions browser → new tab)
+    /// delegate here. When `snapshot` is `Some`, the restored session is
+    /// applied via [`crate::restore::apply_restored_session_to_ui`] —
+    /// the same SSoT used by `--resume` and `/resume`.
+    fn attach_inner(
+        ctx: &TabAttachContext,
+        cwd: std::path::PathBuf,
+        snapshot: Option<chlodwig_core::SessionSnapshot>,
+    ) -> libadwaita::TabPage {
         // ── 1. Build per-tab widgets ──────────────────────────────────
         let TabContent { root, widgets, cwd } = window::build_tab_content(&cwd);
 
@@ -424,6 +457,42 @@ impl AiConversationTab {
         // Apply the initial tab title now that the AiConversationTab value
         // exists (single SSoT — same path used after /name, /clear, restore).
         tab.refresh_tab_title();
+
+        // ── 9. Optional session restore (Stage D.1) ───────────────────
+        // When called via `attach_with_session`, replay the snapshot
+        // through the SAME restore path as `--resume` and `/resume`.
+        // SSoT: `crate::restore::apply_restored_session_to_ui`.
+        if let Some(snap) = snapshot {
+            // Make the new tab the active one so the restored content is
+            // immediately visible (otherwise the user picks a session in
+            // the browser and ends up still looking at the previous tab).
+            ctx.tab_view.set_selected_page(&page);
+
+            let cwd_name: Option<String> = {
+                let n = tab.app_state.borrow().project_dir_name();
+                if n.is_empty() {
+                    None
+                } else {
+                    Some(n)
+                }
+            };
+            let restore_ctx = crate::restore::RestoreContext {
+                state: &tab.app_state,
+                output_view: &tab.widgets.final_view,
+                streaming_view: &tab.widgets.streaming_view,
+                output_scroll: &tab.widgets.output_scroll,
+                window: &ctx.window,
+                viewport_cols: &tab.viewport_cols,
+                status_left: &tab.widgets.status_left_label,
+                status_right: &tab.widgets.status_right_label,
+                prompt_tx: &tab.prompt_tx,
+                cwd_name: cwd_name.as_deref(),
+            };
+            crate::restore::apply_restored_session_to_ui(snap, &restore_ctx);
+            // Restore may have set a session_name → reflect it in the
+            // tab's title (already SSoT via refresh_tab_title()).
+            tab.refresh_tab_title();
+        }
 
         page
     }
