@@ -89,6 +89,10 @@ pub enum BackgroundCommand {
 /// handler closures via `Rc<AiConversationTab>` clones.
 pub struct AiConversationTab {
     pub page: libadwaita::TabPage,
+    /// The `TabView` this tab lives in. Owned (cloned `GObject` ref —
+    /// cheap, ref-counted) so the tab can self-select via [`Self::focus`]
+    /// without callers having to pass it back in.
+    pub tab_view: libadwaita::TabView,
     pub widgets: UiWidgets,
     pub app_state: Rc<RefCell<AppState>>,
     pub viewport_cols: Rc<Cell<usize>>,
@@ -155,6 +159,24 @@ impl AiConversationTab {
             session_name.as_deref(),
         );
         self.page.set_tooltip(&tooltip);
+    }
+
+    /// Make this tab the visible (selected) page in its `TabView` and
+    /// put keyboard focus in its prompt input.
+    ///
+    /// Called once at the end of [`Self::attach_inner`] so EVERY tab-
+    /// creation path — Cmd+T menu action, startup initial tab, Sessions
+    /// browser → `attach_with_session` — gets identical behavior:
+    /// the new tab is selected and the cursor lands in the input.
+    ///
+    /// Self-focus rule: callers (menu actions, main.rs, sessions browser)
+    /// must NOT call `set_selected_page` / `grab_focus` themselves —
+    /// `AiConversationTab` is responsible for its own focus. The
+    /// `TabView` reference is stored on `self` (set at construction in
+    /// `attach_inner`) so callers don't need to plumb it back in.
+    pub fn focus(&self) {
+        self.tab_view.set_selected_page(&self.page);
+        self.widgets.input_view.grab_focus();
     }
 }
 
@@ -484,6 +506,7 @@ impl AiConversationTab {
         //       sidecar registry ──────────────────────────────────────
         let tab = Rc::new(AiConversationTab {
             page: page.clone(),
+            tab_view: ctx.tab_view.clone(),
             widgets,
             app_state,
             viewport_cols,
@@ -506,11 +529,6 @@ impl AiConversationTab {
         // through the SAME restore path as `--resume` and `/resume`.
         // SSoT: `crate::restore::apply_restored_session_to_ui`.
         if let Some(snap) = snapshot {
-            // Make the new tab the active one so the restored content is
-            // immediately visible (otherwise the user picks a session in
-            // the browser and ends up still looking at the previous tab).
-            ctx.tab_view.set_selected_page(&page);
-
             let cwd_name: Option<String> = {
                 let n = tab.app_state.borrow().project_dir_name();
                 if n.is_empty() {
@@ -536,6 +554,13 @@ impl AiConversationTab {
             // tab's title (already SSoT via refresh_tab_title()).
             tab.refresh_tab_title();
         }
+
+        // ── 10. Self-focus: select the new page in its TabView and put
+        //        keyboard focus into the prompt input. SSoT for "new tab
+        //        gets focus" — same path for Cmd+T, initial tab, and
+        //        Sessions browser → attach_with_session. Callers must
+        //        not duplicate this dance.
+        tab.focus();
 
         page
     }
