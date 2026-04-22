@@ -225,6 +225,11 @@ pub enum ConversationEvent {
         id: String,
         result: String,
     },
+    /// SummarizeContext meta-tool was applied.
+    ContextSummarized {
+        replaced: usize,
+        requested: usize,
+    },
 }
 
 // ── Conversation State ─────────────────────────────────────────────────
@@ -279,19 +284,90 @@ pub enum ConversationLoopError {
 
 // ── Internal helpers ───────────────────────────────────────────────────
 
+#[derive(Clone)]
 struct PendingToolUse {
     id: String,
     name: String,
     input: serde_json::Value,
 }
 
+/// The SummarizeContext tool definition — a meta-tool that replaces
+/// tool results in the conversation history with shorter summaries.
+/// It never appears in the message history itself.
+pub const SUMMARIZE_CONTEXT_TOOL_NAME: &str = "SummarizeContext";
+
+fn summarize_context_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: SUMMARIZE_CONTEXT_TOOL_NAME.into(),
+        description: "Replace previous tool results in the conversation history with shorter \
+            summaries to reduce context size. Use this when a tool result (e.g. a large file \
+            read, a long Bash output) turned out to be irrelevant or when only a small part \
+            of the result is needed going forward. The original tool_use/tool_result pairing \
+            is preserved — only the tool_result content is replaced with your summary. \
+            This tool call itself is removed from the history (meta-tool).".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "summaries": {
+                    "type": "array",
+                    "description": "One entry per tool result to summarize.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "tool_use_id": {
+                                "type": "string",
+                                "description": "The id of the tool_use whose result should be replaced."
+                            },
+                            "summary": {
+                                "type": "string",
+                                "description": "The replacement summary text for the tool result."
+                            }
+                        },
+                        "required": ["tool_use_id", "summary"]
+                    }
+                }
+            },
+            "required": ["summaries"]
+        }),
+    }
+}
+
+/// Apply SummarizeContext: replace tool_result contents in `messages`
+/// with the provided summaries. Returns the number of replacements made.
+pub fn apply_summarize_context(
+    messages: &mut [Message],
+    summaries: &[(String, String)], // (tool_use_id, summary)
+) -> usize {
+    let mut replaced = 0;
+    for msg in messages.iter_mut() {
+        for block in msg.content.iter_mut() {
+            if let ContentBlock::ToolResult {
+                tool_use_id,
+                content,
+                ..
+            } = block
+            {
+                if let Some((_, summary)) = summaries.iter().find(|(id, _)| id == tool_use_id) {
+                    *content = ToolResultContent::Text(format!("[Summarized] {summary}"));
+                    replaced += 1;
+                }
+            }
+        }
+    }
+    replaced
+}
+
 /// Build an API request from the current conversation state.
 pub fn build_request(state: &ConversationState) -> ApiRequest {
+    let mut tools: Vec<ToolDefinition> = state.tools.iter().map(|t| t.definition()).collect();
+    // Inject the SummarizeContext meta-tool so the model can call it.
+    tools.push(summarize_context_definition());
+
     ApiRequest {
         model: state.model.clone(),
         messages: state.messages.clone(),
         system: state.system_prompt.clone(),
-        tools: state.tools.iter().map(|t| t.definition()).collect(),
+        tools,
         max_tokens: state.max_tokens,
         stream: true,
     }
@@ -839,6 +915,56 @@ pub async fn run_turn(
         // 4. If no tool uses → turn is done
         // Filter out any tool uses with empty names (can happen with interleaved streams)
         tool_uses.retain(|t| !t.name.is_empty());
+
+        // 4a. Handle SummarizeContext meta-tool: mutate message history,
+        // then erase the tool_use from the assistant message (it never existed).
+        let summarize_uses: Vec<PendingToolUse> = tool_uses
+            .iter()
+            .filter(|t| t.name == SUMMARIZE_CONTEXT_TOOL_NAME)
+            .cloned()
+            .collect();
+        if !summarize_uses.is_empty() {
+            tool_uses.retain(|t| t.name != SUMMARIZE_CONTEXT_TOOL_NAME);
+
+            for pending in &summarize_uses {
+                let summaries: Vec<(String, String)> = pending
+                    .input
+                    .get("summaries")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|entry| {
+                                let id = entry.get("tool_use_id")?.as_str()?.to_string();
+                                let summary = entry.get("summary")?.as_str()?.to_string();
+                                Some((id, summary))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                let replaced = apply_summarize_context(&mut state.messages, &summaries);
+                tracing::info!(
+                    replaced,
+                    requested = summaries.len(),
+                    "SummarizeContext applied"
+                );
+
+                let _ = event_tx.send(ConversationEvent::ContextSummarized {
+                    replaced,
+                    requested: summaries.len(),
+                });
+            }
+
+            // Remove the SummarizeContext tool_use blocks from the last
+            // assistant message (which we just pushed in step 3).
+            if let Some(last_assistant) = state.messages.last_mut() {
+                let sc_ids: Vec<&str> = summarize_uses.iter().map(|p| p.id.as_str()).collect();
+                last_assistant.content.retain(|block| {
+                    !matches!(block, ContentBlock::ToolUse { id, .. } if sc_ids.contains(&id.as_str()))
+                });
+            }
+        }
+
         if tool_uses.is_empty() {
             let _ = event_tx.send(ConversationEvent::TurnComplete);
             return Ok(());
@@ -3458,5 +3584,306 @@ mod tests {
             "should emit CompactionStarted");
         assert!(events.iter().any(|e| matches!(e, ConversationEvent::CompactionComplete { .. })),
             "should emit CompactionComplete");
+    }
+
+    // ── SummarizeContext tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_apply_summarize_context_replaces_tool_result() {
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text { text: "read foo".into() }],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "toolu_abc".into(),
+                    name: "Read".into(),
+                    input: serde_json::json!({"file_path": "foo.rs"}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_abc".into(),
+                    content: ToolResultContent::Text("fn main() { ... 2000 lines ... }".into()),
+                    is_error: None,
+                }],
+            },
+        ];
+
+        let replaced = apply_summarize_context(
+            &mut messages,
+            &[("toolu_abc".into(), "Read foo.rs: 2000 lines, not relevant".into())],
+        );
+
+        assert_eq!(replaced, 1);
+        match &messages[2].content[0] {
+            ContentBlock::ToolResult { content, .. } => match content {
+                ToolResultContent::Text(t) => {
+                    assert!(t.contains("[Summarized]"));
+                    assert!(t.contains("not relevant"));
+                }
+                _ => panic!("expected Text content"),
+            },
+            _ => panic!("expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn test_apply_summarize_context_unknown_id_returns_zero() {
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_abc".into(),
+                    content: ToolResultContent::Text("original".into()),
+                    is_error: None,
+                }],
+            },
+        ];
+
+        let replaced = apply_summarize_context(
+            &mut messages,
+            &[("toolu_UNKNOWN".into(), "summary".into())],
+        );
+        assert_eq!(replaced, 0);
+        // Original unchanged
+        match &messages[0].content[0] {
+            ContentBlock::ToolResult { content, .. } => match content {
+                ToolResultContent::Text(t) => assert_eq!(t, "original"),
+                _ => panic!("expected Text"),
+            },
+            _ => panic!("expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn test_apply_summarize_context_multiple_summaries() {
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "toolu_1".into(),
+                        content: ToolResultContent::Text("big output 1".into()),
+                        is_error: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "toolu_2".into(),
+                        content: ToolResultContent::Text("big output 2".into()),
+                        is_error: None,
+                    },
+                ],
+            },
+        ];
+
+        let replaced = apply_summarize_context(
+            &mut messages,
+            &[
+                ("toolu_1".into(), "summary 1".into()),
+                ("toolu_2".into(), "summary 2".into()),
+            ],
+        );
+        assert_eq!(replaced, 2);
+    }
+
+    #[test]
+    fn test_apply_summarize_context_preserves_pairing() {
+        // After summarization, tool_use_id must still match
+        let mut messages = vec![
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "toolu_abc".into(),
+                    name: "Bash".into(),
+                    input: serde_json::json!({"command": "ls"}),
+                }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "toolu_abc".into(),
+                    content: ToolResultContent::Text("file1\nfile2\n...5000 lines".into()),
+                    is_error: None,
+                }],
+            },
+        ];
+
+        apply_summarize_context(
+            &mut messages,
+            &[("toolu_abc".into(), "ls output: 5000 files".into())],
+        );
+
+        // ToolUse still has id "toolu_abc"
+        match &messages[0].content[0] {
+            ContentBlock::ToolUse { id, .. } => assert_eq!(id, "toolu_abc"),
+            _ => panic!("expected ToolUse"),
+        }
+        // ToolResult still has tool_use_id "toolu_abc"
+        match &messages[1].content[0] {
+            ContentBlock::ToolResult { tool_use_id, .. } => assert_eq!(tool_use_id, "toolu_abc"),
+            _ => panic!("expected ToolResult"),
+        }
+    }
+
+    #[test]
+    fn test_summarize_context_definition_has_correct_schema() {
+        let def = summarize_context_definition();
+        assert_eq!(def.name, "SummarizeContext");
+        assert!(def.description.contains("meta-tool"));
+        let schema = &def.input_schema;
+        assert_eq!(schema["required"][0], "summaries");
+        let items = &schema["properties"]["summaries"]["items"];
+        assert_eq!(items["required"][0], "tool_use_id");
+        assert_eq!(items["required"][1], "summary");
+    }
+
+    #[test]
+    fn test_build_request_includes_summarize_context_tool() {
+        let state = make_test_state("hello");
+        let request = build_request(&state);
+        assert!(
+            request.tools.iter().any(|t| t.name == "SummarizeContext"),
+            "SummarizeContext tool must be in every API request"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_summarize_context_meta_tool_erased_from_history() {
+        // Scenario: LLM calls SummarizeContext + Echo in same turn.
+        // After processing:
+        // - SummarizeContext tool_use is removed from assistant message
+        // - No ToolResult for SummarizeContext in the history
+        // - Echo still executes normally
+
+        // Turn 1: assistant calls Echo, response comes back
+        // Turn 2: assistant calls SummarizeContext on the Echo result + text "done"
+
+        // Round 1: Echo tool call
+        let round1 = vec![
+            SseEvent::MessageStart {
+                message: MessageStartInfo {
+                    id: "msg_1".into(),
+                    model: "test".into(),
+                    usage: None,
+                },
+            },
+            SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStartInfo::ToolUse {
+                    id: "toolu_echo".into(),
+                    name: "Echo".into(),
+                },
+            },
+            SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: Delta::InputJsonDelta {
+                    partial_json: r#"{"text": "big output here"}"#.into(),
+                },
+            },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta {
+                delta: MessageDeltaInfo {
+                    stop_reason: Some("tool_use".into()),
+                },
+                usage: None,
+            },
+            SseEvent::MessageStop,
+        ];
+
+        // Round 2: SummarizeContext call (no other tools)
+        let round2 = vec![
+            SseEvent::MessageStart {
+                message: MessageStartInfo {
+                    id: "msg_2".into(),
+                    model: "test".into(),
+                    usage: None,
+                },
+            },
+            SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStartInfo::ToolUse {
+                    id: "toolu_sc".into(),
+                    name: "SummarizeContext".into(),
+                },
+            },
+            SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: Delta::InputJsonDelta {
+                    partial_json: r#"{"summaries":[{"tool_use_id":"toolu_echo","summary":"Echo returned big output, not needed"}]}"#.into(),
+                },
+            },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta {
+                delta: MessageDeltaInfo {
+                    stop_reason: Some("tool_use".into()),
+                },
+                usage: None,
+            },
+            SseEvent::MessageStop,
+        ];
+
+        // Round 3: final text response (after SummarizeContext erased, no more tools)
+        // Actually after SummarizeContext with no other tools, TurnComplete fires.
+        // So we don't need round 3.
+
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![round1, round2]),
+        };
+
+        let mut state = make_test_state("test summarize");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        run_turn(&mut state, &mock, &AutoApprovePrompter, &tx).await.unwrap();
+
+        // Collect events
+        let mut events = Vec::new();
+        while let Ok(e) = rx.try_recv() {
+            events.push(e);
+        }
+
+        // 1. ContextSummarized event was emitted
+        assert!(
+            events.iter().any(|e| matches!(e, ConversationEvent::ContextSummarized { replaced: 1, requested: 1 })),
+            "expected ContextSummarized event"
+        );
+
+        // 2. The Echo tool_result was replaced with the summary
+        let echo_result = state.messages.iter()
+            .flat_map(|m| &m.content)
+            .find(|b| matches!(b, ContentBlock::ToolResult { tool_use_id, .. } if tool_use_id == "toolu_echo"));
+        match echo_result {
+            Some(ContentBlock::ToolResult { content, .. }) => match content {
+                ToolResultContent::Text(t) => {
+                    assert!(t.contains("[Summarized]"), "tool result should be summarized, got: {t}");
+                    assert!(t.contains("not needed"), "summary text should be preserved");
+                }
+                _ => panic!("expected Text content"),
+            },
+            _ => panic!("expected to find the echo tool result"),
+        }
+
+        // 3. No SummarizeContext tool_use or tool_result in history
+        for msg in &state.messages {
+            for block in &msg.content {
+                match block {
+                    ContentBlock::ToolUse { name, .. } => {
+                        assert_ne!(name, "SummarizeContext", "SummarizeContext tool_use must not appear in history");
+                    }
+                    ContentBlock::ToolResult { tool_use_id, .. } => {
+                        assert_ne!(tool_use_id, "toolu_sc", "SummarizeContext tool_result must not appear in history");
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // 4. TurnComplete was emitted (after erasing SummarizeContext, no remaining tools)
+        assert!(
+            events.iter().any(|e| matches!(e, ConversationEvent::TurnComplete)),
+            "expected TurnComplete"
+        );
     }
 }

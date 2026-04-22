@@ -262,7 +262,8 @@ impl AppState {
             | ConversationEvent::SseRawChunk(_)
             | ConversationEvent::SubAgentStarted { .. }
             | ConversationEvent::SubAgentProgress { .. }
-            | ConversationEvent::SubAgentComplete { .. } => false,
+            | ConversationEvent::SubAgentComplete { .. }
+            | ConversationEvent::ContextSummarized { .. } => false,
         }
     }
 
