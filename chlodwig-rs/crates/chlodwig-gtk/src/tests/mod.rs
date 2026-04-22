@@ -49,3 +49,4 @@ mod clipboard_ordering_tests;
 mod global_ui_font_tests;
 mod sarasa_width_mode_tests;
 mod pipeline_manifest_tests;
+mod toggle_tool_button_tests;

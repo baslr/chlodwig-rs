@@ -450,6 +450,40 @@ pub fn wire(ctx: SubmitContext) {
         submit_clone();
     });
 
+    // Toggle Tool Usage button (label "Hide Tools" / "Show Tools").
+    //
+    // Flips `state.show_tool_usage`, updates the button label, and
+    // re-renders the whole final view so already-displayed
+    // ToolUseStart / ToolResult blocks appear or disappear immediately
+    // (without waiting for the next streaming event).
+    //
+    // Borrow discipline (Gotcha #46): we read out everything we need
+    // from the borrow into locals BEFORE calling any GTK setter that
+    // could synchronously fire signals (`set_label`, the buffer
+    // mutations inside `render_all_blocks_into`).
+    {
+        let state_for_toggle = app_state.clone();
+        let final_view_for_toggle = widgets.final_view.clone();
+        let viewport_cols_for_toggle = viewport_cols.clone();
+        widgets.toggle_tool_button.connect_clicked(move |btn| {
+            let new_show = {
+                let mut state = state_for_toggle.borrow_mut();
+                state.show_tool_usage = !state.show_tool_usage;
+                state.show_tool_usage
+            };
+            btn.set_label(if new_show { "Hide Tools" } else { "Show Tools" });
+            // Re-render entire output from blocks — read state immutably here.
+            let state = state_for_toggle.borrow();
+            render::render_all_blocks_into(
+                &final_view_for_toggle,
+                &state,
+                viewport_cols_for_toggle.get(),
+                true,
+            );
+        });
+    }
+
+
     // Cmd+Enter (macOS) or Ctrl+Enter (Linux/Windows) to send.
     // Plain Enter inserts a newline (GTK default behavior).
     //
