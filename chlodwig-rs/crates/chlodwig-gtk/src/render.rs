@@ -61,15 +61,12 @@ pub fn render_block(view: &EmojiTextView, block: &DisplayBlock, ctx: &RenderCtx)
                 .filter(|(bi, _, _)| *bi == ctx.block_index)
                 .map(|(_, ti, td)| (*ti, td))
                 .collect();
-            let lines = if overrides.is_empty() {
-                chlodwig_core::render_markdown_with_width(text, ctx.viewport_width)
-            } else {
-                chlodwig_core::render_markdown_with_table_overrides(
-                    text,
-                    ctx.viewport_width,
-                    &overrides,
-                )
-            };
+            let lines = chlodwig_core::render_markdown_with_options(
+                text,
+                ctx.viewport_width,
+                &overrides,
+                chlodwig_gtk::sarasa_width_mode(),
+            );
             chlodwig_gtk::md_renderer::append_styled_lines(
                 view,
                 &lines,
@@ -163,7 +160,12 @@ pub fn render_streaming_into(
         return false;
     }
 
-    let lines = chlodwig_core::render_markdown_with_width(text, viewport_width);
+    let lines = chlodwig_core::render_markdown_with_options(
+        text,
+        viewport_width,
+        &[],
+        chlodwig_gtk::sarasa_width_mode(),
+    );
     chlodwig_gtk::md_renderer::append_styled_lines(view, &lines, &[], 0);
     true
 }

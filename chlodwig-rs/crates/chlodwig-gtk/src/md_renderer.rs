@@ -389,50 +389,6 @@ mod gtk_impl {
         }
     }
 
-    /// Render Markdown text into a GTK TextBuffer at the end.
-    /// Parses the text via core, then inserts styled spans.
-    /// Convenience wrapper for callers without table-sort support.
-    pub fn append_markdown(view: &EmojiTextView, text: &str) {
-        let lines = chlodwig_core::render_markdown(text);
-        append_styled_lines(view, &lines, &[], 0);
-    }
-
-    /// Render Markdown text with viewport width constraint.
-    /// Convenience wrapper for callers without table-sort support.
-    pub fn append_markdown_with_width(view: &EmojiTextView, text: &str, width: usize) {
-        let lines = chlodwig_core::render_markdown_with_width(text, width);
-        append_styled_lines(view, &lines, &[], 0);
-    }
-
-    /// Delete a range of text from the buffer (by char offsets) and insert
-    /// Markdown-rendered text in its place.
-    pub fn replace_range_with_markdown(
-        view: &EmojiTextView,
-        start_offset: i32,
-        end_offset: i32,
-        text: &str,
-    ) {
-        let buffer = view.buffer();
-        let mut start = buffer.iter_at_offset(start_offset);
-        let mut end = buffer.iter_at_offset(end_offset);
-        buffer.delete(&mut start, &mut end);
-
-        let lines = chlodwig_core::render_markdown(text);
-
-        // Insert at the position where we deleted
-        for (line_idx, line) in lines.iter().enumerate() {
-            if line_idx > 0 {
-                let mut iter = buffer.end_iter();
-                buffer.insert(&mut iter, "\n");
-            }
-
-            for span in &line.spans {
-                let tag_name = ensure_tag(&buffer, &span.style);
-                insert_text_with_emoji_and_tag(view, &span.text, &tag_name, span.style.monospace);
-            }
-        }
-    }
-
     /// Insert text at the end of the view's buffer with emoji-as-overlay support.
     ///
     /// Plain text segments get the specified tag applied.

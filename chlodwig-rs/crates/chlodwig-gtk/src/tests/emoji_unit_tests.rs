@@ -10,53 +10,51 @@ use crate::emoji::platform;
 
 
 #[test]
-fn test_is_emoji_char_sunflower() {
-    assert!(is_emoji_char('🌻'));
+fn test_is_default_emoji_sunflower() {
+    assert!(is_default_emoji('🌻'));
 }
 
 #[test]
-fn test_is_emoji_char_smile() {
-    assert!(is_emoji_char('😀'));
+fn test_is_default_emoji_smile_basic() {
+    assert!(is_default_emoji('😀'));
 }
 
 #[test]
-fn test_is_emoji_char_hourglass() {
-    assert!(is_emoji_char('⏳'));
+fn test_is_default_emoji_hourglass_basic() {
+    assert!(is_default_emoji('⏳'));
 }
 
 #[test]
 fn test_is_not_emoji_ascii() {
-    assert!(!is_emoji_char('A'));
-    assert!(!is_emoji_char('1'));
-    assert!(!is_emoji_char(' '));
+    assert!(!is_default_emoji('A') && !is_text_default_pictographic('A'));
+    assert!(!is_default_emoji('1') && !is_text_default_pictographic('1'));
+    assert!(!is_default_emoji(' ') && !is_text_default_pictographic(' '));
 }
 
 #[test]
 fn test_is_not_emoji_triangle() {
-    // ▶ U+25B6 is in Geometric Shapes, NOT in our emoji ranges
-    // It renders fine via Pango/CoreText as a normal glyph
-    assert!(!is_emoji_char('▶'));
+    // ▶ U+25B6 is in Geometric Shapes, NOT in either emoji bucket
+    assert!(!is_default_emoji('▶') && !is_text_default_pictographic('▶'));
 }
 
 #[test]
 fn test_is_not_emoji_arrow() {
-    assert!(!is_emoji_char('→'));
+    assert!(!is_default_emoji('→') && !is_text_default_pictographic('→'));
 }
 
 #[test]
 fn test_is_not_emoji_box_drawing() {
-    assert!(!is_emoji_char('├'));
-    assert!(!is_emoji_char('│'));
-    assert!(!is_emoji_char('└'));
+    for c in ['├', '│', '└'] {
+        assert!(!is_default_emoji(c) && !is_text_default_pictographic(c));
+    }
 }
 
 #[test]
 fn test_is_not_emoji_checkmark() {
-    // ✓ U+2713 is NOT in the Emoji_Presentation set
-    // PangoCairo renders it correctly via Lucida Grande
-    assert!(!is_emoji_char('✓'));
-    // But ✅ U+2705 IS an emoji
-    assert!(is_emoji_char('✅'));
+    // ✓ U+2713 is in neither bucket — Pango renders it via Lucida Grande
+    assert!(!is_default_emoji('✓') && !is_text_default_pictographic('✓'));
+    // But ✅ U+2705 IS a default emoji
+    assert!(is_default_emoji('✅'));
 }
 
 #[test]
@@ -346,94 +344,68 @@ fn test_emoji_bitmap_tight_cropped() {
 }
 
 // ── Bug #1: Missing Extended_Pictographic chars ──────────────────
+// (now classified as text-default pictographic — bare codepoint is Plain,
+//  with VS16 it becomes Emoji)
 
 #[test]
 fn test_is_emoji_char_sun() {
-    // ☀ U+2600: Extended_Pictographic, commonly used as ☀️ (with VS16).
-    // Must be detected as emoji so CoreText renders the color bitmap.
-    assert!(is_emoji_char('\u{2600}'), "☀ U+2600 must be emoji");
+    // ☀ U+2600: Extended_Pictographic, text-default. Becomes color emoji
+    // with VS16 (☀️) or as ZWJ component.
+    assert!(is_text_default_pictographic('\u{2600}'), "☀ U+2600 must be text-default pictographic");
 }
 
 #[test]
 fn test_is_emoji_char_thunder_cloud() {
-    // ⛈ U+26C8: Extended_Pictographic, commonly used as ⛈️.
-    assert!(is_emoji_char('\u{26C8}'), "⛈ U+26C8 must be emoji");
+    assert!(is_text_default_pictographic('\u{26C8}'), "⛈ U+26C8 must be text-default pictographic");
 }
 
 #[test]
 fn test_is_emoji_char_male_female_signs() {
-    // ♂ U+2642 and ♀ U+2640 are components of ZWJ sequences
-    // (🏊‍♂️ = 🏊 + ZWJ + ♂ + VS16). Without these, ZWJ sequences
-    // get split at the gender sign, breaking the combined emoji.
-    assert!(is_emoji_char('\u{2642}'), "♂ U+2642 must be emoji");
-    assert!(is_emoji_char('\u{2640}'), "♀ U+2640 must be emoji");
+    // ♂ U+2642 and ♀ U+2640 are text-default but appear as ZWJ components
+    // (🏊‍♂️ = 🏊 + ZWJ + ♂ + VS16). Without these in the table, ZWJ
+    // sequences get split at the gender sign.
+    assert!(is_text_default_pictographic('\u{2642}'));
+    assert!(is_text_default_pictographic('\u{2640}'));
 }
 
 #[test]
 fn test_is_emoji_char_misc_symbols_extended() {
-    // Extended_Pictographic chars in Misc Symbols that were missing.
-    assert!(is_emoji_char('\u{2601}'), "☁ U+2601 must be emoji");
-    assert!(is_emoji_char('\u{2602}'), "☂ U+2602 must be emoji");
-    assert!(is_emoji_char('\u{2603}'), "☃ U+2603 must be emoji");
-    assert!(is_emoji_char('\u{2604}'), "☄ U+2604 must be emoji");
-    assert!(is_emoji_char('\u{260E}'), "☎ U+260E must be emoji");
-    assert!(is_emoji_char('\u{2611}'), "☑ U+2611 must be emoji");
-    assert!(is_emoji_char('\u{2618}'), "☘ U+2618 must be emoji");
-    assert!(is_emoji_char('\u{261D}'), "☝ U+261D must be emoji");
-    assert!(is_emoji_char('\u{2620}'), "☠ U+2620 must be emoji");
-    assert!(is_emoji_char('\u{2622}'), "☢ U+2622 must be emoji");
-    assert!(is_emoji_char('\u{2623}'), "☣ U+2623 must be emoji");
+    for c in ['\u{2601}', '\u{2602}', '\u{2603}', '\u{2604}', '\u{260E}',
+              '\u{2611}', '\u{2618}', '\u{261D}', '\u{2620}', '\u{2622}', '\u{2623}'] {
+        assert!(is_text_default_pictographic(c), "U+{:04X} must be text-default pictographic", c as u32);
+    }
 }
 
 #[test]
 fn test_is_emoji_char_symbols_and_religion() {
-    assert!(is_emoji_char('\u{2626}'), "☦ U+2626 must be emoji");
-    assert!(is_emoji_char('\u{262A}'), "☪ U+262A must be emoji");
-    assert!(is_emoji_char('\u{262E}'), "☮ U+262E must be emoji");
-    assert!(is_emoji_char('\u{262F}'), "☯ U+262F must be emoji");
-    assert!(is_emoji_char('\u{2638}'), "☸ U+2638 must be emoji");
-    assert!(is_emoji_char('\u{2639}'), "☹ U+2639 must be emoji");
-    assert!(is_emoji_char('\u{263A}'), "☺ U+263A must be emoji");
+    for c in ['\u{2626}', '\u{262A}', '\u{262E}', '\u{262F}',
+              '\u{2638}', '\u{2639}', '\u{263A}'] {
+        assert!(is_text_default_pictographic(c), "U+{:04X} must be text-default pictographic", c as u32);
+    }
 }
 
 #[test]
 fn test_is_emoji_char_card_suits() {
-    assert!(is_emoji_char('\u{2660}'), "♠ U+2660 must be emoji");
-    assert!(is_emoji_char('\u{2663}'), "♣ U+2663 must be emoji");
-    assert!(is_emoji_char('\u{2665}'), "♥ U+2665 must be emoji");
-    assert!(is_emoji_char('\u{2666}'), "♦ U+2666 must be emoji");
+    for c in ['\u{2660}', '\u{2663}', '\u{2665}', '\u{2666}'] {
+        assert!(is_text_default_pictographic(c), "U+{:04X} must be text-default pictographic", c as u32);
+    }
 }
 
 #[test]
 fn test_is_emoji_char_misc_objects() {
-    assert!(is_emoji_char('\u{2668}'), "♨ U+2668 must be emoji");
-    assert!(is_emoji_char('\u{267B}'), "♻ U+267B must be emoji");
-    assert!(is_emoji_char('\u{2692}'), "⚒ U+2692 must be emoji");
-    assert!(is_emoji_char('\u{2694}'), "⚔ U+2694 must be emoji");
-    assert!(is_emoji_char('\u{2695}'), "⚕ U+2695 must be emoji");
-    assert!(is_emoji_char('\u{2696}'), "⚖ U+2696 must be emoji");
-    assert!(is_emoji_char('\u{2697}'), "⚗ U+2697 must be emoji");
-    assert!(is_emoji_char('\u{2699}'), "⚙ U+2699 must be emoji");
-    assert!(is_emoji_char('\u{269B}'), "⚛ U+269B must be emoji");
-    assert!(is_emoji_char('\u{269C}'), "⚜ U+269C must be emoji");
-    assert!(is_emoji_char('\u{26A0}'), "⚠ U+26A0 must be emoji");
-    assert!(is_emoji_char('\u{26A7}'), "⚧ U+26A7 must be emoji");
-    assert!(is_emoji_char('\u{26B0}'), "⚰ U+26B0 must be emoji");
-    assert!(is_emoji_char('\u{26B1}'), "⚱ U+26B1 must be emoji");
+    for c in ['\u{2668}', '\u{267B}', '\u{2692}', '\u{2694}', '\u{2695}',
+              '\u{2696}', '\u{2697}', '\u{2699}', '\u{269B}', '\u{269C}',
+              '\u{26A0}', '\u{26A7}', '\u{26B0}', '\u{26B1}'] {
+        assert!(is_text_default_pictographic(c), "U+{:04X} must be text-default pictographic", c as u32);
+    }
 }
 
 #[test]
 fn test_is_emoji_char_misc_objects_2() {
-    assert!(is_emoji_char('\u{26CF}'), "⛏ U+26CF must be emoji");
-    assert!(is_emoji_char('\u{26D1}'), "⛑ U+26D1 must be emoji");
-    assert!(is_emoji_char('\u{26D3}'), "⛓ U+26D3 must be emoji");
-    assert!(is_emoji_char('\u{26E9}'), "⛩ U+26E9 must be emoji");
-    assert!(is_emoji_char('\u{26F0}'), "⛰ U+26F0 must be emoji");
-    assert!(is_emoji_char('\u{26F1}'), "⛱ U+26F1 must be emoji");
-    assert!(is_emoji_char('\u{26F4}'), "⛴ U+26F4 must be emoji");
-    assert!(is_emoji_char('\u{26F7}'), "⛷ U+26F7 must be emoji");
-    assert!(is_emoji_char('\u{26F8}'), "⛸ U+26F8 must be emoji");
-    assert!(is_emoji_char('\u{26F9}'), "⛹ U+26F9 must be emoji");
+    for c in ['\u{26CF}', '\u{26D1}', '\u{26D3}', '\u{26E9}',
+              '\u{26F0}', '\u{26F1}', '\u{26F4}', '\u{26F7}', '\u{26F8}', '\u{26F9}'] {
+        assert!(is_text_default_pictographic(c), "U+{:04X} must be text-default pictographic", c as u32);
+    }
 }
 
 // ── Bug #2: ZWJ sequence splitting ───────────────────────────────
@@ -564,3 +536,222 @@ fn test_render_emoji_at_40pt_produces_large_bitmap() {
         bmp_40.width as f64 / bmp_13.width as f64,
     );
 }
+
+// ── Gotcha #54: Text-default vs emoji-default classification ─────
+//
+// Unicode distinguishes two presentation defaults for pictographic chars:
+//   - Emoji_Presentation=Yes  → renders as color emoji by default (😀, 🚀, ⏳)
+//   - Emoji_Presentation=No, Extended_Pictographic=Yes
+//                             → renders as monochrome text by default (☀, ☁, ⚡, ♂)
+//                               only becomes emoji with VS16 (U+FE0F) appended
+//                               or as part of a ZWJ sequence
+//
+// The new API exposes both predicates explicitly. `is_emoji_char` is gone —
+// `split_emoji_segments` decides Emoji-vs-Plain by combining the predicates
+// with the lookahead context (next char is VS16? we are after ZWJ?).
+
+#[test]
+fn test_is_default_emoji_smile() {
+    // 😀 has Emoji_Presentation=Yes → always emoji
+    assert!(is_default_emoji('😀'));
+}
+
+#[test]
+fn test_is_default_emoji_teacup() {
+    // ☕ U+2615: one of the few BMP chars with Emoji_Presentation=Yes
+    assert!(is_default_emoji('☕'));
+}
+
+#[test]
+fn test_is_default_emoji_hourglass() {
+    assert!(is_default_emoji('⏳'));
+}
+
+#[test]
+fn test_is_default_emoji_rejects_text_default_sun() {
+    // ☀ U+2600 has Emoji_Presentation=NO. It must NOT be in default-emoji.
+    assert!(!is_default_emoji('\u{2600}'),
+        "☀ U+2600 has Emoji_Presentation=No — text default, not emoji default");
+}
+
+#[test]
+fn test_is_default_emoji_rejects_text_default_male_sign() {
+    // ♂ U+2642 has Emoji_Presentation=No (component of ZWJ sequences only)
+    assert!(!is_default_emoji('\u{2642}'));
+    assert!(!is_default_emoji('\u{2640}'));
+}
+
+#[test]
+fn test_is_default_emoji_rejects_ascii() {
+    assert!(!is_default_emoji('A'));
+    assert!(!is_default_emoji(' '));
+}
+
+#[test]
+fn test_is_default_emoji_rejects_box_drawing() {
+    assert!(!is_default_emoji('├'));
+    assert!(!is_default_emoji('│'));
+}
+
+#[test]
+fn test_is_text_default_pictographic_sun() {
+    // ☀ U+2600 is Extended_Pictographic with text default
+    assert!(is_text_default_pictographic('\u{2600}'));
+}
+
+#[test]
+fn test_is_text_default_pictographic_thunder_cloud() {
+    assert!(is_text_default_pictographic('\u{26C8}'));
+}
+
+#[test]
+fn test_is_text_default_pictographic_male_female_signs() {
+    // Required for ZWJ sequences like 🏊‍♂️
+    assert!(is_text_default_pictographic('\u{2642}'));
+    assert!(is_text_default_pictographic('\u{2640}'));
+}
+
+#[test]
+fn test_is_text_default_pictographic_rejects_default_emoji() {
+    // The two predicates must be DISJOINT — no codepoint in both.
+    // 😀 has emoji default → must not be in text-default set.
+    assert!(!is_text_default_pictographic('😀'));
+    assert!(!is_text_default_pictographic('☕'));
+    assert!(!is_text_default_pictographic('⏳'));
+}
+
+#[test]
+fn test_predicates_are_disjoint_for_known_codepoints() {
+    // Sample audit: every codepoint we care about is in EXACTLY ONE bucket.
+    let cases: &[(char, bool, bool)] = &[
+        // (char, default_emoji, text_default_pictographic)
+        ('😀', true,  false),
+        ('☕', true,  false),
+        ('⏳', true,  false),
+        ('🌻', true,  false),
+        ('☀', false, true),
+        ('☁', false, true),
+        ('⚡', true,  false),  // U+26A1 has Emoji_Presentation=Yes (width=2)
+        ('♂', false, true),
+        ('♀', false, true),
+        ('⛈', false, true),
+        ('A', false, false),
+        ('▶', false, false),
+        ('→', false, false),
+        ('├', false, false),
+        ('✓', false, false),
+    ];
+    for (c, want_de, want_tdp) in cases {
+        assert_eq!(is_default_emoji(*c), *want_de,
+            "is_default_emoji({:?} U+{:04X})", c, *c as u32);
+        assert_eq!(is_text_default_pictographic(*c), *want_tdp,
+            "is_text_default_pictographic({:?} U+{:04X})", c, *c as u32);
+        assert!(!(*want_de && *want_tdp),
+            "{:?} cannot be in both buckets", c);
+    }
+}
+
+// ── Splitter: bare text-default chars become Plain segments ──────
+
+#[test]
+fn test_split_bare_sun_is_plain() {
+    // Core regression: ☀ alone (no VS16) → Plain → Pango renders monochrome
+    // glyph from Sarasa, occupies 1 column → table borders stay aligned.
+    let segs = split_emoji_segments("☀");
+    assert_eq!(segs, vec![TextSegment::Plain("☀".into())],
+        "bare ☀ U+2600 (no VS16) must be Plain, not Emoji: {:?}", segs);
+}
+
+#[test]
+fn test_split_sun_with_vs16_is_emoji() {
+    // ☀️ (with VS16) opts in to emoji presentation → Emoji segment
+    let segs = split_emoji_segments("☀\u{FE0F}");
+    assert_eq!(segs.len(), 1);
+    assert!(matches!(&segs[0], TextSegment::Emoji(s) if s == "☀\u{FE0F}"),
+        "☀️ with VS16 must be Emoji: {:?}", segs[0]);
+}
+
+#[test]
+fn test_split_bare_lightning_is_emoji() {
+    // ⚡ U+26A1 — Emoji_Presentation=Yes (unicode_width=2). It IS a default
+    // emoji, no VS16 needed. Goes through CoreText overlay.
+    let segs = split_emoji_segments("⚡");
+    assert_eq!(segs, vec![TextSegment::Emoji("⚡".into())]);
+}
+
+#[test]
+fn test_split_bare_male_sign_is_plain() {
+    // ♂ standalone → Plain (it only becomes emoji when joined via ZWJ)
+    let segs = split_emoji_segments("♂");
+    assert_eq!(segs, vec![TextSegment::Plain("♂".into())]);
+}
+
+#[test]
+fn test_split_zwj_swimmer_male_still_one_emoji_segment() {
+    // 🏊‍♂️ — the ♂ in here is NOT bare, it's after ZWJ, so it must be
+    // consumed into the emoji segment. This is the regression to NOT break.
+    let segs = split_emoji_segments("🏊\u{200D}♂\u{FE0F}");
+    assert_eq!(segs.len(), 1, "ZWJ sequence must remain ONE segment: {:?}", segs);
+    assert!(matches!(&segs[0], TextSegment::Emoji(s) if s == "🏊\u{200D}♂\u{FE0F}"));
+}
+
+#[test]
+fn test_split_weather_table_row_mixed() {
+    // What our weather table actually produces — mix of bare and VS16.
+    // Mo: ☀  Di: ⛅  Mi: ☁  Do: ⛈  Fr: 🌧  Sa: ❄  So: ☀️
+    //   ☀ bare       → Plain (text default)
+    //   ⛅ bare       → Emoji (Emoji_Presentation=Yes, width=2)
+    //   ☁ bare       → Plain (text default)
+    //   ⛈ bare       → Plain (text default)
+    //   🌧 bare       → Plain (text default Extended_Pictographic, width=1)
+    //   ❄ bare       → Plain (text default)
+    //   ☀️ with VS16  → Emoji
+    assert!(!is_default_emoji('☀'));   assert!(is_text_default_pictographic('☀'));
+    assert!( is_default_emoji('⛅'));
+    assert!(!is_default_emoji('☁'));   assert!(is_text_default_pictographic('☁'));
+    assert!(!is_default_emoji('⛈'));   assert!(is_text_default_pictographic('⛈'));
+    assert!(!is_default_emoji('🌧'));  assert!(is_text_default_pictographic('🌧'));
+    assert!(!is_default_emoji('❄'));   assert!(is_text_default_pictographic('❄'));
+
+    let bare_sun = split_emoji_segments("☀");
+    assert_eq!(bare_sun, vec![TextSegment::Plain("☀".into())]);
+
+    let vs16_sun = split_emoji_segments("☀\u{FE0F}");
+    assert!(matches!(&vs16_sun[0], TextSegment::Emoji(_)));
+}
+
+#[test]
+fn test_split_table_cell_bare_sun_padded() {
+    // " ☀     " — bare sun in a table cell with padding.
+    // With the fix, the entire cell is one Plain segment (no overlay,
+    // unicode_width counts ☀ as 1, Pango renders it as 1-column glyph,
+    // table borders stay aligned).
+    let text = " ☀      ";
+    let segs = split_emoji_segments(text);
+    assert_eq!(segs, vec![TextSegment::Plain(" ☀      ".into())],
+        "bare ☀ in padded cell must be a single Plain segment: {:?}", segs);
+}
+
+#[test]
+fn test_split_emoji_default_chars_still_work_without_vs16() {
+    // Default-emoji chars must NOT require VS16. The smile, the rocket,
+    // the teacup — they are emoji on their own.
+    let segs = split_emoji_segments("☕");
+    assert_eq!(segs, vec![TextSegment::Emoji("☕".into())]);
+
+    let segs = split_emoji_segments("🚀");
+    assert_eq!(segs, vec![TextSegment::Emoji("🚀".into())]);
+}
+
+#[test]
+fn test_emoji_modifier_no_longer_includes_zwj_or_vs16_in_is_default_emoji() {
+    // Cleanup: ZWJ and VS16 are MODIFIERS, not emoji bases.
+    // The old `is_emoji_char` matched them as a hack. The new
+    // `is_default_emoji` must NOT — they are handled separately
+    // by is_emoji_modifier and the splitter.
+    assert!(!is_default_emoji('\u{200D}'), "ZWJ is modifier, not emoji base");
+    assert!(!is_default_emoji('\u{FE0F}'), "VS16 is modifier, not emoji base");
+    assert!(!is_text_default_pictographic('\u{200D}'));
+    assert!(!is_text_default_pictographic('\u{FE0F}'));
+}
+

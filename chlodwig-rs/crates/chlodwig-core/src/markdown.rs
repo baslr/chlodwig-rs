@@ -11,7 +11,207 @@
 //! syntect-highlighted ones; the GTK backend can use GtkSourceView later.
 
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+// ── Width mode ──────────────────────────────────────────────────────
+//
+// East_Asian_Width=Ambiguous codepoints (→ ▶ ☀ α ① ≈ etc.) render as
+// 1 column in Western contexts and 2 columns in CJK contexts. Per
+// Unicode UAX #11 the choice is up to the renderer.
+//
+//   - `WidthMode::Default` — ambiguous = 1 column.
+//     Use for terminals (TUI) and any non-CJK monospace font.
+//   - `WidthMode::Cjk`     — ambiguous = 2 columns.
+//     Use when the rendering font (e.g. Sarasa Mono J) draws ambiguous
+//     codepoints fullwidth, so layout calculations match real glyph widths.
+//
+// Plumbed through `render_markdown_with_options()`. The 2- and 3-arg
+// convenience APIs default to `Default` (= TUI behavior, no breakage).
+// GTK call sites pass `Cjk` because Sarasa Mono J is a CJK font.
+//
+// SSoT: `str_width(s, mode)` and `char_width(c, mode)` are the ONLY
+// width-measuring functions used by the table renderer. Never call
+// `s.width()` / `UnicodeWidthChar::width()` directly inside a
+// width-mode-aware path — that re-introduces the inconsistency.
+
+/// East-Asian-Width interpretation for layout calculations.
+///
+/// `Font(&FontMetrics)` is the most accurate variant: it asks the actual
+/// rendering font (via its `hmtx` table) how many cells each codepoint
+/// occupies. Use this when the GUI font has mixed-width Ambiguous chars
+/// (Sarasa Mono J: → is 2 cells but │ is 1 cell — neither `Default` nor
+/// `Cjk` is correct).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WidthMode<'a> {
+    /// Spec-default: Ambiguous chars are 1 column. Use for terminals.
+    Default,
+    /// CJK-aware: Ambiguous chars are 2 columns. Pure UAX-#11 CJK mode.
+    /// Rarely the right answer for real fonts — prefer `Font`.
+    Cjk,
+    /// Font-truth: each codepoint's width is read from the font's `hmtx`
+    /// table. Cells = round(hadv / em-half). Falls back to `width_cjk`
+    /// for codepoints not present in the font.
+    Font(&'a FontMetrics),
+}
+
+#[inline]
+fn char_width(c: char, mode: WidthMode<'_>) -> usize {
+    match mode {
+        WidthMode::Default => UnicodeWidthChar::width(c).unwrap_or(0),
+        WidthMode::Cjk => UnicodeWidthChar::width_cjk(c).unwrap_or(0),
+        WidthMode::Font(m) => m.char_width(c),
+    }
+}
+
+#[inline]
+fn str_width(s: &str, mode: WidthMode<'_>) -> usize {
+    match mode {
+        WidthMode::Default => UnicodeWidthStr::width(s),
+        WidthMode::Cjk => UnicodeWidthStr::width_cjk(s),
+        WidthMode::Font(m) => s.chars().map(|c| m.char_width(c)).sum(),
+    }
+}
+
+// ── FontMetrics: per-codepoint cell width from font hmtx table ────
+//
+// O(1) lookup via ttf-parser. The font's `hmtx` table gives horizontal
+// advance per glyph; we round to the nearest cell using the half-advance
+// of a reference ASCII glyph (e.g. 'M' = 1 cell). For Sarasa Mono J the
+// half-advance is 500 font units, so adv=500 → 1 cell, adv=1000 → 2 cells.
+//
+// Construction reads the `cmap`, `hhea`, and `hmtx` tables once. After
+// that, every char_width() call is two table lookups (cmap → glyph_id →
+// advance) — comparable to `unicode_width::width()`.
+//
+// The font bytes can be borrowed (&'a [u8]) or owned (Vec<u8>). The
+// owned variant uses `from_ttf_owned` which boxes the bytes so the
+// lifetime is 'static — useful for `static FONT_METRICS: OnceLock<...>`.
+
+pub struct FontMetrics {
+    /// Cell-widths indexed by Unicode codepoint, lazily-populated cache
+    /// is unnecessary: we precompute the small lookup table at construction
+    /// from the font's cmap. For codepoints outside the cmap, falls back
+    /// to `unicode_width::width_cjk`.
+    ///
+    /// Storage: HashMap<char, u8>. We don't use a Vec because Unicode
+    /// has 0x110000 codepoints and most are absent from any font.
+    widths: std::collections::HashMap<char, u8>,
+    /// Half-advance unit (e.g. 500 for Sarasa). Used for fallback.
+    half_advance: u16,
+    /// Owned font bytes — kept alive so the cmap/hmtx data stays valid.
+    /// `None` for the borrowed-bytes variant.
+    _owned_bytes: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for FontMetrics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FontMetrics")
+            .field("entries", &self.widths.len())
+            .field("half_advance", &self.half_advance)
+            .finish()
+    }
+}
+
+impl PartialEq for FontMetrics {
+    /// Two `FontMetrics` are equal iff they have the same lookup table and
+    /// half-advance. Used only by `WidthMode`'s derived `PartialEq` —
+    /// compares pointer identity in practice via the enum variant.
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+impl Eq for FontMetrics {}
+
+impl FontMetrics {
+    /// Build from owned font bytes. The bytes are stored inside the struct
+    /// so the resulting `FontMetrics` has no lifetime parameter.
+    pub fn from_ttf_owned(bytes: Vec<u8>) -> Result<Self, ttf_parser::FaceParsingError> {
+        // SAFETY note: we parse against a temporary borrow, extract all
+        // numeric data into the HashMap, then store the Vec inside Self.
+        // No Face<'_> is retained — the lifetime issue is moot.
+        let face = ttf_parser::Face::parse(&bytes, 0)?;
+        let mut metrics = Self::build_from_face(&face);
+        metrics._owned_bytes = Some(bytes);
+        Ok(metrics)
+    }
+
+    /// Build from borrowed font bytes (e.g. `include_bytes!()`).
+    /// The returned `FontMetrics` has no lifetime tied to the input —
+    /// all needed data is copied into the struct at construction.
+    pub fn from_ttf(bytes: &[u8]) -> Result<Self, ttf_parser::FaceParsingError> {
+        let face = ttf_parser::Face::parse(bytes, 0)?;
+        Ok(Self::build_from_face(&face))
+    }
+
+    fn build_from_face(face: &ttf_parser::Face<'_>) -> Self {
+        // Use 'M' (or fallback) to derive the half-advance unit (1 cell).
+        let m_glyph = face.glyph_index('M');
+        let half_advance = m_glyph
+            .and_then(|g| face.glyph_hor_advance(g))
+            .unwrap_or(500); // sensible default
+
+        let mut widths = std::collections::HashMap::new();
+
+        // Walk every cmap subtable to enumerate all (codepoint, glyph_id)
+        // pairs the font defines. ttf-parser's cmap iterator gives us
+        // exactly this in one pass.
+        for subtable in face.tables().cmap.iter().flat_map(|c| c.subtables) {
+            if !subtable.is_unicode() {
+                continue;
+            }
+            subtable.codepoints(|cp| {
+                if let Some(c) = char::from_u32(cp) {
+                    if let Some(gid) = subtable.glyph_index(cp) {
+                        if let Some(adv) = face.glyph_hor_advance(gid) {
+                            // Round to nearest cell: 500 → 1, 1000 → 2, 1500 → 3.
+                            let cells = ((adv as f32) / (half_advance as f32))
+                                .round() as i32;
+                            let cells = cells.clamp(0, 255) as u8;
+                            widths.entry(c).or_insert(cells);
+                        }
+                    }
+                }
+            });
+        }
+
+        Self {
+            widths,
+            half_advance,
+            _owned_bytes: None,
+        }
+    }
+
+    /// Width in cells for a single character. Returns `width_cjk` fallback
+    /// for codepoints not present in the font.
+    pub fn char_width(&self, c: char) -> usize {
+        if let Some(&w) = self.widths.get(&c) {
+            return w as usize;
+        }
+        UnicodeWidthChar::width_cjk(c).unwrap_or(0)
+    }
+
+    /// Apply per-codepoint width overrides, consuming `self` and returning
+    /// a new `FontMetrics` whose `char_width(c)` returns the override value
+    /// for any `c` in `overrides`. Used to fix codepoints that are NOT in
+    /// the font's cmap but ARE rendered by a known system fallback at a
+    /// specific width (e.g. `✉ U+2709` → 2 cells via Apple Color Emoji).
+    ///
+    /// Overrides win over the cmap — call sites that need to lie to layout
+    /// (because the system fallback ignores the truth font) take precedence.
+    /// See chlodwig-gtk's `pipeline_width_overrides()` for the canonical
+    /// caller and Gotcha #56 in `CLAUDE.md` for the rationale.
+    pub fn with_width_overrides<I>(mut self, overrides: I) -> Self
+    where
+        I: IntoIterator<Item = (char, u8)>,
+    {
+        for (c, w) in overrides {
+            self.widths.insert(c, w);
+        }
+        self
+    }
+}
+
+
 
 // ── Style types ─────────────────────────────────────────────────────
 
@@ -142,8 +342,22 @@ impl StyledLine {
 
     /// Total display width in terminal columns (unicode-width).
     pub fn display_width(&self) -> usize {
-        self.spans.iter().map(|s| s.text.width()).sum()
+        self.spans.iter().map(|s| str_width(&s.text, WidthMode::Default)).sum()
     }
+
+    /// Total display width assuming CJK font (Ambiguous chars count as 2).
+    /// Use this when the rendering font draws ambiguous codepoints fullwidth
+    /// (e.g. Sarasa Mono J). See `WidthMode` docs.
+    pub fn display_width_cjk(&self) -> usize {
+        self.spans.iter().map(|s| str_width(&s.text, WidthMode::Cjk)).sum()
+    }
+
+    /// Total display width under an arbitrary `WidthMode`. The font-aware
+    /// variant is the most accurate for GUI fonts with mixed-width glyphs.
+    pub fn display_width_with_mode(&self, mode: WidthMode<'_>) -> usize {
+        self.spans.iter().map(|s| str_width(&s.text, mode)).sum()
+    }
+
 
     /// Collect all span texts into a single string.
     pub fn text(&self) -> String {
@@ -159,13 +373,13 @@ const CODE_BG: MdColor = MdColor::Rgb(45, 45, 45);
 
 /// Render Markdown text to styled lines (unlimited viewport width).
 pub fn render_markdown(text: &str) -> Vec<StyledLine> {
-    render_markdown_with_width(text, usize::MAX)
+    render_markdown_with_options(text, usize::MAX, &[], WidthMode::Default)
 }
 
 /// Render Markdown text to styled lines, wrapping table columns to fit
 /// within `viewport_width` terminal columns.
 pub fn render_markdown_with_width(text: &str, viewport_width: usize) -> Vec<StyledLine> {
-    render_markdown_with_table_overrides(text, viewport_width, &[])
+    render_markdown_with_options(text, viewport_width, &[], WidthMode::Default)
 }
 
 /// Render Markdown text to styled lines, with optional sorted table overrides.
@@ -177,6 +391,20 @@ pub fn render_markdown_with_table_overrides(
     text: &str,
     viewport_width: usize,
     table_overrides: &[(usize, &TableData)],
+) -> Vec<StyledLine> {
+    render_markdown_with_options(text, viewport_width, table_overrides, WidthMode::Default)
+}
+
+/// Canonical Markdown renderer — every other entry point delegates here.
+///
+/// `width_mode` controls how East-Asian-Width=Ambiguous codepoints are
+/// counted in table layout (see `WidthMode` docs). TUI uses `Default`,
+/// GTK with Sarasa Mono J uses `Cjk`.
+pub fn render_markdown_with_options(
+    text: &str,
+    viewport_width: usize,
+    table_overrides: &[(usize, &TableData)],
+    width_mode: WidthMode,
 ) -> Vec<StyledLine> {
     let options = Options::ENABLE_STRIKETHROUGH
         | Options::ENABLE_TABLES
@@ -463,7 +691,7 @@ pub fn render_markdown_with_table_overrides(
             Event::End(TagEnd::Table) => {
                 // Check for a sorted table override
                 if let Some((_idx, td)) = table_overrides.iter().find(|(idx, _)| *idx == table_counter) {
-                    let lines = td.render(viewport_width);
+                    let lines = td.render_with_mode(viewport_width, width_mode);
                     result.extend(lines);
                 } else {
                     render_table(
@@ -471,6 +699,7 @@ pub fn render_markdown_with_table_overrides(
                         &table_rows,
                         &table_alignments,
                         viewport_width,
+                        width_mode,
                         &mut result,
                     );
                 }
@@ -733,7 +962,14 @@ impl TableData {
 
     /// Render this table to styled lines, fitting within `viewport_width`.
     /// Adds a sort indicator (▲/▼) to the sorted column header.
+    /// Uses `WidthMode::Default` (terminal columns). For CJK fonts use
+    /// `render_with_mode()`.
     pub fn render(&self, viewport_width: usize) -> Vec<StyledLine> {
+        self.render_with_mode(viewport_width, WidthMode::Default)
+    }
+
+    /// Render this table with an explicit width mode. See `WidthMode` docs.
+    pub fn render_with_mode(&self, viewport_width: usize, width_mode: WidthMode) -> Vec<StyledLine> {
         // Build header with sort indicator
         let head_with_indicator: Vec<String> = self.head.iter().enumerate().map(|(i, h)| {
             if self.sort_column == Some(i) {
@@ -750,6 +986,7 @@ impl TableData {
             &self.rows,
             &self.alignments,
             viewport_width,
+            width_mode,
             &mut result,
         );
         result
@@ -824,6 +1061,7 @@ fn render_table(
     rows: &[Vec<String>],
     _alignments: &[Alignment],
     viewport_width: usize,
+    width_mode: WidthMode,
     result: &mut Vec<StyledLine>,
 ) {
     let col_count = head.len().max(rows.iter().map(|r| r.len()).max().unwrap_or(0));
@@ -833,12 +1071,12 @@ fn render_table(
 
     let mut col_widths: Vec<usize> = vec![0; col_count];
     for (i, cell) in head.iter().enumerate() {
-        col_widths[i] = col_widths[i].max(cell.width());
+        col_widths[i] = col_widths[i].max(str_width(cell, width_mode));
     }
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if i < col_count {
-                col_widths[i] = col_widths[i].max(cell.width());
+                col_widths[i] = col_widths[i].max(str_width(cell, width_mode));
             }
         }
     }
@@ -865,22 +1103,22 @@ fn render_table(
     result.push(emit_border(&col_widths, "┌", "┬", "┐", "─", border_style));
 
     // Header row
-    emit_row(head, &col_widths, col_count, border_style, header_style, result);
+    emit_row(head, &col_widths, col_count, width_mode, border_style, header_style, result);
 
     // ├─────┼─────┤
     result.push(emit_border(&col_widths, "├", "┼", "┤", "─", border_style));
 
     // Body rows
     for row in rows {
-        emit_row(row, &col_widths, col_count, border_style, cell_style, result);
+        emit_row(row, &col_widths, col_count, width_mode, border_style, cell_style, result);
     }
 
     // └─────┴─────┘
     result.push(emit_border(&col_widths, "└", "┴", "┘", "─", border_style));
 }
 
-fn pad_to_width(text: &str, target_width: usize) -> String {
-    let display_w = text.width();
+fn pad_to_width(text: &str, target_width: usize, width_mode: WidthMode) -> String {
+    let display_w = str_width(text, width_mode);
     if display_w >= target_width {
         text.to_string()
     } else {
@@ -888,8 +1126,8 @@ fn pad_to_width(text: &str, target_width: usize) -> String {
     }
 }
 
-fn wrap_cell(text: &str, col_w: usize) -> Vec<String> {
-    if text.width() <= col_w {
+fn wrap_cell(text: &str, col_w: usize, width_mode: WidthMode) -> Vec<String> {
+    if str_width(text, width_mode) <= col_w {
         return vec![text.to_string()];
     }
     let mut lines = Vec::new();
@@ -897,7 +1135,7 @@ fn wrap_cell(text: &str, col_w: usize) -> Vec<String> {
     let mut current_w: usize = 0;
 
     for word in text.split_inclusive(' ') {
-        let word_w = word.width();
+        let word_w = str_width(word, width_mode);
         if current_w + word_w <= col_w || current.is_empty() {
             current.push_str(word);
             current_w += word_w;
@@ -914,13 +1152,13 @@ fn wrap_cell(text: &str, col_w: usize) -> Vec<String> {
     // Force-break lines wider than col_w
     let mut final_lines = Vec::new();
     for line in lines {
-        if line.width() <= col_w {
+        if str_width(&line, width_mode) <= col_w {
             final_lines.push(line);
         } else {
             let mut buf = String::new();
             let mut buf_w: usize = 0;
             for ch in line.chars() {
-                let ch_w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                let ch_w = char_width(ch, width_mode);
                 if buf_w + ch_w > col_w && !buf.is_empty() {
                     final_lines.push(buf);
                     buf = String::new();
@@ -961,6 +1199,7 @@ fn emit_row(
     cells: &[String],
     col_widths: &[usize],
     col_count: usize,
+    width_mode: WidthMode,
     border_style: MdStyle,
     content_style: MdStyle,
     result: &mut Vec<StyledLine>,
@@ -968,7 +1207,7 @@ fn emit_row(
     let wrapped_cells: Vec<Vec<String>> = (0..col_count)
         .map(|i| {
             let text = cells.get(i).map(|s| s.as_str()).unwrap_or("");
-            wrap_cell(text, col_widths[i])
+            wrap_cell(text, col_widths[i], width_mode)
         })
         .collect();
     let max_lines = wrapped_cells.iter().map(|c| c.len()).max().unwrap_or(1);
@@ -985,7 +1224,7 @@ fn emit_row(
                 .map(|s| s.as_str())
                 .unwrap_or("");
             spans.push(StyledSpan {
-                text: format!(" {} ", pad_to_width(cell_text, *w)),
+                text: format!(" {} ", pad_to_width(cell_text, *w, width_mode)),
                 style: content_style,
             });
             spans.push(StyledSpan {
@@ -1935,3 +2174,172 @@ mod tests {
         assert_eq!(sorted.rows[1][0], "500.000");
         assert_eq!(sorted.rows[2][0], "1.234.567");
     }
+
+    // ── WidthMode: font-aware layout ──────────────────────────────
+    //
+    // Background (Gotcha #54 follow-up):
+    //
+    //   `unicode_width::width()` returns 1 for East_Asian_Width=Ambiguous chars
+    //   (→ ▶ ☀ α ① ≈ etc.). `width_cjk()` returns 2 for the SAME chars.
+    //   Per Unicode UAX #11 the choice is up to the renderer.
+    //
+    //   But empirically Sarasa Mono J (the bundled GTK font) does NOT honor
+    //   either pure mode. It picks per-codepoint:
+    //     - Box-Drawing (│ ─ ┌ etc.) → halfwidth (500 hadv, 1 cell)
+    //     - Arrows (→ ↑ ↓ ←)         → fullwidth (1000 hadv, 2 cells)
+    //   So neither `width()` nor `width_cjk()` matches reality.
+    //
+    //   The ONLY truth is the font's `hmtx` table. `WidthMode::Font` reads
+    //   that directly via ttf-parser. Lookup is O(1), no Pango/no display
+    //   server needed.
+
+    #[test]
+    fn test_width_mode_default_table_lines_consistent() {
+        let md = "| Key | Val |\n|---|---|\n| → | x |";
+        let lines = render_markdown_with_options(md, 80, &[], WidthMode::Default);
+        let widths: Vec<usize> = lines.iter()
+            .map(|l| l.display_width())
+            .filter(|w| *w > 0)
+            .collect();
+        assert!(widths.windows(2).all(|w| w[0] == w[1]),
+            "all non-empty default-mode lines must be equal width: {:?}", widths);
+    }
+
+    #[test]
+    fn test_width_mode_default_does_not_change_ascii_table() {
+        let md = "| A | B |\n|---|---|\n| x | y |";
+        let def = render_markdown_with_options(md, 80, &[], WidthMode::Default);
+        let cjk = render_markdown_with_options(md, 80, &[], WidthMode::Cjk);
+        let def_text: Vec<String> = def.iter().map(|l| l.text()).collect();
+        let cjk_text: Vec<String> = cjk.iter().map(|l| l.text()).collect();
+        assert_eq!(def_text, cjk_text);
+    }
+
+    #[test]
+    fn test_render_markdown_with_width_defaults_to_width_mode_default() {
+        let md = "| → | x |\n|---|---|";
+        let two_arg = render_markdown_with_width(md, 80);
+        let four_arg = render_markdown_with_options(md, 80, &[], WidthMode::Default);
+        let a: Vec<String> = two_arg.iter().map(|l| l.text()).collect();
+        let b: Vec<String> = four_arg.iter().map(|l| l.text()).collect();
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_styled_line_display_width_cjk_method() {
+        let lines = render_markdown_with_width("→ arrow", usize::MAX);
+        let line = lines.iter().find(|l| l.text().contains('→')).unwrap();
+        let def_w = line.display_width();
+        let cjk_w = line.display_width_cjk();
+        assert_eq!(cjk_w, def_w + 1,
+            "CJK width must add 1 for →: def={} cjk={}", def_w, cjk_w);
+    }
+
+    #[test]
+    fn test_styled_line_display_width_with_mode_dispatches() {
+        let lines = render_markdown_with_width("→ ASCII", usize::MAX);
+        let line = lines.iter().find(|l| l.text().contains('→')).unwrap();
+        assert_eq!(line.display_width_with_mode(WidthMode::Default), line.display_width());
+        assert_eq!(line.display_width_with_mode(WidthMode::Cjk), line.display_width_cjk());
+    }
+
+    // ── FontMetrics tests ─────────────────────────────────────────
+
+    const SARASA_MONO_J_PATH: &str =
+        "../chlodwig-gtk/resources/SarasaMonoJ-Regular.ttf";
+
+    fn sarasa_metrics() -> FontMetrics {
+        let bytes = std::fs::read(SARASA_MONO_J_PATH)
+            .expect("Sarasa Mono J font missing — needed for FontMetrics tests");
+        FontMetrics::from_ttf_owned(bytes)
+            .expect("ttf-parser should accept Sarasa Mono J")
+    }
+
+    #[test]
+    fn test_font_metrics_loads_from_ttf() {
+        let m = sarasa_metrics();
+        assert!(m.char_width('M') >= 1, "M must have width >= 1");
+    }
+
+    #[test]
+    fn test_font_metrics_ascii_M_is_one_cell() {
+        let m = sarasa_metrics();
+        assert_eq!(m.char_width('M'), 1);
+    }
+
+    #[test]
+    fn test_font_metrics_cjk_中_is_two_cells() {
+        let m = sarasa_metrics();
+        assert_eq!(m.char_width('中'), 2);
+    }
+
+    #[test]
+    fn test_font_metrics_arrow_is_two_cells_in_sarasa() {
+        // → has hadv=1000 in Sarasa Mono J → 2 cells. The bug-driving observation.
+        let m = sarasa_metrics();
+        assert_eq!(m.char_width('→'), 2);
+    }
+
+    #[test]
+    fn test_font_metrics_box_drawing_is_one_cell_in_sarasa() {
+        // │ ─ ┌ etc. have hadv=500 in Sarasa → 1 cell. unicode_width::width_cjk
+        // would say 2, but Sarasa says 1, so we follow the font.
+        let m = sarasa_metrics();
+        for c in ['│', '─', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'] {
+            assert_eq!(m.char_width(c), 1,
+                "{} U+{:04X} must be 1 cell in Sarasa Mono J", c, c as u32);
+        }
+    }
+
+    #[test]
+    fn test_font_metrics_unknown_codepoint_falls_back_safely() {
+        let m = sarasa_metrics();
+        let pua = '\u{E000}';
+        let w = m.char_width(pua);
+        assert!(w <= 2, "PUA fallback width should be sane: {}", w);
+    }
+
+    #[test]
+    fn test_width_mode_font_table_lines_consistent_in_sarasa() {
+        // The actual bug: → in a table must NOT misalign borders.
+        let m = sarasa_metrics();
+        let mode = WidthMode::Font(&m);
+        let md = "| Day | Wx |\n|---|---|\n| Mo | → |\n| Di | x |";
+        let lines = render_markdown_with_options(md, 80, &[], mode);
+        let widths: Vec<usize> = lines.iter()
+            .map(|l| l.display_width_with_mode(mode))
+            .filter(|w| *w > 0)
+            .collect();
+        assert!(widths.windows(2).all(|w| w[0] == w[1]),
+            "Font-mode lines must all have equal width: {:?}\nlines:\n{}",
+            widths,
+            lines.iter().map(|l| format!("  {:?}", l.text())).collect::<Vec<_>>().join("\n")
+        );
+    }
+
+    #[test]
+    fn test_width_mode_font_arrow_row_pads_for_two_cells() {
+        let m = sarasa_metrics();
+        let md = "| K | V |\n|---|---|\n| → | x |";
+        let font = render_markdown_with_options(md, 80, &[], WidthMode::Font(&m));
+        let def = render_markdown_with_options(md, 80, &[], WidthMode::Default);
+
+        let font_arrow = font.iter().find(|l| l.text().contains('→')).unwrap();
+        let def_arrow = def.iter().find(|l| l.text().contains('→')).unwrap();
+
+        let font_chars = font_arrow.text().chars().count();
+        let def_chars = def_arrow.text().chars().count();
+        assert!(font_chars < def_chars,
+            "Sarasa-mode arrow row should have fewer chars (less padding):\n  font[{}]={:?}\n  def[{}]={:?}",
+            font_chars, font_arrow.text(), def_chars, def_arrow.text());
+    }
+
+    #[test]
+    fn test_width_mode_font_box_drawing_stays_one_cell() {
+        // Critical: unicode_width::width_cjk would inflate │ to 2 cells, breaking
+        // tables. WidthMode::Font follows the font's hmtx → 1 cell.
+        let m = sarasa_metrics();
+        assert_eq!(m.char_width('│'), 1);
+        assert_eq!(m.char_width('─'), 1);
+    }
+

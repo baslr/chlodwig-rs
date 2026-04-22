@@ -247,6 +247,49 @@ pub const SARASA_MONO_J_BYTES: &[u8] =
 /// re-introduce the column-alignment problems we had with mixed fonts).
 pub const MONO_FONT_FAMILY: &str = "Sarasa Mono J";
 
+// ── Sarasa Mono J font metrics ─────────────────────────────────────
+//
+// Single source of truth for "how many cells wide is codepoint X in
+// our render font?". Built once per process from the bundled TTF via
+// ttf-parser, then exposed as `WidthMode::Font(...)` to the markdown
+// renderer in core.
+//
+// Why this matters: Sarasa Mono J is a mixed-width font — most BMP
+// chars are halfwidth (1 cell, hadv=500) but some Ambiguous chars
+// like → ↑ ↓ ← are fullwidth (2 cells, hadv=1000). Neither
+// `unicode_width::width()` nor `width_cjk()` matches this per-glyph
+// truth. Reading the font's `hmtx` table is the only correct answer.
+//
+// `OnceLock` is fine here — `FontMetrics::from_ttf` is ~5ms (one-time
+// at first markdown render), the result is immutable and Send+Sync.
+
+static SARASA_METRICS: std::sync::OnceLock<chlodwig_core::FontMetrics> =
+    std::sync::OnceLock::new();
+
+/// Get the cached `FontMetrics` for Sarasa Mono J. Built lazily on
+/// first call; subsequent calls return the same reference.
+///
+/// The metrics include the **pipeline manifest overrides** from
+/// `crate::emoji::pipeline_width_overrides` — codepoints like ✉ U+2709
+/// and ✏ U+270F that are missing from Sarasa's cmap but rendered by
+/// Apple Color Emoji as 2-cell bitmaps. Without the overrides, layout
+/// would reserve 1 cell while the rendered glyph occupies 2, shifting
+/// table borders by one column. See Gotcha #56 in `CLAUDE.md`.
+pub fn sarasa_metrics() -> &'static chlodwig_core::FontMetrics {
+    SARASA_METRICS.get_or_init(|| {
+        chlodwig_core::FontMetrics::from_ttf(SARASA_MONO_J_BYTES)
+            .expect("bundled Sarasa Mono J must be a valid TTF")
+            .with_width_overrides(crate::emoji::pipeline_width_overrides())
+    })
+}
+
+/// Convenience: build a `WidthMode::Font(...)` for Sarasa Mono J.
+/// Pass this to `chlodwig_core::render_markdown_with_options` so table
+/// layout matches actual glyph widths.
+pub fn sarasa_width_mode() -> chlodwig_core::WidthMode<'static> {
+    chlodwig_core::WidthMode::Font(sarasa_metrics())
+}
+
 // ── Bundled Sarasa UI J font ──────────────────────────────────────
 //
 // Proportional UI font for the global GTK chrome — input view,
