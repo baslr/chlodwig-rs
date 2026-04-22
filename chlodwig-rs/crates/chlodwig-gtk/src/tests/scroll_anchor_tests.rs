@@ -408,4 +408,72 @@ fn test_auto_scroll_tick_respects_auto_scroll_flag() {
     );
 }
 
+#[test]
+fn test_resize_rerender_anchors_scroll_to_top_visible_char() {
+    // Cross-tick top-line anchor: at the END of every tick, snapshot the
+    // buffer char offset of the line at the viewport top. At the START of
+    // the next tick, if the viewport width changed (= mid-resize re-wrap),
+    // scroll so the same char offset sits at the viewport top again.
+    let src = include_str!("../event_dispatch.rs");
+    // Cross-tick state
+    assert!(
+        src.contains("top_anchor_offset"),
+        "must keep a cross-tick top_anchor_offset (Option<i32>)"
+    );
+    assert!(
+        src.contains("prev_alloc_width"),
+        "must keep prev_alloc_width across ticks (PIXEL width, not cols — \
+         viewport_columns floors to ~8 px steps and misses sub-column re-wraps \
+         that GTK does on every pixel)"
+    );
+    // Coordinate translation between scroll and final_view widgets
+    // (NOT adj.value() abuse — final_view has its own coord system).
+    assert!(
+        src.contains("translate_coordinates"),
+        "must use Widget::translate_coordinates between scroll and \
+         final_view (they have separate widget coord systems)"
+    );
+    // Snapshot uses line_at_y (NOT iter_at_location — returns None in
+    // un-validated lazy-layout regions of large buffers; line_at_y
+    // triggers Pango layout validation and always returns a valid iter,
+    // already aligned to the buffer-line start).
+    assert!(
+        src.contains("line_at_y"),
+        "snapshot must use line_at_y, not iter_at_location \
+         (iter_at_location returns None for un-validated Pango layout)"
+    );
+    // window_to_buffer_coords subtracts top_margin → can return negative
+    // buf_y at viewport top. Must clamp to 0 before line_at_y.
+    assert!(
+        src.contains(".max(0)"),
+        "buf_y must be clamped to 0 (window_to_buffer_coords subtracts top_margin)"
+    );
+    // Restore triggers only on width change (PIXEL, not cols)
+    assert!(
+        src.contains("width_changed"),
+        "restore must trigger on PIXEL width change (width_changed flag)"
+    );
+    // Anti-drift: re-snap only on user scroll AND when width is stable.
+    // During a continuous resize drag, dozens of width-change ticks fire —
+    // they MUST all reuse the SAME anchor. Per-tick re-snap accumulates
+    // small Pango layout errors and the text drifts by hundreds of chars
+    // over a single drag (observed: 168394 → 170521 = 2127 char drift).
+    assert!(
+        src.contains("user_scrolled") && src.contains("width_stable"),
+        "snapshot guard must combine user_scrolled && width_stable to \
+         prevent per-tick anchor drift during resize"
+    );
+    // user-scroll detection: compare adj.value() to our last set_value.
+    assert!(
+        src.contains("last_adj_set_by_us"),
+        "must distinguish user scroll from our own set_value via \
+         last_adj_set_by_us memo"
+    );
+    // Restore must NOT fight auto-scroll
+    assert!(
+        src.contains("!state_for_events.borrow().auto_scroll.is_active()"),
+        "restore must not fight auto-scroll"
+    );
+}
+
 

@@ -85,12 +85,94 @@ pub fn wire(ctx: EventDispatchContext) {
     let mut last_rendered_cols: usize = 0;
     let mut resize_stable_ticks: u32 = 0;
     let mut resize_pending_cols: usize = 0;
+    // ── Top-line scroll anchor (cross-tick, drag-stable) ────────────
+    //
+    // Anchor = buffer offset of the line currently at the viewport top.
+    //
+    // Update rules (the WHOLE point of getting this right):
+    //   - USER SCROLL → re-snap anchor to new top line.
+    //   - WIDTH CHANGE → restore: scroll so the OLD anchor is back at
+    //     viewport top. Do NOT re-snap. During a continuous drag, dozens
+    //     of width-change ticks fire — they must all use the SAME anchor
+    //     captured before the drag started, otherwise tiny per-tick
+    //     re-snap errors accumulate and the text drifts.
+    //
+    // user_scroll vs. our_scroll detection: after every adj.set_value
+    // we did, we record the value in `last_adj_set_by_us`. At the start
+    // of the next tick we compare adj.value() to it — if different,
+    // GTK or the user moved the value (= user scroll), so re-snap.
+    let mut top_anchor_offset: Option<i32> = None;
+    let mut prev_alloc_width: i32 = 0;
+    let mut last_adj_set_by_us: Option<f64> = None;
     glib::timeout_add_local(Duration::from_millis(16), move || {
         let mut rx_opt = event_rx_cell.borrow_mut();
         let rx = match rx_opt.as_mut() {
             Some(rx) => rx,
             None => return glib::ControlFlow::Continue,
         };
+
+        // ── Detect user scroll & maybe re-snap anchor ────────────────
+        let tv: &gtk4::TextView = final_view.upcast_ref();
+        let curr_alloc_w = tv.allocated_width();
+        let adj = scroll.vadjustment();
+        let curr_adj = adj.value();
+        let user_scrolled = match last_adj_set_by_us {
+            Some(v) => (curr_adj - v).abs() > 0.5,
+            None => true,  // first tick or after we cleared it
+        };
+
+        // Only snap anchor when:
+        //   - user scrolled (or first tick) AND
+        //   - width is stable (avoids capturing a transient mid-resize
+        //     layout where line_at_y can return stale lines)
+        let width_stable = prev_alloc_width == 0 || curr_alloc_w == prev_alloc_width;
+        if user_scrolled && width_stable {
+            if let Some((_, fy)) = scroll.translate_coordinates(&final_view, 0.0, 0.0) {
+                let (_, buf_y_raw) = tv.window_to_buffer_coords(
+                    gtk4::TextWindowType::Widget,
+                    0,
+                    fy as i32,
+                );
+                let buf_y = buf_y_raw.max(0);
+                let (iter, _) = tv.line_at_y(buf_y);
+                top_anchor_offset = Some(iter.offset());
+            }
+        }
+
+        // ── Restore: width changed → scroll anchor back to viewport top ─
+        let width_changed = prev_alloc_width != 0 && curr_alloc_w != prev_alloc_width;
+        if width_changed
+            && !state_for_events.borrow().auto_scroll.is_active()
+        {
+            if let Some(anchor) = top_anchor_offset {
+                let buf = tv.buffer();
+                let char_count = buf.char_count();
+                let clamped = anchor.min(char_count.saturating_sub(1)).max(0);
+                let iter = buf.iter_at_offset(clamped);
+                let buf_y = tv.iter_location(&iter).y();
+                let (_, fy) = tv.buffer_to_window_coords(
+                    gtk4::TextWindowType::Widget,
+                    0,
+                    buf_y,
+                );
+                if let Some((_, delta_y)) = final_view.translate_coordinates(
+                    &scroll,
+                    0.0,
+                    fy as f64,
+                ) {
+                    let max = (adj.upper() - adj.page_size()).max(0.0);
+                    let new_value = (curr_adj + delta_y).clamp(0.0, max);
+                    adj.set_value(new_value);
+                    last_adj_set_by_us = Some(new_value);
+                }
+            }
+        } else if user_scrolled {
+            // User moved scroll on their own → next tick should detect
+            // their further movement, not our last set_value.
+            last_adj_set_by_us = None;
+        }
+        prev_alloc_width = curr_alloc_w;
+
 
         // ── Drain all pending events ──────────────────────────────────
         //
