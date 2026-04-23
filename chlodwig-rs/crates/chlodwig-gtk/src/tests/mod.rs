@@ -51,3 +51,4 @@ mod sarasa_width_mode_tests;
 mod pipeline_manifest_tests;
 mod toggle_tool_button_tests;
 mod tab_self_focus_tests;
+mod cwd_command_tests;

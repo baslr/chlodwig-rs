@@ -73,6 +73,7 @@ fn test_submit_handles_all_commands() {
         "Command::Name",
         "Command::Save",
         "Command::Unwind",
+        "Command::Cwd",
     ] {
         assert!(
             src.contains(cmd),

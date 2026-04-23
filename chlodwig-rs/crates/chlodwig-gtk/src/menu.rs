@@ -97,7 +97,7 @@ pub fn setup_menu(ctx: MenuContext) {
             // Inherit cwd from the active tab when possible.
             let cwd = active_entry(&app_for_new, &app_registry_for_new)
                 .and_then(|e| tab::active(&e.tab_view, &e.registry))
-                .map(|t| t.cwd().to_path_buf())
+                .map(|t| t.cwd())
                 .unwrap_or_else(|| fallback_for_new.clone());
             tab::build_window(
                 &BuildWindowContext {
@@ -127,7 +127,7 @@ pub fn setup_menu(ctx: MenuContext) {
                 return;
             };
             let new_cwd = tab::active(&entry.tab_view, &entry.registry)
-                .map(|t| t.cwd().to_path_buf())
+                .map(|t| t.cwd())
                 .unwrap_or_else(|| fallback_for_new_tab.clone());
             let attach_ctx = TabAttachContext {
                 window: entry.window.clone(),
@@ -254,7 +254,7 @@ pub fn setup_menu(ctx: MenuContext) {
                 .map(|t| chlodwig_core::session_filename_for(&t.session_started_at));
             let new_tab_cwd = active
                 .as_ref()
-                .map(|t| t.cwd().to_path_buf())
+                .map(|t| t.cwd())
                 .unwrap_or_else(|| fallback_for_sessions.clone());
 
             let entry_for_resume = entry.clone();

@@ -422,6 +422,46 @@ pub fn wire(ctx: SubmitContext) {
                     });
                     return;
                 }
+                Command::Cwd(arg) => {
+                    match arg {
+                        None => {
+                            // Show current cwd
+                            let cwd_display = state_for_submit.borrow().cwd.display().to_string();
+                            window::append_styled(
+                                &final_view_for_submit,
+                                &format!("\n📂 Current directory: {cwd_display}\n"),
+                                "system",
+                            );
+                        }
+                        Some(path_arg) => {
+                            let current_cwd = state_for_submit.borrow().cwd.clone();
+                            match chlodwig_core::command::resolve_cwd_arg(&path_arg, &current_cwd) {
+                                Ok(new_cwd) => {
+                                    state_for_submit.borrow_mut().cwd = new_cwd.clone();
+                                    let _ = prompt_tx_clone.send(BackgroundCommand::SetCwd { new_cwd: new_cwd.clone() });
+                                    window::append_styled(
+                                        &final_view_for_submit,
+                                        &format!("\n📂 Changed directory to: {}\n", new_cwd.display()),
+                                        "system",
+                                    );
+                                    // Refresh tab title to show new directory name.
+                                    if let Some(t) = crate::tab::ai_conversation::lookup_by_page(&page_for_submit) {
+                                        t.refresh_tab_title();
+                                    }
+                                }
+                                Err(e) => {
+                                    window::append_styled(
+                                        &final_view_for_submit,
+                                        &format!("\n✗ {e}\n"),
+                                        "error",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    window::scroll_to_content_bottom(&scroll_for_submit, &final_view_for_submit, &streaming_view_for_submit);
+                    return;
+                }
             }
         }
 

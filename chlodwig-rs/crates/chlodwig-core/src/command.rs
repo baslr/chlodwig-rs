@@ -35,6 +35,10 @@ pub enum Command {
     /// `chlodwig_core::reducers::unwind::unwind_messages` for full
     /// semantics.
     Unwind(usize),
+    /// `/cwd` (show current) or `/cwd <path>` (change working directory).
+    /// `<path>` may be absolute, relative, or start with `~`.
+    /// Resolution happens in the UI handler via `resolve_cwd_arg`.
+    Cwd(Option<String>),
 }
 
 impl Command {
@@ -120,6 +124,18 @@ impl Command {
             }
         }
 
+        // /cwd with optional path
+        if lower == "/cwd" {
+            return Some(Command::Cwd(None));
+        }
+        if lower.starts_with("/cwd ") {
+            let path = trimmed["/cwd ".len()..].trim().to_string();
+            if path.is_empty() {
+                return Some(Command::Cwd(None));
+            }
+            return Some(Command::Cwd(Some(path)));
+        }
+
         match lower.as_str() {
             "/clear" | "/reset" | "/new" => Some(Command::Clear),
             "/help" | "/h" | "/?" | "help" => Some(Command::Help),
@@ -130,6 +146,53 @@ impl Command {
             _ => None,
         }
     }
+}
+
+/// Resolve a user-supplied `/cwd` argument against `current` and return
+/// the canonical absolute path. **No** side effects.
+///
+/// Rules:
+/// - Tilde-prefix (`~` or `~/`) expands against `$HOME`.
+/// - Absolute paths are taken as-is.
+/// - Relative paths are joined onto `current`.
+/// - The result is canonicalized (resolves `..`, symlinks, `/var` →
+///   `/private/var` on macOS) so the stored path is unique.
+/// - Returns `Err(String)` with a user-readable message if the path
+///   does not exist or is not a directory.
+pub fn resolve_cwd_arg(arg: &str, current: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return Err("Path cannot be empty.".to_string());
+    }
+
+    let expanded = if arg == "~" {
+        match std::env::var_os("HOME") {
+            Some(home) => std::path::PathBuf::from(home),
+            None => return Err("$HOME is not set.".to_string()),
+        }
+    } else if let Some(rest) = arg.strip_prefix("~/") {
+        match std::env::var_os("HOME") {
+            Some(home) => std::path::PathBuf::from(home).join(rest),
+            None => return Err("$HOME is not set.".to_string()),
+        }
+    } else {
+        let p = std::path::Path::new(arg);
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            current.join(arg)
+        }
+    };
+
+    let canonical = std::fs::canonicalize(&expanded).map_err(|e| {
+        format!("Cannot resolve '{}': {}", expanded.display(), e)
+    })?;
+
+    if !canonical.is_dir() {
+        return Err(format!("'{}' is not a directory.", canonical.display()));
+    }
+
+    Ok(canonical)
 }
 
 /// Help text: the commands section (UI-independent).
@@ -143,6 +206,8 @@ pub const COMMANDS_HELP: &str = "\
   /resume <prefix>      Load session by timestamp prefix (e.g. 2026_04_13)
   /save                 Manually save the current session
   /name <name>          Set a human-readable name for this session
+  /cwd                  Show current working directory
+  /cwd <path>           Change working directory (absolute, relative, or ~)
   /compact [instr]      Compact conversation history
   /clear, /reset, /new  Clear conversation, start fresh
   /unwind [N]           Roll back last N text messages (default 1)
@@ -163,6 +228,8 @@ pub fn help_markdown_commands() -> String {
 | `/resume <prefix>` | Load session by timestamp prefix |
 | `/save` | Manually save the current session |
 | `/name <name>` | Set a human-readable name for this session |
+| `/cwd` | Show current working directory |
+| `/cwd <path>` | Change working directory (absolute, relative, or ~) |
 | `/compact [instr]` | Compact conversation history |
 | `/clear`, `/reset`, `/new` | Clear conversation, start fresh |
 | `/unwind [N]` | Roll back the last N text messages (default 1) |
@@ -465,6 +532,154 @@ mod tests {
         assert_eq!(Command::parse("   "), None);
     }
 
+    // ── /cwd tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_cwd_no_arg_shows_current() {
+        assert_eq!(Command::parse("/cwd"), Some(Command::Cwd(None)));
+    }
+
+    #[test]
+    fn test_parse_cwd_with_absolute_path() {
+        assert_eq!(
+            Command::parse("/cwd /tmp/foo"),
+            Some(Command::Cwd(Some("/tmp/foo".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_cwd_with_relative_path() {
+        assert_eq!(
+            Command::parse("/cwd ../bar"),
+            Some(Command::Cwd(Some("../bar".into())))
+        );
+        assert_eq!(
+            Command::parse("/cwd src/lib.rs"),
+            Some(Command::Cwd(Some("src/lib.rs".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_cwd_with_tilde() {
+        assert_eq!(
+            Command::parse("/cwd ~"),
+            Some(Command::Cwd(Some("~".into())))
+        );
+        assert_eq!(
+            Command::parse("/cwd ~/projects"),
+            Some(Command::Cwd(Some("~/projects".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_cwd_trailing_whitespace_treated_as_no_arg() {
+        assert_eq!(Command::parse("/cwd   "), Some(Command::Cwd(None)));
+        assert_eq!(Command::parse("/cwd \t "), Some(Command::Cwd(None)));
+    }
+
+    #[test]
+    fn test_parse_cwd_preserves_path_case() {
+        assert_eq!(
+            Command::parse("/cwd /Users/Foo/Bar"),
+            Some(Command::Cwd(Some("/Users/Foo/Bar".into())))
+        );
+    }
+
+    #[test]
+    fn test_parse_cwd_case_insensitive_command_name() {
+        assert_eq!(
+            Command::parse("/CWD ./foo"),
+            Some(Command::Cwd(Some("./foo".into())))
+        );
+        assert_eq!(
+            Command::parse("/Cwd /tmp"),
+            Some(Command::Cwd(Some("/tmp".into())))
+        );
+    }
+
+    // ── resolve_cwd_arg tests ─────────────────────────────────────
+
+    #[test]
+    fn test_resolve_cwd_arg_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(tmp.path()).unwrap();
+        let result = resolve_cwd_arg(canonical.to_str().unwrap(), std::path::Path::new("/")).unwrap();
+        assert_eq!(result, canonical);
+    }
+
+    #[test]
+    fn test_resolve_cwd_arg_relative_to_current() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(tmp.path()).unwrap();
+        let subdir = canonical.join("sub");
+        std::fs::create_dir(&subdir).unwrap();
+        let result = resolve_cwd_arg("sub", &canonical).unwrap();
+        assert_eq!(result, subdir);
+    }
+
+    #[test]
+    fn test_resolve_cwd_arg_tilde_uses_home_env() {
+        // Just test that ~ resolves to something (HOME is set in CI and dev)
+        let result = resolve_cwd_arg("~", std::path::Path::new("/"));
+        assert!(result.is_ok(), "~ should resolve, got: {:?}", result);
+        assert!(result.unwrap().is_dir());
+    }
+
+    #[test]
+    fn test_resolve_cwd_arg_strips_trailing_slash_via_canonicalize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(tmp.path()).unwrap();
+        let with_slash = format!("{}/", canonical.display());
+        let result = resolve_cwd_arg(&with_slash, std::path::Path::new("/")).unwrap();
+        assert_eq!(result, canonical);
+    }
+
+    #[test]
+    fn test_resolve_cwd_arg_rejects_nonexistent_path() {
+        let result = resolve_cwd_arg("/nonexistent_xyz_12345", std::path::Path::new("/"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_cwd_arg_rejects_regular_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("file.txt");
+        std::fs::write(&file, "hello").unwrap();
+        let result = resolve_cwd_arg(file.to_str().unwrap(), std::path::Path::new("/"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a directory"));
+    }
+
+    #[test]
+    fn test_resolve_cwd_arg_empty_string_is_error() {
+        let result = resolve_cwd_arg("", std::path::Path::new("/"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_cwd_arg_dotdot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let canonical = std::fs::canonicalize(tmp.path()).unwrap();
+        let subdir = canonical.join("a").join("b");
+        std::fs::create_dir_all(&subdir).unwrap();
+        // From a/b, ".." should resolve to a
+        let result = resolve_cwd_arg("..", &subdir).unwrap();
+        assert_eq!(result, canonical.join("a"));
+    }
+
+    // ── COMMANDS_HELP /cwd tests ──────────────────────────────────
+
+    #[test]
+    fn test_commands_help_mentions_cwd() {
+        assert!(COMMANDS_HELP.contains("/cwd"), "COMMANDS_HELP must mention /cwd");
+    }
+
+    #[test]
+    fn test_help_markdown_commands_mentions_cwd() {
+        let md = help_markdown_commands();
+        assert!(md.contains("/cwd"), "help_markdown_commands must mention /cwd");
+    }
+
     #[test]
     fn test_parse_case_insensitive() {
         assert_eq!(Command::parse("/CLEAR"), Some(Command::Clear));
@@ -500,6 +715,7 @@ mod tests {
         assert!(COMMANDS_HELP.contains("/save"), "must mention /save");
         assert!(COMMANDS_HELP.contains("/name"), "must mention /name");
         assert!(COMMANDS_HELP.contains("/unwind"), "must mention /unwind");
+        assert!(COMMANDS_HELP.contains("/cwd"), "must mention /cwd");
     }
 
     // ── help_markdown tests ─────────────────────────────────────

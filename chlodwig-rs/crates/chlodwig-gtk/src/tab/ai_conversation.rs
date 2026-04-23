@@ -80,6 +80,9 @@ pub enum BackgroundCommand {
         count: usize,
         ack: tokio::sync::oneshot::Sender<(usize, Vec<Message>)>,
     },
+    /// Update `tool_context.working_directory` AND rebuild
+    /// `system_prompt` for the new cwd.
+    SetCwd { new_cwd: std::path::PathBuf },
 }
 
 /// Per-AI-tab state bundle.
@@ -103,21 +106,21 @@ pub struct AiConversationTab {
     /// (so `/stop`, `stop`, and Esc-Esc can flip it).
     #[allow(dead_code)]
     pub stop_flag: Arc<AtomicBool>,
-    pub cwd: std::path::PathBuf,
 }
 
 impl crate::tab::Tab for AiConversationTab {
     fn page(&self) -> &libadwaita::TabPage {
         &self.page
     }
-    fn cwd(&self) -> &std::path::Path {
-        &self.cwd
+    fn cwd(&self) -> std::path::PathBuf {
+        self.app_state.borrow().cwd.clone()
     }
     fn window_title(&self) -> String {
-        let cwd_name = self.cwd
+        let state = self.app_state.borrow();
+        let cwd_name = state.cwd
             .file_name()
             .map(|n| n.to_string_lossy().into_owned());
-        let session_name = self.app_state.borrow().session_name.clone();
+        let session_name = state.session_name.clone();
         chlodwig_gtk::window::format_window_title(
             cwd_name.as_deref(),
             session_name.as_deref(),
@@ -144,16 +147,17 @@ impl AiConversationTab {
     /// The full title (with `Chlodwig` suffix) is also updated as the
     /// tooltip so the user can hover for the long form.
     pub fn refresh_tab_title(&self) {
-        let cwd_name = self.cwd
+        let state = self.app_state.borrow();
+        let cwd_name = state.cwd
             .file_name()
             .map(|n| n.to_string_lossy().into_owned());
-        let session_name = self.app_state.borrow().session_name.clone();
+        let session_name = state.session_name.clone();
+        drop(state); // drop borrow before GTK calls (Gotcha #46)
         let tab_title = chlodwig_gtk::window::format_tab_title(
             session_name.as_deref(),
             cwd_name.as_deref(),
         );
         self.page.set_title(&tab_title);
-        // Tooltip: full window-style title for hover.
         let tooltip = chlodwig_gtk::window::format_window_title(
             cwd_name.as_deref(),
             session_name.as_deref(),
@@ -513,7 +517,6 @@ impl AiConversationTab {
             session_started_at,
             prompt_tx,
             stop_flag,
-            cwd,
         });
         ctx.registry
             .borrow_mut()
@@ -661,6 +664,15 @@ fn spawn_conversation_task(args: SpawnArgs) {
                             "Restored {} messages into ConversationState",
                             conv_state.messages.len()
                         );
+                    }
+                    BackgroundCommand::SetCwd { new_cwd } => {
+                        conv_state.tool_context.working_directory = new_cwd.clone();
+                        conv_state.system_prompt = chlodwig_core::build_system_prompt(
+                            None,
+                            chlodwig_core::UiContext::Gui,
+                            &new_cwd,
+                        );
+                        tracing::info!("Background: cwd changed to {}", new_cwd.display());
                     }
                     BackgroundCommand::Compact { instructions } => {
                         let _ = event_tx.send(ConversationEvent::CompactionStarted);

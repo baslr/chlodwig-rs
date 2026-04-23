@@ -206,6 +206,8 @@ The aliases are defined in `.cargo/config.toml`.
 | `/sessions` | List all saved sessions |
 | `/resume` | Load the most recent saved session |
 | `/resume <prefix>` | Load session matching prefix (e.g. `2026_04_13`, `2026_04_13_14`) |
+| `/cwd` | Show current working directory |
+| `/cwd <path>` | Change working directory (absolute, relative, or `~`) |
 | `/stop`, `stop` | Cooperatively interrupt the agentic turn loop (also: double-Esc while loading) |
 | `! <cmd>` | Execute shell command |
 | `exit`, `quit`, `/exit`, `/quit` | Exit |

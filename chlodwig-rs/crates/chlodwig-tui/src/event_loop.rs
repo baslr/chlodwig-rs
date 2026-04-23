@@ -1167,6 +1167,43 @@ pub async fn run_tui_with_permissions(
                             app.scroll_to_bottom();
                             break; // exit inner drain loop
                                 }
+                                Command::Cwd(arg) => {
+                            match arg {
+                                None => {
+                                    // Show current cwd
+                                    app.display_blocks.push(DisplayBlock::SystemMessage(
+                                        format!("📂 Current directory: {}", app.cwd.display()),
+                                    ));
+                                }
+                                Some(path_arg) => {
+                                    match chlodwig_core::command::resolve_cwd_arg(&path_arg, &app.cwd) {
+                                        Ok(new_cwd) => {
+                                            app.cwd = new_cwd.clone();
+                                            // Sync to ConversationState so tools
+                                            // and the system prompt use the new cwd.
+                                            {
+                                                let mut guard = state.lock().await;
+                                                guard.tool_context.working_directory = new_cwd.clone();
+                                                guard.system_prompt = chlodwig_core::build_system_prompt(
+                                                    None,
+                                                    chlodwig_core::UiContext::Cli,
+                                                    &new_cwd,
+                                                );
+                                            }
+                                            app.display_blocks.push(DisplayBlock::SystemMessage(
+                                                format!("📂 Changed directory to: {}", new_cwd.display()),
+                                            ));
+                                        }
+                                        Err(e) => {
+                                            app.display_blocks.push(DisplayBlock::Error(e));
+                                        }
+                                    }
+                                }
+                            }
+                            app.mark_dirty();
+                            app.scroll_to_bottom();
+                            break; // exit inner drain loop
+                                }
                             } // match cmd
                         } else {
                         // --- Not a command: regular prompt ---

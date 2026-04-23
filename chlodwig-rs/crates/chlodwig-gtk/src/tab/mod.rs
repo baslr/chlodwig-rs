@@ -67,7 +67,7 @@ pub trait Tab {
     /// Working directory associated with this tab (used by "New Tab" to
     /// inherit cwd, by file-relative tools, etc.). Tabs that have no
     /// natural cwd return the process cwd.
-    fn cwd(&self) -> &Path;
+    fn cwd(&self) -> std::path::PathBuf;
 
     /// Title to show in the window title bar when this tab is active.
     fn window_title(&self) -> String;
@@ -189,7 +189,7 @@ pub fn snapshot_window_state(
         }
         tabs.push(chlodwig_core::TabState {
             session_started_at: ai.session_started_at.clone(),
-            cwd: ai.cwd.clone(),
+            cwd: ai.app_state.borrow().cwd.clone(),
         });
     }
 
