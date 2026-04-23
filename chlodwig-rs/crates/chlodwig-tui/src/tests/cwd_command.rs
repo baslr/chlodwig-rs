@@ -75,3 +75,20 @@ fn test_event_loop_cwd_does_not_call_set_current_dir() {
          /cwd only mutates per-app state"
     );
 }
+
+#[test]
+fn test_event_loop_resume_validates_cwd_with_resolve_snapshot_cwd() {
+    assert!(
+        EVENT_LOOP_SRC.contains("resolve_snapshot_cwd"),
+        "event_loop.rs /resume must call resolve_snapshot_cwd to validate \
+         the saved cwd still exists and show a warning if not"
+    );
+}
+
+#[test]
+fn test_event_loop_resume_shows_cwd_restore_feedback() {
+    assert!(
+        EVENT_LOOP_SRC.contains("Restored directory:"),
+        "event_loop.rs /resume must show the restored directory to the user"
+    );
+}

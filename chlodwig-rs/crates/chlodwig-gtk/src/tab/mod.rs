@@ -449,19 +449,27 @@ pub fn build_window(
         let active = ws.active_index;
         for (i, t) in ws.tabs.iter().enumerate() {
             let session_path = chlodwig_core::session_path_for(&t.session_started_at);
+            // Validate saved cwd — fall back to fallback_cwd if missing.
+            let (tab_cwd, cwd_warning) = chlodwig_core::resolve_snapshot_cwd(
+                Some(&t.cwd),
+                &fallback_cwd,
+            );
+            if let Some(warning) = cwd_warning {
+                tracing::warn!("{}", warning);
+            }
             let page = match chlodwig_core::load_session_from(&session_path) {
                 Ok(snap) => AiConversationTab::attach_with_session(
                     &attach_ctx,
-                    t.cwd.clone(),
+                    tab_cwd.clone(),
                     snap,
                 ),
                 Err(e) => {
                     tracing::info!(
                         "window_state: session {} unreadable ({e}), opening fresh tab in {}",
                         t.session_started_at,
-                        t.cwd.display()
+                        tab_cwd.display()
                     );
-                    AiConversationTab::attach_new(&attach_ctx, t.cwd.clone())
+                    AiConversationTab::attach_new(&attach_ctx, tab_cwd)
                 }
             };
             if i == active {

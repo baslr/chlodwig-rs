@@ -1000,11 +1000,30 @@ pub async fn run_tui_with_permissions(
                                             snapshot.saved_at
                                         ),
                                     ));
+                                    // Restore cwd — validate that saved dir still exists.
+                                    let (resolved_cwd, cwd_warning) = chlodwig_core::resolve_snapshot_cwd(
+                                        snapshot.cwd.as_deref(),
+                                        &app.cwd,
+                                    );
+                                    if let Some(warning) = cwd_warning {
+                                        app.display_blocks.push(DisplayBlock::SystemMessage(warning));
+                                    } else if snapshot.cwd.is_some() {
+                                        app.display_blocks.push(DisplayBlock::SystemMessage(
+                                            format!("📂 Restored directory: {}", resolved_cwd.display()),
+                                        ));
+                                    }
+                                    app.cwd = resolved_cwd.clone();
                                     // Restore messages into ConversationState
                                     let state_clone = state.clone();
                                     tokio::spawn(async move {
                                         let mut guard = state_clone.lock().await;
                                         guard.messages = snapshot.messages;
+                                        guard.tool_context.working_directory = resolved_cwd.clone();
+                                        guard.system_prompt = chlodwig_core::build_system_prompt(
+                                            None,
+                                            chlodwig_core::UiContext::Cli,
+                                            &resolved_cwd,
+                                        );
                                     });
                                 }
                                 Ok(None) => {

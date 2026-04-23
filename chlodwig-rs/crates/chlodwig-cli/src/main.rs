@@ -115,7 +115,7 @@ async fn main() -> Result<()> {
     // of multiple tabs, but routing both system_prompt and ToolContext through
     // an explicit cwd keeps the core library free of process-CWD reads
     // (Stage 0.4 of MULTIWINDOW_TABS.md).
-    let cwd = std::env::current_dir()?;
+    let mut cwd = std::env::current_dir()?;
 
     let system_prompt = chlodwig_core::build_system_prompt(
         cli.system_prompt.as_deref(),
@@ -154,10 +154,32 @@ async fn main() -> Result<()> {
                 );
                 let constants = snapshot.constants.clone();
                 let stats = snapshot.stats.clone();
+                // Restore cwd from snapshot if present; validate it still exists.
+                let (resolved_cwd, cwd_warning) = chlodwig_core::resolve_snapshot_cwd(
+                    snapshot.cwd.as_deref(),
+                    &cwd,
+                );
+                if let Some(warning) = cwd_warning {
+                    eprintln!("\x1b[33m{warning}\x1b[0m");
+                } else if snapshot.cwd.is_some() {
+                    eprintln!("📂 Restored directory: {}", resolved_cwd.display());
+                }
+                cwd = resolved_cwd;
                 let state = ConversationState {
                     messages: snapshot.messages,
                     // Use current CLI settings (model, tools, etc.) not the saved ones,
                     // because tools/system prompt may have changed between sessions.
+                    // But tool_context.working_directory and system_prompt are rebuilt
+                    // with the restored cwd above.
+                    tool_context: ToolContext {
+                        working_directory: cwd.clone(),
+                        ..state.tool_context
+                    },
+                    system_prompt: chlodwig_core::build_system_prompt(
+                        cli.system_prompt.as_deref(),
+                        chlodwig_core::UiContext::Cli,
+                        &cwd,
+                    ),
                     ..state
                 };
                 (state, constants, stats)

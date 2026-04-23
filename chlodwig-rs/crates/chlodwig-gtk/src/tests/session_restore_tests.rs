@@ -208,7 +208,7 @@ fn build_test_snapshot(
         constants: None,
         table_sorts,
         name,
-        stats: None,
+        stats: None, cwd: None,
     }
 }
 
@@ -304,7 +304,7 @@ fn test_load_session_from_disk_then_apply_preserves_name() {
         name: Some("work on chlodwig".into()),
         table_sorts: vec![],
         constants: None,
-        stats: None,
+        stats: None, cwd: None,
     };
     let json = serde_json::to_string_pretty(&snap).unwrap();
     std::fs::write(&path, json).unwrap();

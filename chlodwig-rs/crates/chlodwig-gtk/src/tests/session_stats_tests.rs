@@ -76,6 +76,7 @@ fn test_apply_session_snapshot_restores_stats() {
             last_output_tokens: 50,
             last_cache_tokens: 25,
         }),
+        cwd: None,
     };
     state.apply_session_snapshot(&snap);
 
@@ -102,7 +103,7 @@ fn test_apply_session_snapshot_without_stats_keeps_defaults() {
         constants: None,
         table_sorts: vec![],
         name: None,
-        stats: None,
+        stats: None, cwd: None,
     };
     state.apply_session_snapshot(&snap);
     assert_eq!(state.turn_count, 0);
@@ -137,6 +138,7 @@ fn test_session_stats_roundtrip_through_apply_snapshot() {
         table_sorts: vec![],
         name: None,
         stats: Some(a.session_stats()),
+        cwd: None,
     };
 
     let mut b = AppState::new("m".into());

@@ -263,6 +263,15 @@ pub fn setup_menu(ctx: MenuContext) {
                 current_file,
                 Box::new(move |path| match chlodwig_core::load_session_from(&path) {
                     Ok(snapshot) => {
+                        // Use the session's saved cwd if available and valid;
+                        // fall back to the active tab's cwd (or process cwd).
+                        let (session_cwd, cwd_warning) = chlodwig_core::resolve_snapshot_cwd(
+                            snapshot.cwd.as_deref(),
+                            &new_tab_cwd,
+                        );
+                        if let Some(warning) = cwd_warning {
+                            tracing::warn!("{}", warning);
+                        }
                         let attach_ctx = TabAttachContext {
                             window: entry_for_resume.window.clone(),
                             tab_view: entry_for_resume.tab_view.clone(),
@@ -271,7 +280,7 @@ pub fn setup_menu(ctx: MenuContext) {
                         };
                         AiConversationTab::attach_with_session(
                             &attach_ctx,
-                            new_tab_cwd.clone(),
+                            session_cwd,
                             snapshot,
                         );
                     }

@@ -48,6 +48,12 @@ pub struct SessionSnapshot {
     /// session files; `None` after load means "no stats stored, start at 0".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stats: Option<SessionStats>,
+    /// Working directory at the time of the snapshot.
+    /// Restored on resume so tools, system prompt, and `! <cmd>` all run
+    /// in the correct directory. Optional for backward compat with old
+    /// session files; `None` means "use the process cwd" (old behavior).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
 }
 
 /// Cumulative session statistics — what the bottom-left status line shows.
@@ -645,6 +651,33 @@ pub fn build_snapshot(
         table_sorts,
         name,
         stats,
+        cwd: Some(state.tool_context.working_directory.clone()),
+    }
+}
+
+/// Resolve a snapshot's saved `cwd` for restore.
+///
+/// Returns `(resolved_cwd, optional_warning)`:
+/// - If `saved` is `Some` and the directory exists → `(saved, None)`.
+/// - If `saved` is `Some` but the directory no longer exists → `(fallback, Some(warning))`.
+/// - If `saved` is `None` (old session file) → `(fallback, None)`.
+///
+/// Callers should display the warning to the user and use the resolved cwd.
+pub fn resolve_snapshot_cwd(
+    saved: Option<&std::path::Path>,
+    fallback: &std::path::Path,
+) -> (PathBuf, Option<String>) {
+    match saved {
+        Some(path) if path.is_dir() => (path.to_path_buf(), None),
+        Some(path) => {
+            let warning = format!(
+                "⚠ Saved directory {} no longer exists — using {} instead.",
+                path.display(),
+                fallback.display(),
+            );
+            (fallback.to_path_buf(), Some(warning))
+        }
+        None => (fallback.to_path_buf(), None),
     }
 }
 
@@ -752,7 +785,7 @@ mod tests {
             model: "test-model".into(),
             messages,
             system_prompt: vec![SystemBlock::text("You are helpful.")],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         }
     }
 
@@ -982,7 +1015,7 @@ mod tests {
             model: "test-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
 
         let path = sessions.join(session_filename_for(&snap.started_at));
@@ -1022,7 +1055,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "old".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let new_snap = SessionSnapshot {
             saved_at: "2026-04-13T15:00:00+02:00".into(),
@@ -1033,7 +1066,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "new".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
 
         let old_path = sessions.join(session_filename_for(&old_snap.started_at));
@@ -1073,7 +1106,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "first".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
 
         let path = sessions.join(session_filename_for(&snap.started_at));
@@ -1132,7 +1165,7 @@ mod tests {
                 SystemBlock::text("block 1"),
                 SystemBlock::cached("block 2 (cached)"),
             ],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
@@ -1362,7 +1395,7 @@ mod tests {
                     content: vec![ContentBlock::Text { text: text.to_string() }],
                 }],
                 system_prompt: vec![],
-                constants: None, table_sorts: vec![], name: None, stats: None,
+                constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
             };
             let path = sessions.join(session_filename_for(started));
             save_session_to(&snap, &path).unwrap();
@@ -1392,7 +1425,7 @@ mod tests {
                 Message { role: Role::User, content: vec![ContentBlock::Text { text: "q2".into() }] },
             ],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1420,7 +1453,7 @@ mod tests {
             model: "good-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1535,7 +1568,7 @@ mod tests {
                 content: vec![ContentBlock::Text { text: "hello".into() }],
             }],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1560,7 +1593,7 @@ mod tests {
             model: "found-model".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1584,7 +1617,7 @@ mod tests {
             model: "partial-match".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1613,7 +1646,7 @@ mod tests {
                 model: model.to_string(),
                 messages: vec![],
                 system_prompt: vec![],
-                constants: None, table_sorts: vec![], name: None, stats: None,
+                constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
             };
             let path = sessions.join(session_filename_for(started));
             save_session_to(&snap, &path).unwrap();
@@ -1638,7 +1671,7 @@ mod tests {
             model: "test".into(),
             messages: vec![],
             system_prompt: vec![],
-            constants: None, table_sorts: vec![], name: None, stats: None,
+            constants: None, table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let path = sessions.join(session_filename_for(&snap.started_at));
         save_session_to(&snap, &path).unwrap();
@@ -1710,6 +1743,7 @@ mod tests {
             ],
             name: None,
             stats: None,
+            cwd: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
@@ -1727,7 +1761,7 @@ mod tests {
             messages: vec![],
             system_prompt: vec![],
             constants: None,
-            table_sorts: vec![], name: None, stats: None,
+            table_sorts: vec![], name: None, stats: None, cwd: None,
         };
         let json = serde_json::to_string(&snap).unwrap();
         assert!(!json.contains("table_sorts"), "Empty table_sorts should be skipped: {json}");
@@ -2033,5 +2067,117 @@ mod tests {
             None,
         );
         assert!(snap.stats.is_none());
+    }
+
+    // ── cwd persistence tests ─────────────────────────────────────
+
+    #[test]
+    fn test_session_snapshot_has_cwd_field() {
+        let snap = SessionSnapshot {
+            saved_at: "t".into(),
+            started_at: "t".into(),
+            model: "m".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+            table_sorts: vec![],
+            name: None,
+            stats: None,
+            cwd: Some(PathBuf::from("/tmp/my-project")),
+        };
+        assert_eq!(snap.cwd.as_deref(), Some(std::path::Path::new("/tmp/my-project")));
+    }
+
+    #[test]
+    fn test_session_snapshot_cwd_defaults_to_none_for_old_files() {
+        // Old session files without a `cwd` field must deserialize with cwd=None.
+        let json = r#"{
+            "saved_at": "t",
+            "started_at": "t",
+            "model": "m",
+            "messages": [],
+            "system_prompt": []
+        }"#;
+        let snap: SessionSnapshot = serde_json::from_str(json).unwrap();
+        assert!(snap.cwd.is_none(), "old files without cwd must deserialize as None");
+    }
+
+    #[test]
+    fn test_session_snapshot_cwd_roundtrip() {
+        let snap = SessionSnapshot {
+            saved_at: "t".into(),
+            started_at: "t".into(),
+            model: "m".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+            table_sorts: vec![],
+            name: None,
+            stats: None,
+            cwd: Some(PathBuf::from("/Users/test/projects/myapp")),
+        };
+        let json = serde_json::to_string(&snap).unwrap();
+        let restored: SessionSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.cwd, Some(PathBuf::from("/Users/test/projects/myapp")));
+    }
+
+    #[test]
+    fn test_session_snapshot_cwd_none_skipped_in_json() {
+        let snap = SessionSnapshot {
+            saved_at: "t".into(),
+            started_at: "t".into(),
+            model: "m".into(),
+            messages: vec![],
+            system_prompt: vec![],
+            constants: None,
+            table_sorts: vec![],
+            name: None,
+            stats: None,
+            cwd: None,
+        };
+        let json = serde_json::to_string(&snap).unwrap();
+        assert!(!json.contains("cwd"), "cwd=None must be skipped in JSON, got: {json}");
+    }
+
+    #[test]
+    fn test_resolve_snapshot_cwd_returns_saved_if_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let saved = tmp.path().to_path_buf();
+        let fallback = PathBuf::from("/fallback");
+        let (resolved, warning) = resolve_snapshot_cwd(Some(&saved), &fallback);
+        assert_eq!(resolved, saved);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn test_resolve_snapshot_cwd_falls_back_if_saved_missing() {
+        let saved = PathBuf::from("/nonexistent_xyz_cwd_test_12345");
+        let fallback = std::env::current_dir().unwrap();
+        let (resolved, warning) = resolve_snapshot_cwd(Some(&saved), &fallback);
+        assert_eq!(resolved, fallback);
+        assert!(warning.is_some());
+        let msg = warning.unwrap();
+        assert!(msg.contains("/nonexistent_xyz_cwd_test_12345"), "warning must mention saved path: {msg}");
+        assert!(msg.contains(&fallback.display().to_string()), "warning must mention fallback: {msg}");
+    }
+
+    #[test]
+    fn test_resolve_snapshot_cwd_returns_fallback_if_none() {
+        let fallback = PathBuf::from("/some/fallback");
+        let (resolved, warning) = resolve_snapshot_cwd(None, &fallback);
+        assert_eq!(resolved, fallback);
+        assert!(warning.is_none());
+    }
+
+    #[test]
+    fn test_build_snapshot_includes_cwd_from_tool_context() {
+        let mut state = make_state(vec![], "m");
+        state.tool_context.working_directory = PathBuf::from("/tmp/project-dir");
+        let snap = build_snapshot(&state, "t", vec![], None, None, None);
+        assert_eq!(
+            snap.cwd,
+            Some(PathBuf::from("/tmp/project-dir")),
+            "build_snapshot must read cwd from state.tool_context.working_directory"
+        );
     }
 }
