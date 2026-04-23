@@ -589,6 +589,38 @@ pub static APP_CSS: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         .monospace, textview text.monospace {{\n    \
             font-family: \"{mono}\",\n                 \
                          \"Apple Color Emoji\", \"Noto Color Emoji\", \"Segoe UI Emoji\";\n\
+        }}\n\
+        \n\
+        /* Floating jump-to-bottom button (issue #28).\n         \
+         *\n         \
+         * Sits in a gtk4::Overlay over the output ScrolledWindow,\n         \
+         * anchored bottom-right. Semi-transparent so it doesn't\n         \
+         * fully obscure content; gains opacity on hover.\n         \
+         *\n         \
+         * Two rules with different specificities, intentionally split:\n         \
+         *\n         \
+         *   `.scroll-to-bottom-btn`        (0,1,0)  — properties that\n         \
+         *     libadwaita's `button.circular` does NOT touch (opacity).\n         \
+         *     Specificity (0,1,0) is enough; no need for `button.`\n         \
+         *     prefix.\n         \
+         *\n         \
+         *   `button.scroll-to-bottom-btn`  (0,1,1)  — properties that\n         \
+         *     `button.circular` DOES set (min-width, min-height,\n         \
+         *     padding). Equal specificity → cascade order wins, and\n         \
+         *     this rule comes later in the stylesheet.\n         \
+         *\n         \
+         * No duplicated declarations. (Code review fix #8 + M4.)\n         \
+         */\n\
+        .scroll-to-bottom-btn {{\n    \
+            opacity: 0.75;\n\
+        }}\n\
+        button.scroll-to-bottom-btn {{\n    \
+            min-width: 32px;\n    \
+            min-height: 32px;\n    \
+            padding: 0;\n\
+        }}\n\
+        .scroll-to-bottom-btn:hover {{\n    \
+            opacity: 1.0;\n\
         }}\n",
         ui = UI_FONT_FAMILY,
         mono = MONO_FONT_FAMILY,

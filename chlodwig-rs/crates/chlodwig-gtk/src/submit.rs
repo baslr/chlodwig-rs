@@ -524,6 +524,62 @@ pub fn wire(ctx: SubmitContext) {
     }
 
 
+    // ── Floating "↓ jump to bottom" button (issue #28) ──────────────
+    //
+    // Click-only trigger. Issue #28 listed `End` and `Cmd+↓` as
+    // keyboard-shortcut SUGGESTIONS, but every plausible binding
+    // collides with TextView / macOS text-editing defaults that fire
+    // while the cursor is in the input field (the only place a
+    // key-controller on `input_view` would receive events anyway):
+    //   - bare ↓             : cursor down within multiline input
+    //   - bare End           : TextView "cursor to end-of-line"
+    //   - Cmd+↓ / Cmd+↑      : macOS "cursor to start/end-of-document"
+    //   - Shift+↓            : extend SELECTION by one line
+    //   - Cmd+Shift+↓        : extend selection to end-of-document
+    //   - Ctrl+Shift+↓       : extend selection to end-of-paragraph
+    // The mouse click on the button is the SSoT. (Code review M2.)
+    //
+    // The closure does THREE things, in this order:
+    //   1. flip `auto_scroll` ON → subsequent streaming re-pins to
+    //      bottom (issue #28: "Re-enable auto-follow").
+    //   2. hide the button explicitly. The visibility flip in
+    //      `tab/ai_conversation.rs::connect_value_changed` only fires
+    //      on USER scrolls (`is_user_scroll(prev, curr)`); a
+    //      programmatic `set_value(target)` is NOT a user scroll, so
+    //      the button would otherwise stay stuck on screen even
+    //      though the viewport snapped to bottom. (Code review fix #5.)
+    //   3. actually move the viewport. The `auto_scroll` flag alone
+    //      doesn't move pixels — `scroll_to_content_bottom` does.
+    //
+    // Borrow discipline (Gotcha #45): the `borrow_mut()` is used as a
+    // STATEMENT-TEMPORARY, never bound to a `let`. The `RefMut` drops
+    // at the `;` BEFORE `set_visible` / `scroll_to_content_bottom`
+    // synchronously dispatch into value-changed handlers that
+    // re-borrow the same RefCell. Test `test_jump_closure_does_not_
+    // bind_borrow_mut_to_local` guards this invariant.
+    {
+        let state_for_jump = app_state.clone();
+        let scroll_for_jump = widgets.output_scroll.clone();
+        let final_view_for_jump = widgets.final_view.clone();
+        let streaming_view_for_jump = widgets.streaming_view.clone();
+        let btn_for_jump = widgets.scroll_to_bottom_button.clone();
+        let jump_to_bottom = move || {
+            // (1) statement-temporary borrow_mut — drops at the `;`.
+            state_for_jump.borrow_mut().auto_scroll.scroll_to_bottom();
+            // (2) hide the button (value-changed filter would skip the
+            // programmatic scroll below).
+            btn_for_jump.set_visible(false);
+            // (3) actually move the viewport.
+            window::scroll_to_content_bottom(
+                &scroll_for_jump,
+                &final_view_for_jump,
+                &streaming_view_for_jump,
+            );
+        };
+        widgets
+            .scroll_to_bottom_button
+            .connect_clicked(move |_| jump_to_bottom());
+    }
     // Cmd+Enter (macOS) or Ctrl+Enter (Linux/Windows) to send.
     // Plain Enter inserts a newline (GTK default behavior).
     //

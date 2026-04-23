@@ -285,6 +285,15 @@ pub struct UiWidgets {
     pub input_scroll: ScrolledWindow,
     pub send_button: Button,
     pub toggle_tool_button: Button,
+    /// Floating "↓ jump to bottom" button (issue #28). Lives in a
+    /// `gtk4::Overlay` above `output_scroll`, anchored bottom-right.
+    /// Hidden when the user is at the bottom (auto-scroll active);
+    /// shown when the user has scrolled away. Visibility flips inside
+    /// the SAME `connect_value_changed` handler in
+    /// `tab/ai_conversation.rs` that already classifies `at_bottom`
+    /// for the auto-scroll state machine — no duplicated logic.
+    /// Click handler is wired in `submit::wire` (Gotcha #57).
+    pub scroll_to_bottom_button: Button,
     pub status_left_label: Label,
     pub status_right_label: Label,
 }
@@ -514,6 +523,45 @@ pub fn build_tab_content(cwd: &std::path::Path) -> TabContent {
         .child(&output_inner_box)
         .build();
 
+    // ── Floating "↓ jump to bottom" button (issue #28) ─────────────────
+    //
+    // Anchored bottom-right of `output_scroll` via a `gtk4::Overlay`.
+    // Hidden by default — the conversation starts at the bottom with
+    // auto-scroll active, so the button has nothing to do until the
+    // user scrolls up. Visibility is driven from the SAME
+    // `connect_value_changed` handler in `tab/ai_conversation.rs`
+    // that classifies `at_bottom` for the auto-scroll state machine
+    // (single source of truth — no second visibility handler).
+    //
+    // Click is wired in `submit.rs` (per-tab wirer, see Gotcha #57)
+    // alongside the keyboard shortcuts (`End`, `Cmd+↓`).
+    //
+    // The button is also a focus trap risk — `set_can_focus(false)` so
+    // a click in the output area doesn't yank focus away from the
+    // input view.
+    let scroll_to_bottom_button = Button::builder()
+        .label("↓")
+        .css_classes(["scroll-to-bottom-btn", "circular"])
+        .halign(gtk4::Align::End)
+        .valign(gtk4::Align::End)
+        // 20 px margin clears the Linux/X11 scrollbar (~13-15 px) with
+        // breathing room. macOS overlay scrollbars are 0 px so we lose
+        // nothing there. (Code review fix #6.)
+        .margin_end(20)
+        .margin_bottom(20)
+        .can_focus(false)
+        .focus_on_click(false)
+        // Click-only trigger (no keyboard shortcut — every plausible
+        // binding collides with macOS / GTK4 TextView text-editing
+        // defaults; see code review M2). Tooltip is platform-neutral.
+        .tooltip_text("Jump to latest output")
+        .build();
+    scroll_to_bottom_button.set_visible(false);
+
+    let output_overlay = gtk4::Overlay::new();
+    output_overlay.set_child(Some(&output_scroll));
+    output_overlay.add_overlay(&scroll_to_bottom_button);
+
     // --- Input: editable text view + send button ---
     let input_buffer = gtk4::TextBuffer::new(None::<&gtk4::TextTagTable>);
     let input_view = TextView::builder()
@@ -608,7 +656,7 @@ pub fn build_tab_content(cwd: &std::path::Path) -> TabContent {
     let root = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .build();
-    root.append(&output_scroll);
+    root.append(&output_overlay);
     root.append(&Separator::new(Orientation::Horizontal));
     root.append(&input_row);
     root.append(&Separator::new(Orientation::Horizontal));
@@ -626,6 +674,7 @@ pub fn build_tab_content(cwd: &std::path::Path) -> TabContent {
         input_scroll,
         send_button,
         toggle_tool_button,
+        scroll_to_bottom_button,
         status_left_label,
         status_right_label,
     };

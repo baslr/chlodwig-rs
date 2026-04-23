@@ -422,12 +422,16 @@ impl AiConversationTab {
                 .connect_copy_clipboard(move |view| on_copy_streaming(view.upcast_ref::<gtk4::TextView>()));
         }
 
-        // Per-tab user-scroll detection → drives auto_scroll state machine.
+        // Per-tab user-scroll detection → drives auto_scroll state machine
+        // AND the visibility of the floating ↓ jump-to-bottom button
+        // (issue #28). Same `at_bottom` boolean drives both — single
+        // source of truth, no second visibility handler.
         {
             let adj = widgets.output_scroll.vadjustment();
             let state_for_scroll = app_state.clone();
             let final_view_for_scroll = widgets.final_view.clone();
             let streaming_view_for_scroll = widgets.streaming_view.clone();
+            let scroll_btn_for_scroll = widgets.scroll_to_bottom_button.clone();
             let prev_snap = Rc::new(Cell::new(
                 chlodwig_gtk::value_changed::AdjSnapshot {
                     value: adj.value(),
@@ -458,6 +462,12 @@ impl AiConversationTab {
                 };
                 let content_bottom = final_h + stream_h;
                 let at_bottom = (curr.value + curr.page_size) >= content_bottom - 20.0;
+                // Toggle the floating ↓ button BEFORE acquiring the
+                // RefCell borrow. set_visible is synchronous and may
+                // emit signals (Gotcha #46), so it must not be called
+                // while we hold a borrow. The button itself does not
+                // need any AppState — it's a pure visibility flip.
+                scroll_btn_for_scroll.set_visible(!at_bottom);
                 let mut state = state_for_scroll.borrow_mut();
                 if at_bottom {
                     state.auto_scroll.user_reached_bottom();
