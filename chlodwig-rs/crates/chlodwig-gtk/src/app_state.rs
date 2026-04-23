@@ -253,6 +253,40 @@ impl AppState {
                 ));
                 true
             }
+            ConversationEvent::ContextSummarized { summaries, .. } => {
+                // Patch the ToolResult blocks of the most recent round
+                // in-place so the user sees `[Summarized] …` instead of
+                // the original verbose output. Walk `self.blocks` backwards,
+                // collect the trailing run of `DisplayBlock::ToolResult`
+                // (skipping any non-ToolResult tail like a closing
+                // `AssistantText`), then map summaries positionally to that
+                // run in display order. Empty summary strings = leave that
+                // block untouched. Length mismatches are silently clamped.
+                let mut indices: Vec<usize> = Vec::new();
+                let mut seen_tool_result = false;
+                for (i, block) in self.blocks.iter().enumerate().rev() {
+                    match block {
+                        DisplayBlock::ToolResult { .. } => {
+                            seen_tool_result = true;
+                            indices.push(i);
+                        }
+                        _ if seen_tool_result => break,
+                        _ => continue, // skip trailing non-ToolResult blocks
+                    }
+                }
+                indices.reverse(); // now in display order
+                for (block_idx, summary) in indices.iter().zip(summaries.iter()) {
+                    if summary.is_empty() {
+                        continue;
+                    }
+                    if let Some(DisplayBlock::ToolResult { output, .. }) =
+                        self.blocks.get_mut(*block_idx)
+                    {
+                        *output = format!("[Summarized] {summary}");
+                    }
+                }
+                true
+            }
             // Events we don't display (yet)
             ConversationEvent::ThinkingDelta(_)
             | ConversationEvent::ThinkingComplete(_)
@@ -262,8 +296,7 @@ impl AppState {
             | ConversationEvent::SseRawChunk(_)
             | ConversationEvent::SubAgentStarted { .. }
             | ConversationEvent::SubAgentProgress { .. }
-            | ConversationEvent::SubAgentComplete { .. }
-            | ConversationEvent::ContextSummarized { .. } => false,
+            | ConversationEvent::SubAgentComplete { .. } => false,
         }
     }
 

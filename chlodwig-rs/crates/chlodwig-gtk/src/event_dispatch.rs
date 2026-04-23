@@ -271,18 +271,28 @@ pub fn wire(ctx: EventDispatchContext) {
             }
 
             let blocks_before = state_for_events.borrow().blocks.len();
+            // Track events that mutate EXISTING blocks (not just append new
+            // ones). Currently only ContextSummarized — it patches recent
+            // ToolResult blocks in place. Such events need a full re-render
+            // because the per-block append path only handles appended blocks.
+            let mutates_existing = matches!(event, ConversationEvent::ContextSummarized { .. });
             let should_update = state_for_events.borrow_mut().handle_event(event);
-            let state = state_for_events.borrow();
 
-            // Render any newly added block(s).
-            if state.blocks.len() > blocks_before {
-                for block_idx in blocks_before..state.blocks.len() {
-                    let ctx = render::RenderCtx::for_block(&state, viewport_w, block_idx);
-                    render::append_block(&final_view, &state.blocks[block_idx], &ctx);
+            // Render any newly added block(s) OR full re-render if an
+            // existing block was mutated in-place.
+            {
+                let state = state_for_events.borrow();
+                if state.blocks.len() > blocks_before {
+                    for block_idx in blocks_before..state.blocks.len() {
+                        let ctx = render::RenderCtx::for_block(&state, viewport_w, block_idx);
+                        render::append_block(&final_view, &state.blocks[block_idx], &ctx);
+                    }
+                    mutated = true;
+                } else if mutates_existing && should_update {
+                    render::render_all_blocks_into(&final_view, &state, viewport_w, true);
+                    mutated = true;
                 }
-                mutated = true;
             }
-            drop(state);
 
             if should_update {
                 needs_scroll = true;

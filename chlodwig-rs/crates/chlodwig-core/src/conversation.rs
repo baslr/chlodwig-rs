@@ -226,9 +226,17 @@ pub enum ConversationEvent {
         result: String,
     },
     /// SummarizeContext meta-tool was applied.
+    ///
+    /// `summaries` is the raw list the model sent (one entry per tool_result
+    /// in the most recent user message; empty strings mean "leave that one
+    /// untouched"). `replaced` counts the actually-applied non-empty entries.
+    /// UIs use `summaries` to patch the corresponding `ToolResult` blocks
+    /// in their display so the user sees the same `[Summarized] …` text the
+    /// API history now contains, instead of the original verbose output.
     ContextSummarized {
         replaced: usize,
         requested: usize,
+        summaries: Vec<String>,
     },
 }
 
@@ -299,32 +307,28 @@ pub const SUMMARIZE_CONTEXT_TOOL_NAME: &str = "SummarizeContext";
 fn summarize_context_definition() -> ToolDefinition {
     ToolDefinition {
         name: SUMMARIZE_CONTEXT_TOOL_NAME.into(),
-        description: "Replace previous tool results in the conversation history with shorter \
-            summaries to reduce context size. Use this when a tool result (e.g. a large file \
-            read, a long Bash output) turned out to be irrelevant or when only a small part \
-            of the result is needed going forward. The original tool_use/tool_result pairing \
-            is preserved — only the tool_result content is replaced with your summary. \
+        description: "Replace tool results from the IMMEDIATELY PRECEDING user message \
+            with shorter summaries to reduce context size. Only the most recent round of \
+            tool results (the ones in the user message right before your current turn) \
+            can be summarized. Use this when a tool result (e.g. a large file read, a long \
+            Bash output, a big WebFetch) turned out to be irrelevant or when only a small \
+            part of it is needed going forward. The original tool_use/tool_result pairing \
+            is preserved — only the tool_result content is replaced with '[Summarized] <your text>'. \
             This tool call itself is removed from the history (meta-tool).".into(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
                 "summaries": {
                     "type": "array",
-                    "description": "One entry per tool result to summarize.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "tool_use_id": {
-                                "type": "string",
-                                "description": "The id of the tool_use whose result should be replaced."
-                            },
-                            "summary": {
-                                "type": "string",
-                                "description": "The replacement summary text for the tool result."
-                            }
-                        },
-                        "required": ["tool_use_id", "summary"]
-                    }
+                    "description": "One entry per tool_result in the immediately preceding \
+                        user message, in the EXACT order those tool_results appear there. \
+                        Each non-empty string replaces that tool_result's content with \
+                        '[Summarized] <text>'. Use an empty string \"\" to leave a \
+                        tool_result untouched. Array length is silently clamped: providing \
+                        fewer entries than there are tool_results leaves the extra ones \
+                        unchanged; providing more than there are tool_results ignores the excess. \
+                        Do NOT include any IDs — positional matching only.",
+                    "items": { "type": "string" }
                 }
             },
             "required": ["summaries"]
@@ -332,25 +336,36 @@ fn summarize_context_definition() -> ToolDefinition {
     }
 }
 
-/// Apply SummarizeContext: replace tool_result contents in `messages`
-/// with the provided summaries. Returns the number of replacements made.
+/// Apply SummarizeContext: replace tool_result contents in the IMMEDIATELY
+/// PRECEDING (most recent) user message that contains tool_results, positionally
+/// matched against `summaries`. An empty summary string leaves the corresponding
+/// tool_result untouched. Returns the number of tool_results actually replaced.
 pub fn apply_summarize_context(
     messages: &mut [Message],
-    summaries: &[(String, String)], // (tool_use_id, summary)
+    summaries: &[String],
 ) -> usize {
-    let mut replaced = 0;
-    for msg in messages.iter_mut() {
-        for block in msg.content.iter_mut() {
-            if let ContentBlock::ToolResult {
-                tool_use_id,
-                content,
-                ..
-            } = block
-            {
-                if let Some((_, summary)) = summaries.iter().find(|(id, _)| id == tool_use_id) {
-                    *content = ToolResultContent::Text(format!("[Summarized] {summary}"));
-                    replaced += 1;
-                }
+    // Find the most recent User message containing at least one ToolResult.
+    // If the last User message is plain text (echte User-Eingabe), there's
+    // nothing to summarize and we return 0.
+    let target_idx = messages.iter().rposition(|m| {
+        matches!(m.role, Role::User)
+            && m.content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::ToolResult { .. }))
+    });
+    let Some(idx) = target_idx else { return 0; };
+
+    let mut replaced = 0usize;
+    let mut summary_iter = summaries.iter();
+    for block in messages[idx].content.iter_mut() {
+        if let ContentBlock::ToolResult { content, .. } = block {
+            let Some(s) = summary_iter.next() else {
+                // Fewer summaries than tool_results → leave rest untouched.
+                break;
+            };
+            if !s.is_empty() {
+                *content = ToolResultContent::Text(format!("[Summarized] {s}"));
+                replaced += 1;
             }
         }
     }
@@ -361,7 +376,8 @@ pub fn apply_summarize_context(
 pub fn build_request(state: &ConversationState) -> ApiRequest {
     let mut tools: Vec<ToolDefinition> = state.tools.iter().map(|t| t.definition()).collect();
     // Inject the SummarizeContext meta-tool so the model can call it.
-    tools.push(summarize_context_definition());
+    // DISABLED on user request — tool not advertised to the model.
+    // tools.push(summarize_context_definition());
 
     ApiRequest {
         model: state.model.clone(),
@@ -927,17 +943,13 @@ pub async fn run_turn(
             tool_uses.retain(|t| t.name != SUMMARIZE_CONTEXT_TOOL_NAME);
 
             for pending in &summarize_uses {
-                let summaries: Vec<(String, String)> = pending
+                let summaries: Vec<String> = pending
                     .input
                     .get("summaries")
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|entry| {
-                                let id = entry.get("tool_use_id")?.as_str()?.to_string();
-                                let summary = entry.get("summary")?.as_str()?.to_string();
-                                Some((id, summary))
-                            })
+                            .map(|entry| entry.as_str().unwrap_or("").to_string())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -952,6 +964,7 @@ pub async fn run_turn(
                 let _ = event_tx.send(ConversationEvent::ContextSummarized {
                     replaced,
                     requested: summaries.len(),
+                    summaries: summaries.clone(),
                 });
             }
 
@@ -963,6 +976,43 @@ pub async fn run_turn(
                     !matches!(block, ContentBlock::ToolUse { id, .. } if sc_ids.contains(&id.as_str()))
                 });
             }
+
+            // SummarizeContext semantically means "clean up context and let
+            // me continue working". So if there are no OTHER tool_uses to
+            // execute, we must NOT end the turn — we must recurse for a
+            // follow-up round, regardless of whether the assistant message
+            // also contained text.
+            //
+            // Edge case: if the assistant message became empty (model called
+            // ONLY SummarizeContext, no text), pop it first — an empty
+            // assistant message would poison the next API call.
+            //
+            // To recurse, the API requires the conversation to end with a
+            // USER message (otherwise: "must end with user message" 400).
+            // So append a minimal "Continue." user message before recursing.
+            // The model's preceding text (if any) stays in history so the
+            // next turn has full context.
+            let assistant_empty = state
+                .messages
+                .last()
+                .map(|m| m.content.is_empty())
+                .unwrap_or(false);
+            if assistant_empty {
+                state.messages.pop();
+            }
+            // DISABLED on user request — do NOT auto-inject a "Continue."
+            // user message and recurse after SummarizeContext. Falls through
+            // to normal turn-end handling below.
+            // if tool_uses.is_empty() {
+            //     // Append a minimal user message so the API call is valid.
+            //     state.messages.push(Message {
+            //         role: Role::User,
+            //         content: vec![ContentBlock::Text {
+            //             text: "Continue.".into(),
+            //         }],
+            //     });
+            //     return Box::pin(run_turn(state, api_client, permission, event_tx)).await;
+            // }
         }
 
         if tool_uses.is_empty() {
@@ -3615,7 +3665,7 @@ mod tests {
 
         let replaced = apply_summarize_context(
             &mut messages,
-            &[("toolu_abc".into(), "Read foo.rs: 2000 lines, not relevant".into())],
+            &["Read foo.rs: 2000 lines, not relevant".into()],
         );
 
         assert_eq!(replaced, 1);
@@ -3632,35 +3682,22 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_summarize_context_unknown_id_returns_zero() {
+    fn test_apply_summarize_context_no_tool_results_in_last_user_msg() {
+        // Last user message is plain text → nothing to summarize.
         let mut messages = vec![
             Message {
                 role: Role::User,
-                content: vec![ContentBlock::ToolResult {
-                    tool_use_id: "toolu_abc".into(),
-                    content: ToolResultContent::Text("original".into()),
-                    is_error: None,
-                }],
+                content: vec![ContentBlock::Text { text: "hi".into() }],
             },
         ];
 
-        let replaced = apply_summarize_context(
-            &mut messages,
-            &[("toolu_UNKNOWN".into(), "summary".into())],
-        );
+        let replaced = apply_summarize_context(&mut messages, &["summary".into()]);
         assert_eq!(replaced, 0);
-        // Original unchanged
-        match &messages[0].content[0] {
-            ContentBlock::ToolResult { content, .. } => match content {
-                ToolResultContent::Text(t) => assert_eq!(t, "original"),
-                _ => panic!("expected Text"),
-            },
-            _ => panic!("expected ToolResult"),
-        }
     }
 
     #[test]
-    fn test_apply_summarize_context_multiple_summaries() {
+    fn test_apply_summarize_context_positional_multiple() {
+        // Last user msg has three tool_results — all three summarized positionally.
         let mut messages = vec![
             Message {
                 role: Role::User,
@@ -3675,23 +3712,202 @@ mod tests {
                         content: ToolResultContent::Text("big output 2".into()),
                         is_error: None,
                     },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "toolu_3".into(),
+                        content: ToolResultContent::Text("big output 3".into()),
+                        is_error: None,
+                    },
                 ],
             },
         ];
 
         let replaced = apply_summarize_context(
             &mut messages,
-            &[
-                ("toolu_1".into(), "summary 1".into()),
-                ("toolu_2".into(), "summary 2".into()),
-            ],
+            &["summary A".into(), "summary B".into(), "summary C".into()],
         );
-        assert_eq!(replaced, 2);
+        assert_eq!(replaced, 3);
+
+        // Position 0 → "summary A", position 1 → "summary B", position 2 → "summary C"
+        let contents: Vec<String> = messages[0]
+            .content
+            .iter()
+            .filter_map(|b| match b {
+                ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(contents.len(), 3);
+        assert!(contents[0].contains("summary A"), "pos 0: {}", contents[0]);
+        assert!(contents[1].contains("summary B"), "pos 1: {}", contents[1]);
+        assert!(contents[2].contains("summary C"), "pos 2: {}", contents[2]);
+    }
+
+    #[test]
+    fn test_apply_summarize_context_empty_string_skips_position() {
+        // ["", "x", ""] → only position 1 is replaced.
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "toolu_1".into(),
+                        content: ToolResultContent::Text("original A".into()),
+                        is_error: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "toolu_2".into(),
+                        content: ToolResultContent::Text("original B".into()),
+                        is_error: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "toolu_3".into(),
+                        content: ToolResultContent::Text("original C".into()),
+                        is_error: None,
+                    },
+                ],
+            },
+        ];
+
+        let replaced = apply_summarize_context(
+            &mut messages,
+            &["".into(), "middle summary".into(), "".into()],
+        );
+        assert_eq!(replaced, 1);
+
+        match &messages[0].content[0] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => {
+                assert_eq!(t, "original A", "pos 0 untouched");
+            }
+            _ => panic!(),
+        }
+        match &messages[0].content[1] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => {
+                assert!(t.contains("[Summarized]") && t.contains("middle summary"), "pos 1 replaced");
+            }
+            _ => panic!(),
+        }
+        match &messages[0].content[2] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => {
+                assert_eq!(t, "original C", "pos 2 untouched");
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_apply_summarize_context_fewer_summaries_than_results() {
+        // 3 results, 1 summary → only first replaced, other two left.
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t1".into(),
+                        content: ToolResultContent::Text("A".into()),
+                        is_error: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t2".into(),
+                        content: ToolResultContent::Text("B".into()),
+                        is_error: None,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "t3".into(),
+                        content: ToolResultContent::Text("C".into()),
+                        is_error: None,
+                    },
+                ],
+            },
+        ];
+
+        let replaced = apply_summarize_context(&mut messages, &["only first".into()]);
+        assert_eq!(replaced, 1);
+
+        match &messages[0].content[1] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => assert_eq!(t, "B"),
+            _ => panic!(),
+        }
+        match &messages[0].content[2] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => assert_eq!(t, "C"),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_apply_summarize_context_more_summaries_than_results() {
+        // 1 result, 3 summaries → only first applied, overflow silently ignored.
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "t1".into(),
+                    content: ToolResultContent::Text("A".into()),
+                    is_error: None,
+                }],
+            },
+        ];
+
+        let replaced = apply_summarize_context(
+            &mut messages,
+            &["first".into(), "overflow 2".into(), "overflow 3".into()],
+        );
+        assert_eq!(replaced, 1);
+        match &messages[0].content[0] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => {
+                assert!(t.contains("first"));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn test_apply_summarize_context_only_touches_most_recent_round() {
+        // Two rounds; older round must stay untouched.
+        let mut messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "old".into(),
+                    content: ToolResultContent::Text("OLD original".into()),
+                    is_error: None,
+                }],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text { text: "thinking".into() }],
+            },
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::ToolResult {
+                    tool_use_id: "new".into(),
+                    content: ToolResultContent::Text("NEW original".into()),
+                    is_error: None,
+                }],
+            },
+        ];
+
+        let replaced = apply_summarize_context(&mut messages, &["replace newest".into()]);
+        assert_eq!(replaced, 1);
+
+        // Older round untouched
+        match &messages[0].content[0] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => {
+                assert_eq!(t, "OLD original");
+            }
+            _ => panic!(),
+        }
+        // Newest round replaced
+        match &messages[2].content[0] {
+            ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } => {
+                assert!(t.contains("replace newest"));
+            }
+            _ => panic!(),
+        }
     }
 
     #[test]
     fn test_apply_summarize_context_preserves_pairing() {
-        // After summarization, tool_use_id must still match
+        // After summarization, tool_use_id must still match.
         let mut messages = vec![
             Message {
                 role: Role::Assistant,
@@ -3713,7 +3929,7 @@ mod tests {
 
         apply_summarize_context(
             &mut messages,
-            &[("toolu_abc".into(), "ls output: 5000 files".into())],
+            &["ls output: 5000 files".into()],
         );
 
         // ToolUse still has id "toolu_abc"
@@ -3736,11 +3952,12 @@ mod tests {
         let schema = &def.input_schema;
         assert_eq!(schema["required"][0], "summaries");
         let items = &schema["properties"]["summaries"]["items"];
-        assert_eq!(items["required"][0], "tool_use_id");
-        assert_eq!(items["required"][1], "summary");
+        // New schema: items are plain strings, no IDs, no indices.
+        assert_eq!(items["type"], "string", "summaries items must be strings, not objects");
     }
 
     #[test]
+    #[ignore = "SummarizeContext tool injection disabled"]
     fn test_build_request_includes_summarize_context_tool() {
         let state = make_test_state("hello");
         let request = build_request(&state);
@@ -3812,7 +4029,7 @@ mod tests {
             SseEvent::ContentBlockDelta {
                 index: 0,
                 delta: Delta::InputJsonDelta {
-                    partial_json: r#"{"summaries":[{"tool_use_id":"toolu_echo","summary":"Echo returned big output, not needed"}]}"#.into(),
+                    partial_json: r#"{"summaries":["Echo returned big output, not needed"]}"#.into(),
                 },
             },
             SseEvent::ContentBlockStop { index: 0 },
@@ -3825,12 +4042,38 @@ mod tests {
             SseEvent::MessageStop,
         ];
 
-        // Round 3: final text response (after SummarizeContext erased, no more tools)
-        // Actually after SummarizeContext with no other tools, TurnComplete fires.
-        // So we don't need round 3.
+        // Round 3: final text response after the SC-only round popped the
+        // empty assistant message and recursed. Model now produces real text.
+        let round3 = vec![
+            SseEvent::MessageStart {
+                message: MessageStartInfo {
+                    id: "msg_3".into(),
+                    model: "test".into(),
+                    usage: None,
+                },
+            },
+            SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStartInfo::Text { text: None },
+            },
+            SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: Delta::TextDelta {
+                    text: "done".into(),
+                },
+            },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta {
+                delta: MessageDeltaInfo {
+                    stop_reason: Some("end_turn".into()),
+                },
+                usage: None,
+            },
+            SseEvent::MessageStop,
+        ];
 
         let mock = MockApiClient {
-            responses: std::sync::Mutex::new(vec![round1, round2]),
+            responses: std::sync::Mutex::new(vec![round1, round2, round3]),
         };
 
         let mut state = make_test_state("test summarize");
@@ -3846,7 +4089,7 @@ mod tests {
 
         // 1. ContextSummarized event was emitted
         assert!(
-            events.iter().any(|e| matches!(e, ConversationEvent::ContextSummarized { replaced: 1, requested: 1 })),
+            events.iter().any(|e| matches!(e, ConversationEvent::ContextSummarized { replaced: 1, requested: 1, .. })),
             "expected ContextSummarized event"
         );
 
@@ -3885,5 +4128,309 @@ mod tests {
             events.iter().any(|e| matches!(e, ConversationEvent::TurnComplete)),
             "expected TurnComplete"
         );
+    }
+
+    /// Regression for the production bug found in
+    /// `~/.chlodwig-rs/sessions/2026_04_23_01_03_32.json`: when the model
+    /// calls ONLY `SummarizeContext` in a turn (no text, no other tools),
+    /// the previous code pushed an empty assistant message and emitted
+    /// `TurnComplete`, leaving the user's prompt unanswered (and an empty
+    /// assistant message poisoning the history). Fix: pop the empty
+    /// message and recurse so the model gets a follow-up round.
+    #[tokio::test]
+    #[ignore = "SummarizeContext auto-recurse disabled"]
+    async fn test_summarize_context_only_turn_pops_empty_msg_and_recurses() {
+        // Round 1: SC-only call
+        let round1 = vec![
+            SseEvent::MessageStart {
+                message: MessageStartInfo {
+                    id: "msg_1".into(),
+                    model: "test".into(),
+                    usage: None,
+                },
+            },
+            SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStartInfo::ToolUse {
+                    id: "toolu_sc".into(),
+                    name: "SummarizeContext".into(),
+                },
+            },
+            SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: Delta::InputJsonDelta {
+                    partial_json: r#"{"summaries":[]}"#.into(),
+                },
+            },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta {
+                delta: MessageDeltaInfo {
+                    stop_reason: Some("tool_use".into()),
+                },
+                usage: None,
+            },
+            SseEvent::MessageStop,
+        ];
+        // Round 2: model produces real text after the cleanup
+        let round2 = vec![
+            SseEvent::MessageStart {
+                message: MessageStartInfo {
+                    id: "msg_2".into(),
+                    model: "test".into(),
+                    usage: None,
+                },
+            },
+            SseEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStartInfo::Text { text: None },
+            },
+            SseEvent::ContentBlockDelta {
+                index: 0,
+                delta: Delta::TextDelta {
+                    text: "answer after cleanup".into(),
+                },
+            },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta {
+                delta: MessageDeltaInfo {
+                    stop_reason: Some("end_turn".into()),
+                },
+                usage: None,
+            },
+            SseEvent::MessageStop,
+        ];
+
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![round1, round2]),
+        };
+
+        let mut state = make_test_state("hi");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        run_turn(&mut state, &mock, &AutoApprovePrompter, &tx).await.unwrap();
+
+        // No empty assistant message in history.
+        for (i, msg) in state.messages.iter().enumerate() {
+            assert!(
+                !(matches!(msg.role, Role::Assistant) && msg.content.is_empty()),
+                "messages[{i}] is an empty assistant message — would poison the next API call"
+            );
+        }
+
+        // Final assistant message contains the follow-up text.
+        let last = state.messages.last().unwrap();
+        assert!(matches!(last.role, Role::Assistant));
+        let has_text = last.content.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("answer after cleanup")));
+        assert!(has_text, "expected follow-up assistant text after SC-only turn, got: {:?}", last.content);
+
+        // No SC tool_use leaked into history.
+        for msg in &state.messages {
+            for block in &msg.content {
+                if let ContentBlock::ToolUse { name, .. } = block {
+                    assert_ne!(name, "SummarizeContext");
+                }
+            }
+        }
+
+        // Exactly ONE TurnComplete (the final one), not two.
+        let turn_complete_count = rx.try_iter_count(|e| matches!(e, ConversationEvent::TurnComplete));
+        assert_eq!(turn_complete_count, 1, "expected exactly one TurnComplete event");
+    }
+
+    /// Regression for the production bug found in
+    /// `~/.chlodwig-rs/sessions/2026_04_23_02_18_27.json`: when the model
+    /// produces TEXT + only-SummarizeContext tool_uses in the same turn
+    /// (no other "real" tool_uses), the previous fix only popped EMPTY
+    /// assistant messages. With text present, the message wasn't popped,
+    /// `tool_uses` was empty after SC erase, and the loop emitted
+    /// `TurnComplete` — leaving the assistant text as a dead-end and the
+    /// user having to type "weiter" to continue.
+    /// SC must always trigger a recursive follow-up round when no other
+    /// tools are queued, even when the assistant turn also had text.
+    #[tokio::test]
+    #[ignore = "SummarizeContext auto-recurse disabled"]
+    async fn test_summarize_context_with_text_recurses_for_followup() {
+        // Round 1: assistant produces TEXT and a SummarizeContext call.
+        // Some real tool_use first (so there's a tool_result to summarize),
+        // then in round 2 the model produces text + SC together.
+        let round1 = vec![
+            SseEvent::MessageStart { message: MessageStartInfo { id: "msg_1".into(), model: "test".into(), usage: None } },
+            SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockStartInfo::ToolUse { id: "toolu_echo".into(), name: "Echo".into() } },
+            SseEvent::ContentBlockDelta { index: 0, delta: Delta::InputJsonDelta { partial_json: r#"{"text":"hello"}"#.into() } },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta { delta: MessageDeltaInfo { stop_reason: Some("tool_use".into()) }, usage: None },
+            SseEvent::MessageStop,
+        ];
+
+        // Round 2: assistant text + SC tool_use (no other tool_uses)
+        let round2 = vec![
+            SseEvent::MessageStart { message: MessageStartInfo { id: "msg_2".into(), model: "test".into(), usage: None } },
+            SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockStartInfo::Text { text: None } },
+            SseEvent::ContentBlockDelta { index: 0, delta: Delta::TextDelta { text: "Now I'll continue.".into() } },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::ContentBlockStart { index: 1, content_block: ContentBlockStartInfo::ToolUse { id: "toolu_sc".into(), name: "SummarizeContext".into() } },
+            SseEvent::ContentBlockDelta { index: 1, delta: Delta::InputJsonDelta { partial_json: r#"{"summaries":["echo result"]}"#.into() } },
+            SseEvent::ContentBlockStop { index: 1 },
+            SseEvent::MessageDelta { delta: MessageDeltaInfo { stop_reason: Some("tool_use".into()) }, usage: None },
+            SseEvent::MessageStop,
+        ];
+
+        // Round 3: model continues with another tool, then ends.
+        let round3 = vec![
+            SseEvent::MessageStart { message: MessageStartInfo { id: "msg_3".into(), model: "test".into(), usage: None } },
+            SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockStartInfo::Text { text: None } },
+            SseEvent::ContentBlockDelta { index: 0, delta: Delta::TextDelta { text: "all done".into() } },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta { delta: MessageDeltaInfo { stop_reason: Some("end_turn".into()) }, usage: None },
+            SseEvent::MessageStop,
+        ];
+
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![round1, round2, round3]),
+        };
+
+        let mut state = make_test_state("hi");
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        run_turn(&mut state, &mock, &AutoApprovePrompter, &tx).await.unwrap();
+
+        // Assistant message with the text "Now I'll continue." MUST still be
+        // in history (text not erased even though SC tool_use was).
+        let has_continue_text = state.messages.iter().any(|m| {
+            matches!(m.role, Role::Assistant) && m.content.iter().any(|b| {
+                matches!(b, ContentBlock::Text { text } if text.contains("Now I'll continue."))
+            })
+        });
+        assert!(has_continue_text, "assistant text must survive SC erase");
+
+        // The follow-up round MUST have happened: msg with "all done" present.
+        let has_all_done = state.messages.iter().any(|m| {
+            matches!(m.role, Role::Assistant) && m.content.iter().any(|b| {
+                matches!(b, ContentBlock::Text { text } if text.contains("all done"))
+            })
+        });
+        assert!(has_all_done, "follow-up round MUST have happened — model intended to continue after SC");
+
+        // Echo tool_result must be summarized.
+        let has_summary = state.messages.iter().flat_map(|m| &m.content).any(|b| {
+            matches!(b, ContentBlock::ToolResult { content: ToolResultContent::Text(t), .. } if t.contains("[Summarized]") && t.contains("echo result"))
+        });
+        assert!(has_summary, "echo tool_result must be summarized");
+
+        // No SC tool_use leaked into history.
+        for msg in &state.messages {
+            for block in &msg.content {
+                if let ContentBlock::ToolUse { name, .. } = block {
+                    assert_ne!(name, "SummarizeContext");
+                }
+            }
+        }
+
+        // Exactly ONE TurnComplete (the final one).
+        let turn_complete_count = rx.try_iter_count(|e| matches!(e, ConversationEvent::TurnComplete));
+        assert_eq!(turn_complete_count, 1, "expected exactly one TurnComplete");
+    }
+
+    /// Regression for the production crash:
+    /// `HTTP 400: "The conversation must end with a user message."`
+    /// Reproduce: assistant produces TEXT + only-SC. After SC erase, assistant
+    /// message still has the text → not popped. `tool_uses` is empty → recurse
+    /// → API request built from `state.messages` ending with assistant → API 400.
+    /// Fix: before recursing on SC-only path, append a minimal "Continue."
+    /// user message so the conversation ends with a User role.
+    #[tokio::test]
+    #[ignore = "SummarizeContext auto-recurse disabled"]
+    async fn test_summarize_context_followup_appends_continue_user_msg() {
+        let round1 = vec![
+            SseEvent::MessageStart { message: MessageStartInfo { id: "m1".into(), model: "test".into(), usage: None } },
+            SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockStartInfo::ToolUse { id: "toolu_e".into(), name: "Echo".into() } },
+            SseEvent::ContentBlockDelta { index: 0, delta: Delta::InputJsonDelta { partial_json: r#"{"text":"x"}"#.into() } },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta { delta: MessageDeltaInfo { stop_reason: Some("tool_use".into()) }, usage: None },
+            SseEvent::MessageStop,
+        ];
+        // Round 2: assistant TEXT + only SummarizeContext call
+        let round2 = vec![
+            SseEvent::MessageStart { message: MessageStartInfo { id: "m2".into(), model: "test".into(), usage: None } },
+            SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockStartInfo::Text { text: None } },
+            SseEvent::ContentBlockDelta { index: 0, delta: Delta::TextDelta { text: "I'll continue.".into() } },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::ContentBlockStart { index: 1, content_block: ContentBlockStartInfo::ToolUse { id: "toolu_sc".into(), name: "SummarizeContext".into() } },
+            SseEvent::ContentBlockDelta { index: 1, delta: Delta::InputJsonDelta { partial_json: r#"{"summaries":["sum"]}"#.into() } },
+            SseEvent::ContentBlockStop { index: 1 },
+            SseEvent::MessageDelta { delta: MessageDeltaInfo { stop_reason: Some("tool_use".into()) }, usage: None },
+            SseEvent::MessageStop,
+        ];
+        // Round 3 (after SC + Continue): final text
+        let round3 = vec![
+            SseEvent::MessageStart { message: MessageStartInfo { id: "m3".into(), model: "test".into(), usage: None } },
+            SseEvent::ContentBlockStart { index: 0, content_block: ContentBlockStartInfo::Text { text: None } },
+            SseEvent::ContentBlockDelta { index: 0, delta: Delta::TextDelta { text: "ok done".into() } },
+            SseEvent::ContentBlockStop { index: 0 },
+            SseEvent::MessageDelta { delta: MessageDeltaInfo { stop_reason: Some("end_turn".into()) }, usage: None },
+            SseEvent::MessageStop,
+        ];
+
+        // The MockApiClient inspects the request — we want to assert that the
+        // request leading into round3 ends with a USER message, not assistant.
+        // Use a wrapper that captures every request.
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<ApiRequest>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        struct Capturing {
+            inner: MockApiClient,
+            captured: std::sync::Arc<std::sync::Mutex<Vec<ApiRequest>>>,
+        }
+        #[async_trait::async_trait]
+        impl ApiClient for Capturing {
+            async fn stream_message(&self, request: ApiRequest) -> Result<SseStream, ApiError> {
+                self.captured.lock().unwrap().push(request.clone());
+                self.inner.stream_message(request).await
+            }
+        }
+        let mock = Capturing {
+            inner: MockApiClient { responses: std::sync::Mutex::new(vec![round1, round2, round3]) },
+            captured: captured.clone(),
+        };
+
+        let mut state = make_test_state("hi");
+        let (tx, _rx) = mpsc::unbounded_channel();
+        run_turn(&mut state, &mock, &AutoApprovePrompter, &tx).await.unwrap();
+
+        // 3 API requests: round1, round2, round3
+        let reqs = captured.lock().unwrap();
+        assert_eq!(reqs.len(), 3, "expected 3 API requests");
+
+        // Round 3's request must end with a USER message (not assistant).
+        let last_msg = reqs[2].messages.last().expect("round3 request must have messages");
+        assert!(matches!(last_msg.role, Role::User),
+            "round3 request must end with User role to satisfy API constraint, got {:?}", last_msg.role);
+
+        // The "Continue." sentinel must be present.
+        let has_continue = reqs[2].messages.iter().any(|m| {
+            matches!(m.role, Role::User) && m.content.iter().any(|b| {
+                matches!(b, ContentBlock::Text { text } if text == "Continue.")
+            })
+        });
+        assert!(has_continue, "request must contain the auto-injected 'Continue.' user message");
+
+        // Assistant text from round 2 must still be in history (not popped).
+        let has_assistant_text = state.messages.iter().any(|m| {
+            matches!(m.role, Role::Assistant) && m.content.iter().any(|b| {
+                matches!(b, ContentBlock::Text { text } if text.contains("I'll continue."))
+            })
+        });
+        assert!(has_assistant_text, "assistant text must survive the SC erase");
+    }
+
+    // Helper: count matching events drained from receiver.
+    trait TryIterCount {
+        fn try_iter_count<F: Fn(&ConversationEvent) -> bool>(&mut self, f: F) -> usize;
+    }
+    impl TryIterCount for mpsc::UnboundedReceiver<ConversationEvent> {
+        fn try_iter_count<F: Fn(&ConversationEvent) -> bool>(&mut self, f: F) -> usize {
+            let mut n = 0;
+            while let Ok(e) = self.try_recv() {
+                if f(&e) { n += 1; }
+            }
+            n
+        }
     }
 }

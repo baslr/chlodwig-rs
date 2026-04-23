@@ -1396,3 +1396,121 @@ fn test_event_loop_has_table_row_highlight() {
         "table_interactions.rs must highlight table rows on hover"
     );
 }
+
+// ── ContextSummarized rendering ──────────────────────────────────────
+
+/// Regression: when SummarizeContext is applied, the ToolResult display
+/// blocks for the most recent round must be patched in-place so the user
+/// sees `[Summarized] …` instead of the original verbose output. Without
+/// this the JSON history matches but the visible output keeps showing the
+/// old text — confusing and useless.
+#[test]
+fn test_context_summarized_patches_recent_tool_result_blocks() {
+    let mut state = AppState::new("m".into());
+
+    // Simulate: ToolUseStart x2, ToolResult x2 (a parallel-tool round), AssistantText, then SC.
+    state.handle_event(ConversationEvent::ToolUseStart {
+        id: "t1".into(),
+        name: "WebFetch".into(),
+        input: serde_json::json!({"url":"https://a"}),
+    });
+    state.handle_event(ConversationEvent::ToolUseStart {
+        id: "t2".into(),
+        name: "Read".into(),
+        input: serde_json::json!({"file_path":"/tmp/x"}),
+    });
+    state.handle_event(ConversationEvent::ToolResult {
+        id: "t1".into(),
+        output: chlodwig_core::ToolResultContent::Text("HUGE webpage content...".into()),
+        is_error: false,
+    });
+    state.handle_event(ConversationEvent::ToolResult {
+        id: "t2".into(),
+        output: chlodwig_core::ToolResultContent::Text("HUGE file content...".into()),
+        is_error: false,
+    });
+    state.handle_event(ConversationEvent::TextDelta("Now I'll continue.".into()));
+    state.handle_event(ConversationEvent::TextComplete("Now I'll continue.".into()));
+
+    // Sanity: pre-summarize state
+    let pre_results: Vec<&str> = state.blocks.iter().filter_map(|b| match b {
+        DisplayBlock::ToolResult { output, .. } => Some(output.as_str()),
+        _ => None,
+    }).collect();
+    assert_eq!(pre_results.len(), 2);
+    assert!(pre_results[0].contains("HUGE webpage"));
+    assert!(pre_results[1].contains("HUGE file"));
+
+    // Now SC fires
+    let changed = state.handle_event(ConversationEvent::ContextSummarized {
+        replaced: 2,
+        requested: 2,
+        summaries: vec!["webpage summary".into(), "file summary".into()],
+    });
+    assert!(changed, "ContextSummarized must trigger a redraw");
+
+    // Both ToolResult blocks must now show summaries
+    let post_results: Vec<&str> = state.blocks.iter().filter_map(|b| match b {
+        DisplayBlock::ToolResult { output, .. } => Some(output.as_str()),
+        _ => None,
+    }).collect();
+    assert_eq!(post_results.len(), 2);
+    assert!(post_results[0].contains("[Summarized]") && post_results[0].contains("webpage summary"),
+        "block 0 should be summarized, got: {}", post_results[0]);
+    assert!(post_results[1].contains("[Summarized]") && post_results[1].contains("file summary"),
+        "block 1 should be summarized, got: {}", post_results[1]);
+}
+
+#[test]
+fn test_context_summarized_skips_empty_summary_strings() {
+    // Empty summary string at position i means "leave that ToolResult untouched".
+    let mut state = AppState::new("m".into());
+
+    state.handle_event(ConversationEvent::ToolUseStart { id: "t1".into(), name: "X".into(), input: serde_json::Value::Null });
+    state.handle_event(ConversationEvent::ToolUseStart { id: "t2".into(), name: "Y".into(), input: serde_json::Value::Null });
+    state.handle_event(ConversationEvent::ToolResult { id: "t1".into(), output: chlodwig_core::ToolResultContent::Text("ORIG A".into()), is_error: false });
+    state.handle_event(ConversationEvent::ToolResult { id: "t2".into(), output: chlodwig_core::ToolResultContent::Text("ORIG B".into()), is_error: false });
+
+    state.handle_event(ConversationEvent::ContextSummarized {
+        replaced: 1,
+        requested: 2,
+        summaries: vec!["".into(), "summary B".into()],
+    });
+
+    let post: Vec<&str> = state.blocks.iter().filter_map(|b| match b {
+        DisplayBlock::ToolResult { output, .. } => Some(output.as_str()),
+        _ => None,
+    }).collect();
+    assert_eq!(post[0], "ORIG A", "empty summary leaves block untouched");
+    assert!(post[1].contains("[Summarized]") && post[1].contains("summary B"));
+}
+
+#[test]
+fn test_context_summarized_only_touches_most_recent_round() {
+    // Two rounds separated by an AssistantText. SC must only touch the
+    // newest round.
+    let mut state = AppState::new("m".into());
+
+    // Round 1
+    state.handle_event(ConversationEvent::ToolUseStart { id: "old".into(), name: "X".into(), input: serde_json::Value::Null });
+    state.handle_event(ConversationEvent::ToolResult { id: "old".into(), output: chlodwig_core::ToolResultContent::Text("OLD content".into()), is_error: false });
+    state.handle_event(ConversationEvent::TextDelta("between".into()));
+    state.handle_event(ConversationEvent::TextComplete("between".into()));
+    // Round 2
+    state.handle_event(ConversationEvent::ToolUseStart { id: "new".into(), name: "Y".into(), input: serde_json::Value::Null });
+    state.handle_event(ConversationEvent::ToolResult { id: "new".into(), output: chlodwig_core::ToolResultContent::Text("NEW content".into()), is_error: false });
+
+    state.handle_event(ConversationEvent::ContextSummarized {
+        replaced: 1,
+        requested: 1,
+        summaries: vec!["new summary".into()],
+    });
+
+    let outputs: Vec<&str> = state.blocks.iter().filter_map(|b| match b {
+        DisplayBlock::ToolResult { output, .. } => Some(output.as_str()),
+        _ => None,
+    }).collect();
+    assert_eq!(outputs.len(), 2);
+    assert_eq!(outputs[0], "OLD content", "older round must be untouched");
+    assert!(outputs[1].contains("[Summarized]") && outputs[1].contains("new summary"));
+}
