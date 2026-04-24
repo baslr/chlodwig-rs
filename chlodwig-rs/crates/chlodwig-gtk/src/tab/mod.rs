@@ -375,20 +375,37 @@ pub fn build_window(
         let window_for_title = window.clone();
         tab_view.connect_selected_page_notify(move |tv| {
             let Some(page) = tv.selected_page() else { return };
-            let reg = registry_for_title.borrow();
-            let Some((_, t)) = reg.iter().find(|(p, _)| p == &page) else { return };
-            window_for_title.set_title(Some(&t.window_title()));
+            // Clone the Rc<dyn Tab> and drop the borrow BEFORE any GTK
+            // calls — set_title/refresh_tab_title can synchronously fire
+            // signals that borrow_mut the same registry (Gotcha #46).
+            let title = {
+                let reg = registry_for_title.borrow();
+                let Some((_, t)) = reg.iter().find(|(p, _)| p == &page) else { return };
+                t.window_title()
+            };
+            window_for_title.set_title(Some(&title));
+            // Clear unread indicator when the tab gains focus.
+            if let Some(ai_tab) = ai_conversation::lookup_by_page(&page) {
+                ai_tab.unread.set(false);
+                ai_tab.refresh_tab_title();
+            }
         });
     }
 
-    // Re-focus the active tab's input on window activation.
+    // Re-focus the active tab's input on window activation, and clear
+    // the unread indicator on the selected tab (the user is now looking).
     {
         let tab_view_for_focus = tab_view.clone();
         let registry_for_focus = registry.clone();
         window.connect_is_active_notify(move |w| {
             if !w.is_active() { return }
+            let Some(page) = tab_view_for_focus.selected_page() else { return };
             if let Some(t) = active(&tab_view_for_focus, &registry_for_focus) {
                 t.focus_input();
+            }
+            if let Some(ai_tab) = ai_conversation::lookup_by_page(&page) {
+                ai_tab.unread.set(false);
+                ai_tab.refresh_tab_title();
             }
         });
     }

@@ -43,6 +43,8 @@ pub struct EventDispatchContext {
     pub viewport_cols: Rc<Cell<usize>>,
     pub window: ApplicationWindow,
     pub session_started_at: String,
+    pub page: libadwaita::TabPage,
+    pub tab_view: libadwaita::TabView,
 }
 
 /// Install the 16ms GTK timeout that drives the entire UI from
@@ -57,6 +59,8 @@ pub fn wire(ctx: EventDispatchContext) {
         viewport_cols,
         window,
         session_started_at,
+        page,
+        tab_view,
     } = ctx;
 
     let state_for_events = app_state.clone();
@@ -250,6 +254,21 @@ pub fn wire(ctx: EventDispatchContext) {
                 ConversationEvent::TurnComplete | ConversationEvent::CompactionComplete { .. }
             ) {
                 should_save_session = true;
+            }
+
+            // Unread indicator: mark tab as unread when the turn ends
+            // (TurnComplete or Error) and the user is NOT looking at this
+            // tab — either because another tab is selected, or because the
+            // window itself is in the background.
+            if matches!(event, ConversationEvent::TurnComplete | ConversationEvent::Error(_)) {
+                let is_selected = tab_view.selected_page().as_ref() == Some(&page);
+                let window_focused = window.is_active();
+                if !is_selected || !window_focused {
+                    if let Some(ai_tab) = crate::tab::ai_conversation::lookup_by_page(&page) {
+                        ai_tab.unread.set(true);
+                        ai_tab.refresh_tab_title();
+                    }
+                }
             }
 
             // Track whether streaming was just finalized (so we hide the

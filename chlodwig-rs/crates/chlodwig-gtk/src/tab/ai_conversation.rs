@@ -106,6 +106,11 @@ pub struct AiConversationTab {
     /// (so `/stop`, `stop`, and Esc-Esc can flip it).
     #[allow(dead_code)]
     pub stop_flag: Arc<AtomicBool>,
+    /// Unread indicator: `true` when the tab's turn loop completed while
+    /// the tab was NOT the selected tab. `refresh_tab_title()` prepends
+    /// `●  ` when this is set. Cleared when the tab gains focus (via
+    /// `connect_selected_page_notify` in `build_window`).
+    pub unread: Cell<bool>,
 }
 
 impl crate::tab::Tab for AiConversationTab {
@@ -143,6 +148,10 @@ impl AiConversationTab {
     ///   - From `restore.rs` after a session-restore that brings in a
     ///     persisted `session_name`.
     ///   - From the `/clear` action which clears `session_name` to `None`.
+    ///   - From `event_dispatch` on `TurnComplete` when the tab is inactive
+    ///     (sets `unread = true` beforehand → title gets `●  ` prefix).
+    ///   - From `build_window`'s `connect_selected_page_notify` when the tab
+    ///     gains focus (clears `unread` beforehand → prefix removed).
     ///
     /// The full title (with `Chlodwig` suffix) is also updated as the
     /// tooltip so the user can hover for the long form.
@@ -153,10 +162,15 @@ impl AiConversationTab {
             .map(|n| n.to_string_lossy().into_owned());
         let session_name = state.session_name.clone();
         drop(state); // drop borrow before GTK calls (Gotcha #46)
-        let tab_title = chlodwig_gtk::window::format_tab_title(
+        let base_title = chlodwig_gtk::window::format_tab_title(
             session_name.as_deref(),
             cwd_name.as_deref(),
         );
+        let tab_title = if self.unread.get() {
+            format!("●  {}", base_title)
+        } else {
+            base_title
+        };
         self.page.set_title(&tab_title);
         let tooltip = chlodwig_gtk::window::format_window_title(
             cwd_name.as_deref(),
@@ -519,6 +533,8 @@ impl AiConversationTab {
             viewport_cols: viewport_cols.clone(),
             window: ctx.window.clone(),
             session_started_at: session_started_at.clone(),
+            page: page.clone(),
+            tab_view: ctx.tab_view.clone(),
         });
 
         // ── 7. Spawn per-tab background conversation task ─────────────
@@ -542,6 +558,7 @@ impl AiConversationTab {
             session_started_at,
             prompt_tx,
             stop_flag,
+            unread: Cell::new(false),
         });
         ctx.registry
             .borrow_mut()

@@ -53,3 +53,4 @@ mod toggle_tool_button_tests;
 mod tab_self_focus_tests;
 mod cwd_command_tests;
 mod scroll_to_bottom_button_tests;
+mod unread_indicator_tests;
