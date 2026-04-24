@@ -114,10 +114,12 @@ fn parse_sse_stream(
                         match serde_json::from_str::<SseEvent>(&data) {
                             Ok(event) => yield Ok((raw, event)),
                             Err(e) => {
-                                tracing::debug!("SSE event type: '{}', raw data: {}", _current_event_type, &data[..data.len().min(500)]);
-                                tracing::warn!("SSE parse error: {} for data: {}", e, &data[..data.len().min(200)]);
+                                let preview = crate::openai::safe_prefix(&data, 500);
+                                tracing::debug!("SSE event type: '{}', raw data: {}", _current_event_type, preview);
+                                let short = crate::openai::safe_prefix(&data, 200);
+                                tracing::warn!("SSE parse error: {} for data: {}", e, short);
                                 yield Err(ApiError::SseParseError(
-                                    format!("{e}: {}", &data[..data.len().min(200)])
+                                    format!("{e}: {short}")
                                 ));
                             }
                         }

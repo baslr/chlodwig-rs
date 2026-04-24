@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use clap::Parser;
-use chlodwig_api::AnthropicClient;
 use chlodwig_core::{
     AutoApprovePrompter, ContentBlock, ConversationEvent, ConversationState, Message,
     PermissionDecision, PermissionPrompter, Role, ToolContext,
@@ -47,6 +46,10 @@ struct Cli {
     /// Resume the last saved session
     #[arg(long, short = 'r')]
     resume: bool,
+
+    /// API wire format ("anthropic" or "openai")
+    #[arg(long)]
+    api_format: Option<String>,
 
     /// API base URL override
     #[arg(long)]
@@ -93,21 +96,27 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Resolve configuration: config.json → env vars → CLI args
+    let api_format_override = cli.api_format.as_deref().and_then(|s| match s.to_lowercase().as_str() {
+        "openai" => Some(chlodwig_core::ApiFormat::Openai),
+        "anthropic" => Some(chlodwig_core::ApiFormat::Anthropic),
+        _ => {
+            eprintln!("Unknown --api-format '{}'. Use 'anthropic' or 'openai'.", s);
+            std::process::exit(1);
+        }
+    });
     let config = chlodwig_core::resolve_config(chlodwig_core::ConfigOverrides {
         api_key: cli.api_key.clone(),
         model: cli.model.clone(),
         base_url: cli.base_url.clone(),
         max_tokens: cli.max_tokens,
+        api_format: api_format_override,
     })
     .unwrap_or_else(|msg| {
         eprintln!("{msg}");
         std::process::exit(1);
     });
 
-    let mut client = AnthropicClient::new(config.api_key);
-    if let Some(ref base_url) = config.base_url {
-        client = client.with_base_url(base_url.clone());
-    }
+    let client = chlodwig_api::create_client(&config);
 
     let tools = chlodwig_tools::builtin_tools();
 
@@ -198,15 +207,15 @@ async fn main() -> Result<()> {
     };
 
     if let Some(ref prompt) = cli.print_mode {
-        run_headless(state, &client, &cli, prompt).await
+        run_headless(state, client.as_ref(), &cli, prompt).await
     } else {
-        chlodwig_tui::run_tui_with_permissions(state, std::sync::Arc::new(client), cli.dangerously_skip_permissions, initial_constants, initial_stats, cwd).await
+        chlodwig_tui::run_tui_with_permissions(state, client, cli.dangerously_skip_permissions, initial_constants, initial_stats, cwd).await
     }
 }
 
 async fn run_headless(
     mut state: ConversationState,
-    api_client: &AnthropicClient,
+    api_client: &dyn chlodwig_core::ApiClient,
     cli: &Cli,
     prompt: &str,
 ) -> Result<()> {

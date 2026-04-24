@@ -25,6 +25,17 @@ pub const DEFAULT_MODEL: &str = "github/claude-opus-4.6";
 /// Default max tokens when nothing is configured.
 pub const DEFAULT_MAX_TOKENS: u32 = 16384;
 
+/// API wire format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ApiFormat {
+    /// Anthropic Messages API (native format).
+    #[default]
+    Anthropic,
+    /// OpenAI-compatible `/v1/chat/completions` (works with OpenAI, Azure, 9router, ollama).
+    Openai,
+}
+
 /// Persistent application configuration loaded from `~/.chlodwig-rs/config.json`.
 ///
 /// All fields are optional — missing fields are simply `None`.
@@ -45,6 +56,10 @@ pub struct AppConfig {
     /// Max tokens for response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+
+    /// API wire format (`"anthropic"` or `"openai"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_format: Option<ApiFormat>,
 }
 
 /// CLI argument overrides. GTK passes `ConfigOverrides::default()` (all `None`).
@@ -56,6 +71,7 @@ pub struct ConfigOverrides {
     pub model: Option<String>,
     pub base_url: Option<String>,
     pub max_tokens: Option<u32>,
+    pub api_format: Option<ApiFormat>,
 }
 
 /// Fully resolved configuration. All values are final.
@@ -65,6 +81,7 @@ pub struct ResolvedConfig {
     pub model: String,
     pub base_url: Option<String>,
     pub max_tokens: u32,
+    pub api_format: ApiFormat,
 }
 
 /// Returns the path to the config file: `~/.chlodwig-rs/config.json`.
@@ -130,6 +147,7 @@ pub fn resolve_config_with_path(
     let mut model: Option<String> = file_config.model;
     let mut base_url: Option<String> = file_config.base_url;
     let mut max_tokens: Option<u32> = file_config.max_tokens;
+    let mut api_format: Option<ApiFormat> = file_config.api_format;
 
     // Layer 2: environment variables override config.json
     if let Ok(val) = std::env::var("ANTHROPIC_API_KEY") {
@@ -150,6 +168,13 @@ pub fn resolve_config_with_path(
             max_tokens = Some(n);
         }
     }
+    if let Ok(val) = std::env::var("CHLODWIG_API_FORMAT") {
+        match val.to_lowercase().as_str() {
+            "openai" => api_format = Some(ApiFormat::Openai),
+            "anthropic" => api_format = Some(ApiFormat::Anthropic),
+            _ => {} // ignore invalid values
+        }
+    }
 
     // Layer 3: CLI overrides (highest priority)
     if let Some(val) = overrides.api_key {
@@ -164,6 +189,9 @@ pub fn resolve_config_with_path(
     if let Some(val) = overrides.max_tokens {
         max_tokens = Some(val);
     }
+    if let Some(val) = overrides.api_format {
+        api_format = Some(val);
+    }
 
     // Layer 4: defaults for anything still unset
     let api_key = api_key.ok_or_else(|| {
@@ -177,6 +205,7 @@ pub fn resolve_config_with_path(
         model: model.unwrap_or_else(|| DEFAULT_MODEL.to_string()),
         base_url,
         max_tokens: max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        api_format: api_format.unwrap_or_default(),
     })
 }
 
@@ -283,6 +312,7 @@ mod tests {
             model: Some("cli-model".into()),
             base_url: Some("https://cli.example.com".into()),
             max_tokens: Some(999),
+            ..Default::default()
         };
 
         let result = resolve_config_with_path(overrides, &path).unwrap();
@@ -530,6 +560,7 @@ mod tests {
             model: Some("claude-sonnet-4-20250514".into()),
             base_url: Some("https://api.example.com".into()),
             max_tokens: Some(8192),
+            api_format: Some(ApiFormat::Openai),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let parsed: AppConfig = serde_json::from_str(&json).unwrap();
@@ -581,6 +612,7 @@ mod tests {
             model: None,
             base_url: None,
             max_tokens: None,
+            api_format: None,
         };
         let json = serde_json::to_string(&cfg).unwrap();
         assert!(json.contains("api_key"));

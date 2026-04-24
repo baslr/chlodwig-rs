@@ -194,6 +194,7 @@ pub struct TabConfig {
     pub base_url: Option<String>,
     pub model: String,
     pub max_tokens: u32,
+    pub api_format: chlodwig_core::ApiFormat,
 }
 
 impl From<chlodwig_core::ResolvedConfig> for TabConfig {
@@ -203,6 +204,20 @@ impl From<chlodwig_core::ResolvedConfig> for TabConfig {
             base_url: c.base_url,
             model: c.model,
             max_tokens: c.max_tokens,
+            api_format: c.api_format,
+        }
+    }
+}
+
+impl TabConfig {
+    /// Convert back to [`ResolvedConfig`] for API client construction.
+    pub fn to_resolved(&self) -> chlodwig_core::ResolvedConfig {
+        chlodwig_core::ResolvedConfig {
+            api_key: self.api_key.clone(),
+            base_url: self.base_url.clone(),
+            model: self.model.clone(),
+            max_tokens: self.max_tokens,
+            api_format: self.api_format,
         }
     }
 }
@@ -609,11 +624,7 @@ fn spawn_conversation_task(args: SpawnArgs) {
         let rt = tokio::runtime::Runtime::new()
             .expect("Failed to create Tokio runtime for tab");
         rt.block_on(async move {
-            let mut client = chlodwig_api::AnthropicClient::new(config.api_key);
-            if let Some(url) = config.base_url {
-                client = client.with_base_url(url);
-            }
-            let api_client: Arc<dyn chlodwig_core::ApiClient> = Arc::new(client);
+            let api_client = chlodwig_api::create_client(&config.to_resolved());
 
             let system_prompt = chlodwig_core::build_system_prompt(
                 None,
