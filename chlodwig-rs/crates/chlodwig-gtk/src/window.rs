@@ -1443,12 +1443,17 @@ pub fn show_user_question_dialog(
     text_overlay.set_child(Some(&text_scroll));
     text_overlay.add_overlay(&placeholder_label);
 
+    // Start the dialog at golden-ratio width of the parent window.
+    // No Clamp — content fills the full dialog width and follows user resize.
+    let parent_width = parent.default_width().max(parent.allocated_width());
+    let initial_w = crate::dialog_max_width(parent_width);
+
     let dialog = Rc::new(
         gtk4::Window::builder()
             .title("Question from Assistant")
             .transient_for(parent)
             .modal(true)
-            .default_width(450)
+            .default_width(initial_w)
             .default_height(300)
             .build(),
     );
@@ -1506,6 +1511,7 @@ pub fn show_user_question_dialog(
             if let Some(child) = btn.child() {
                 if let Some(label) = child.downcast_ref::<Label>() {
                     label.set_xalign(0.0);
+                    label.set_wrap(true);
                 }
             }
             btn.add_css_class("flat");

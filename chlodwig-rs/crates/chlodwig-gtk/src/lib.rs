@@ -28,6 +28,25 @@ pub mod window;
 #[cfg(test)]
 mod tests;
 
+// ── UserQuestion dialog width cap ────────────────────────────────────
+
+/// Compute the maximum width for the UserQuestion dialog given the parent
+/// window's width. Uses the golden ratio (≈ 1.618) as divider.
+///
+/// The input is floored at 400px internally, so even zero/negative inputs
+/// produce a usable result. The return value is always ≥ 320px. Above ~518px
+/// the golden ratio dominates; at or below that the result is clamped to 320px.
+///
+/// Callers do NOT need to add their own floor.
+pub fn dialog_max_width(window_width: i32) -> i32 {
+    const GOLDEN: f64 = 1.618_033_988_75;
+    const MIN_CAP: i32 = 320;
+    const INPUT_FLOOR: i32 = 400;
+    let w = window_width.max(INPUT_FLOOR);
+    let cap = (w as f64 / GOLDEN).round() as i32;
+    cap.max(MIN_CAP)
+}
+
 // Re-export from core so existing `chlodwig_gtk::format_numbered_lines` call sites keep working.
 pub use chlodwig_core::format_numbered_lines;
 
