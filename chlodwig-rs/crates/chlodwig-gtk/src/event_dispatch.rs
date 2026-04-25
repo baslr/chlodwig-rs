@@ -27,8 +27,8 @@ use chlodwig_core::ConversationEvent;
 use chlodwig_gtk::app_state::AppState;
 use chlodwig_gtk::window;
 
-use crate::tab::BackgroundCommand;
 use crate::render;
+use crate::tab::BackgroundCommand;
 
 /// Bundles every value the 16ms poll-loop closure captures.
 ///
@@ -122,7 +122,7 @@ pub fn wire(ctx: EventDispatchContext) {
         let curr_adj = adj.value();
         let user_scrolled = match last_adj_set_by_us {
             Some(v) => (curr_adj - v).abs() > 0.5,
-            None => true,  // first tick or after we cleared it
+            None => true, // first tick or after we cleared it
         };
 
         // Only snap anchor when:
@@ -132,11 +132,8 @@ pub fn wire(ctx: EventDispatchContext) {
         let width_stable = prev_alloc_width == 0 || curr_alloc_w == prev_alloc_width;
         if user_scrolled && width_stable {
             if let Some((_, fy)) = scroll.translate_coordinates(&final_view, 0.0, 0.0) {
-                let (_, buf_y_raw) = tv.window_to_buffer_coords(
-                    gtk4::TextWindowType::Widget,
-                    0,
-                    fy as i32,
-                );
+                let (_, buf_y_raw) =
+                    tv.window_to_buffer_coords(gtk4::TextWindowType::Widget, 0, fy as i32);
                 let buf_y = buf_y_raw.max(0);
                 let (iter, _) = tv.line_at_y(buf_y);
                 top_anchor_offset = Some(iter.offset());
@@ -145,25 +142,17 @@ pub fn wire(ctx: EventDispatchContext) {
 
         // ── Restore: width changed → scroll anchor back to viewport top ─
         let width_changed = prev_alloc_width != 0 && curr_alloc_w != prev_alloc_width;
-        if width_changed
-            && !state_for_events.borrow().auto_scroll.is_active()
-        {
+        if width_changed && !state_for_events.borrow().auto_scroll.is_active() {
             if let Some(anchor) = top_anchor_offset {
                 let buf = tv.buffer();
                 let char_count = buf.char_count();
                 let clamped = anchor.min(char_count.saturating_sub(1)).max(0);
                 let iter = buf.iter_at_offset(clamped);
                 let buf_y = tv.iter_location(&iter).y();
-                let (_, fy) = tv.buffer_to_window_coords(
-                    gtk4::TextWindowType::Widget,
-                    0,
-                    buf_y,
-                );
-                if let Some((_, delta_y)) = final_view.translate_coordinates(
-                    &scroll,
-                    0.0,
-                    fy as f64,
-                ) {
+                let (_, fy) = tv.buffer_to_window_coords(gtk4::TextWindowType::Widget, 0, buf_y);
+                if let Some((_, delta_y)) =
+                    final_view.translate_coordinates(&scroll, 0.0, fy as f64)
+                {
                     let max = (adj.upper() - adj.page_size()).max(0.0);
                     let new_value = (curr_adj + delta_y).clamp(0.0, max);
                     adj.set_value(new_value);
@@ -176,7 +165,6 @@ pub fn wire(ctx: EventDispatchContext) {
             last_adj_set_by_us = None;
         }
         prev_alloc_width = curr_alloc_w;
-
 
         // ── Drain all pending events ──────────────────────────────────
         //
@@ -196,31 +184,28 @@ pub fn wire(ctx: EventDispatchContext) {
         let mut needs_scroll = false;
         let mut should_save_session = false;
         let mut streaming_just_finalized = false;
-        let viewport_w = chlodwig_gtk::viewport::viewport_columns(
-            final_view.upcast_ref::<gtk4::TextView>(),
-        );
-        viewport_cols_for_events.set(viewport_w);        // ── Pure-focus scroll model ──────────────────────────────────────
-        //
-        // Two snapshots taken NOW (before any mutation):
-        //
-        //   value_before          — current scroll position
-        //   was_at_content_bottom — was the user looking at the very end
-        //                           of (final + streaming) content?
-        //
-        // After all mutations + GTK layout settles (idle callback at the
-        // end of the tick), we apply ONE of two rules:
-        //
-        //   was_at_content_bottom=true  → snap to NEW content_bottom (follow)
-        //   was_at_content_bottom=false → restore value_before EXACTLY (pin)
-        //
-        // No auto_scroll state, no heuristics, no per-event tracking.
-        // The bottom spacer (window.rs: fixed 4000 px) keeps `upper` so
-        // large that GtkAdjustment never clamps `value` while we're
-        // computing — value_before stays valid through the layout pass.
+        let viewport_w =
+            chlodwig_gtk::viewport::viewport_columns(final_view.upcast_ref::<gtk4::TextView>());
+        viewport_cols_for_events.set(viewport_w); // ── Pure-focus scroll model ──────────────────────────────────────
+                                                  //
+                                                  // Two snapshots taken NOW (before any mutation):
+                                                  //
+                                                  //   value_before          — current scroll position
+                                                  //   was_at_content_bottom — was the user looking at the very end
+                                                  //                           of (final + streaming) content?
+                                                  //
+                                                  // After all mutations + GTK layout settles (idle callback at the
+                                                  // end of the tick), we apply ONE of two rules:
+                                                  //
+                                                  //   was_at_content_bottom=true  → snap to NEW content_bottom (follow)
+                                                  //   was_at_content_bottom=false → restore value_before EXACTLY (pin)
+                                                  //
+                                                  // No auto_scroll state, no heuristics, no per-event tracking.
+                                                  // The bottom spacer (window.rs: fixed 4000 px) keeps `upper` so
+                                                  // large that GtkAdjustment never clamps `value` while we're
+                                                  // computing — value_before stays valid through the layout pass.
         let value_before = scroll.vadjustment().value();
-        let final_h_before = final_view
-            .upcast_ref::<gtk4::TextView>()
-            .allocated_height() as f64;
+        let final_h_before = final_view.upcast_ref::<gtk4::TextView>().allocated_height() as f64;
         let stream_h_before = if streaming_view.is_visible() {
             streaming_view
                 .upcast_ref::<gtk4::TextView>()
@@ -238,8 +223,7 @@ pub fn wire(ctx: EventDispatchContext) {
         //
         // 20 px tolerance band matches the value-changed handler in
         // main.rs which drives state.auto_scroll.is_active().
-        let was_at_content_bottom =
-            (value_before + page_size) >= content_bottom_before - 20.0;
+        let was_at_content_bottom = (value_before + page_size) >= content_bottom_before - 20.0;
         // Kept alive to satisfy static source-grep tests; the actual
         // scroll logic doesn't consume it any more (auto-scroll follow
         // is in the y_bottom tick; streaming-finalize pin is in the
@@ -260,7 +244,10 @@ pub fn wire(ctx: EventDispatchContext) {
             // (TurnComplete or Error) and the user is NOT looking at this
             // tab — either because another tab is selected, or because the
             // window itself is in the background.
-            if matches!(event, ConversationEvent::TurnComplete | ConversationEvent::Error(_)) {
+            if matches!(
+                event,
+                ConversationEvent::TurnComplete | ConversationEvent::Error(_)
+            ) {
                 let is_selected = tab_view.selected_page().as_ref() == Some(&page);
                 let window_focused = window.is_active();
                 if !is_selected || !window_focused {
@@ -341,6 +328,7 @@ pub fn wire(ctx: EventDispatchContext) {
         if !uq_dialog_open.get() {
             let next = uq_queue.borrow_mut().pop_front();
             if let Some(req) = next {
+                tab_view.set_selected_page(&page);
                 uq_dialog_open.set(true);
                 let uq_dialog_open_clone = uq_dialog_open.clone();
                 let uq_queue_clone = uq_queue.clone();
@@ -414,9 +402,8 @@ pub fn wire(ctx: EventDispatchContext) {
 
         // ── Resize detection: re-render final_view on width change ────
         {
-            let current_cols = chlodwig_gtk::viewport::viewport_columns(
-                final_view.upcast_ref::<gtk4::TextView>(),
-            );
+            let current_cols =
+                chlodwig_gtk::viewport::viewport_columns(final_view.upcast_ref::<gtk4::TextView>());
             if current_cols != last_rendered_cols {
                 if current_cols == resize_pending_cols {
                     resize_stable_ticks += 1;
@@ -608,10 +595,14 @@ mod tests {
         // Find the auto-scroll comment block and verify no `let state =
         // state_for_events.borrow();` precedes a `set_value` within ~30 lines.
         let marker = "Scroll anchor enforcement";
-        let idx = SRC.find(marker).expect("scroll anchor section marker missing");
+        let idx = SRC
+            .find(marker)
+            .expect("scroll anchor section marker missing");
         let tail = &SRC[idx..];
         // Stop at end of `wire()` (marked by `glib::ControlFlow::Continue` near end).
-        let section_end = tail.find("ControlFlow::Continue\n    });").unwrap_or(tail.len().min(3000));
+        let section_end = tail
+            .find("ControlFlow::Continue\n    });")
+            .unwrap_or(tail.len().min(3000));
         let section = &tail[..section_end];
         assert!(
             !section.contains("let state = state_for_events.borrow();"),
@@ -635,9 +626,7 @@ mod tests {
             let start = search_from + rel;
             // A closure body is delimited by the matching `});`. Find
             // the next one after `start`.
-            let end_rel = SRC[start..]
-                .find("});")
-                .expect("idle closure end missing");
+            let end_rel = SRC[start..].find("});").expect("idle closure end missing");
             let section = &SRC[start..start + end_rel];
             search_from = start + end_rel + 3;
             n_closures += 1;
