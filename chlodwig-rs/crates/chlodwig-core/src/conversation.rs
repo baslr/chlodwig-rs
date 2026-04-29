@@ -851,7 +851,8 @@ pub async fn run_turn(
                                     }
                                     BlockAcc::ToolUse { id, name, json } => {
                                         let input: serde_json::Value =
-                                            serde_json::from_str(&json).unwrap_or_default();
+                                            serde_json::from_str(&json)
+                                                .unwrap_or_else(|_| serde_json::json!({}));
 
                                         tracing::debug!("ToolUse complete[{}]: id={}, name={}, input={}", index, id, name, input);
 
@@ -4431,6 +4432,138 @@ mod tests {
                 if f(&e) { n += 1; }
             }
             n
+        }
+    }
+
+    /// Tool with no required params — call() receives whatever input is given.
+    struct NoParamTool;
+
+    #[async_trait::async_trait]
+    impl Tool for NoParamTool {
+        fn definition(&self) -> ToolDefinition {
+            ToolDefinition {
+                name: "ListDir".into(),
+                description: "Lists a directory".into(),
+                input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            }
+        }
+
+        async fn call(
+            &self,
+            input: serde_json::Value,
+            _ctx: &ToolContext,
+        ) -> Result<ToolOutput, ToolError> {
+            // The input must be an object, never null
+            assert!(input.is_object(), "input must be an object, got: {input}");
+            Ok(ToolOutput {
+                content: ToolResultContent::Text("ok".into()),
+                is_error: false,
+            })
+        }
+
+        fn is_concurrent(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn test_tool_use_null_input_normalized_to_empty_object() {
+        // When the model sends a ToolUse with NO InputJsonDelta events
+        // (empty JSON accumulator), the input must be {} not null.
+        // This was the production bug: API rejects null with HTTP 400
+        // "tool_use.input: Input should be a valid dictionary".
+        let mock = MockApiClient {
+            responses: std::sync::Mutex::new(vec![
+                // First API call → tool use with NO InputJsonDelta
+                vec![
+                    SseEvent::MessageStart {
+                        message: MessageStartInfo {
+                            id: "msg_1".into(),
+                            model: "test".into(),
+                            usage: None,
+                        },
+                    },
+                    SseEvent::ContentBlockStart {
+                        index: 0,
+                        content_block: ContentBlockStartInfo::ToolUse {
+                            id: "toolu_1".into(),
+                            name: "ListDir".into(),
+                        },
+                    },
+                    // No InputJsonDelta! The json accumulator stays empty.
+                    SseEvent::ContentBlockStop { index: 0 },
+                    SseEvent::MessageDelta {
+                        delta: MessageDeltaInfo {
+                            stop_reason: Some("tool_use".into()),
+                        },
+                        usage: None,
+                    },
+                    SseEvent::MessageStop,
+                ],
+                // Second API call → final text (tool result sent back)
+                vec![
+                    SseEvent::MessageStart {
+                        message: MessageStartInfo {
+                            id: "msg_2".into(),
+                            model: "test".into(),
+                            usage: None,
+                        },
+                    },
+                    SseEvent::ContentBlockStart {
+                        index: 0,
+                        content_block: ContentBlockStartInfo::Text { text: None },
+                    },
+                    SseEvent::ContentBlockDelta {
+                        index: 0,
+                        delta: Delta::TextDelta {
+                            text: "Done.".into(),
+                        },
+                    },
+                    SseEvent::ContentBlockStop { index: 0 },
+                    SseEvent::MessageDelta {
+                        delta: MessageDeltaInfo {
+                            stop_reason: Some("end_turn".into()),
+                        },
+                        usage: None,
+                    },
+                    SseEvent::MessageStop,
+                ],
+            ]),
+        };
+
+        let api_client = mock;
+        let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let mut state = ConversationState {
+            messages: vec![Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text {
+                    text: "list the current directory".into(),
+                }],
+            }],
+            model: "test-model".into(),
+            system_prompt: vec![SystemBlock::text("You are a test assistant.")],
+            max_tokens: 1024,
+            tools: vec![Box::new(NoParamTool)],
+            tool_context: ToolContext::default(),
+            stop_requested: new_stop_flag(),
+        };
+
+        // Run the turn — if input were null, NoParamTool::call() would panic
+        // on the assert!(input.is_object()) check.
+        run_turn(&mut state, &api_client, &AutoApprovePrompter, &event_tx)
+            .await
+            .expect("run_turn should succeed");
+
+        // Also verify the ContentBlock stored in history has {} not null
+        let assistant_msg = state.messages.iter().find(|m| m.role == Role::Assistant).unwrap();
+        for block in &assistant_msg.content {
+            if let ContentBlock::ToolUse { input, .. } = block {
+                assert!(
+                    input.is_object(),
+                    "ToolUse input in conversation history must be an object, got: {input}"
+                );
+            }
         }
     }
 }
